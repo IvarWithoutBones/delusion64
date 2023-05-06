@@ -1,0 +1,8 @@
+[package]
+name = "mips-lifter"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+inkwell = { version = "0.2.0", features = ["llvm15-0"] }
+mips-decomp = { path = "../mips-decomp" }

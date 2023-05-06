@@ -1,0 +1,8 @@
+[package]
+name = "delusion64"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mips-lifter = { path = "../mips-lifter" }
+mips-decomp = { path = "../mips-decomp" }
