@@ -8,6 +8,7 @@ use inkwell::{
 
 type SumFunc = unsafe extern "C" fn(u64, u64, u64) -> u64;
 type LoopFunc = unsafe extern "C" fn(u64) -> u64;
+type AddFunc = unsafe extern "C" fn(u64) -> u64;
 
 extern "C" fn test() {
     println!("less than 10");
@@ -34,7 +35,25 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
-    // A jit function that loops over the amount given, multiplying by 2 every iteration
+    pub fn jit_compile_add(&self) -> Option<JitFunction<AddFunc>> {
+        // Declare the function signature
+        let i64_type = self.context.i64_type();
+        let fn_type = i64_type.fn_type(&[i64_type.into()], false);
+        let function = self.module.add_function("add", fn_type, None);
+
+        // Define the function body
+        let entry_block = self.context.append_basic_block(function, "entry");
+
+        // Entry block
+        self.builder.position_at_end(entry_block);
+        let param = function.get_nth_param(0)?.into_int_value();
+        let one = i64_type.const_int(10, false);
+        let result = self.builder.build_int_add(param, one, "result");
+        self.builder.build_return(Some(&result));
+
+        unsafe { self.execution_engine.get_function("add").ok() }
+    }
+
     pub fn jit_compile_loop(&self) -> Option<JitFunction<LoopFunc>> {
         // Declare the function signature: fn loop(amount: u64) -> u64
         let i64_type = self.context.i64_type();
@@ -82,7 +101,7 @@ impl<'ctx> CodeGen<'ctx> {
         unsafe { self.execution_engine.get_function("loop").ok() }
     }
 
-    pub fn jit_compile(&self) -> Option<JitFunction<SumFunc>> {
+    pub fn jit_compile_sum(&self) -> Option<JitFunction<SumFunc>> {
         let i64_type = self.context.i64_type();
         let fn_type = i64_type.fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false);
         let function = self.module.add_function("sum", fn_type, None);

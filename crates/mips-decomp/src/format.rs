@@ -1,7 +1,7 @@
 use crate::instruction::{Instruction, Operand};
 use core::fmt;
 
-const fn register_name(index: u8) -> &'static str {
+pub const fn register_name(index: u8) -> &'static str {
     assert!(index <= 31);
     match index {
         0 => "zero",
@@ -47,13 +47,27 @@ impl fmt::Display for Operand {
                 source,
                 target,
                 destination,
-            } => write!(
-                f,
-                "{}, {}, {}",
-                register_name(*destination),
-                register_name(*source),
-                register_name(*target),
-            ),
+                shift,
+            } => {
+                if *shift != 0 {
+                    // Shifting instructions
+                    write!(
+                        f,
+                        "{}, {}, {}",
+                        register_name(*destination),
+                        register_name(*target),
+                        *shift,
+                    )
+                } else {
+                    write!(
+                        f,
+                        "{}, {}, {}",
+                        register_name(*destination),
+                        register_name(*source),
+                        register_name(*target),
+                    )
+                }
+            }
 
             Self::Immediate {
                 source,
