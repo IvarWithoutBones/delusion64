@@ -31,28 +31,38 @@
       };
 
       # NOTE: LLVM version must be kept in sync with what inkwell expects!
-      llvm = pkgs.llvmPackages_15.llvm;
+      llvmPackages = pkgs.llvmPackages_15;
       mipsBinutils = pkgs.pkgsCross.mips64-linux-gnuabi64.buildPackages.binutilsNoLibc;
+
+      build-llvm-ir = pkgs.writeShellScriptBin "build-llvm-ir" ''
+        set -euo pipefail
+
+        INPUT="''${1?"Usage: build-llvm-ir <input.c> <output.ll>"}"
+        OUTPUT="''${2?"Usage: build-llvm-ir <input.c> <output.ll>"}"
+
+        set -x
+        clang -S -emit-llvm -mcpu=mips3 -target mips64 "$INPUT" -o "$OUTPUT"
+      '';
 
       compile-llc = pkgs.writeShellScriptBin "compile-ll" ''
         set -euo pipefail
 
-        INPUT="''${1?"Usage: compile-ll <input.ll> <output.o> [stripped-output.bin]"}"
-        OUTPUT="''${2?"Usage: compile-ll <input.ll> <output.o> [stripped-output.bin]"}"
-        STRIPPED_OUTPUT="''${3:-}"
+        INPUT="''${1?"Usage: compile-ll <input.ll> <output.o>"}"
+        OUTPUT="''${2?"Usage: compile-ll <input.ll> <output.o>"}"
+
+        TMPFILE="$(mktemp -t compiled-llc-elf.XXXXXX)"
+        trap 'rm -rf "$TMPFILE"' EXIT INT TERM
 
         set -x
 
         # Compile the LLVM IR
-        ${llvm}/bin/llc -relocation-model=pic -filetype obj -O2 -mtriple=mips64 -mcpu=mips3 -o "$OUTPUT" "$INPUT"
+        ${llvmPackages.llvm}/bin/llc -relocation-model=pic -filetype obj -O2 -mtriple=mips64 -mcpu=mips3 -o "$TMPFILE" "$INPUT"
 
-        if test -n "$STRIPPED_OUTPUT"; then
-          # Copy the raw contents of the .text section to the output file, stripping the ELF headers
-          ${mipsBinutils}/bin/mips64-unknown-linux-gnuabi64-objcopy -O binary --only-section=.text "$OUTPUT" "$STRIPPED_OUTPUT"
-        fi
+        # Copy the raw contents of the .text section to the output file, stripping the ELF headers
+        ${mipsBinutils}/bin/mips64-unknown-linux-gnuabi64-objcopy -O binary --only-section=.text "$TMPFILE" "$OUTPUT"
 
         # Show a disassembly of the generated code
-        ${mipsBinutils}/bin/mips64-unknown-linux-gnuabi64-objdump "$OUTPUT" \
+        ${mipsBinutils}/bin/mips64-unknown-linux-gnuabi64-objdump "$TMPFILE" \
           --architecture mips:4300 \
           --disassemble \
           --disassembler-color=on \
@@ -73,7 +83,7 @@
         src = lib.cleanSource ./.;
 
         nativeBuildInputs = [
-          llvm.dev
+          llvmPackages.llvm.dev
         ];
 
         buildInputs = with pkgs; [
@@ -94,8 +104,11 @@
         packages = [
           rustToolchain
           rustToolchain.availableComponents.rust-analyzer
+          llvmPackages.clang
           mipsBinutils
+
           compile-llc
+          build-llvm-ir
         ];
       };
     });
