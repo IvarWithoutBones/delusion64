@@ -1,4 +1,4 @@
-use crate::instruction::{Instruction, Operand};
+use crate::instruction::{Instruction, Mnemonic, Operand};
 use core::fmt;
 
 pub const fn register_name(index: u8) -> &'static str {
@@ -88,7 +88,20 @@ impl fmt::Display for Operand {
 
 impl fmt::Display for Instruction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mnemonic = format!("{:?}", self.mnemonic).to_lowercase();
-        write!(f, "{mnemonic: <7} {}", self.operand)
+        match self.mnemonic {
+            Mnemonic::Nop => write!(f, "nop"),
+            Mnemonic::Jr => match self.operand {
+                Operand::Register { source, .. } => {
+                    write!(f, "{: <7} {}", "jr", register_name(source))
+                }
+                _ => unreachable!(),
+            },
+
+            _ => {
+                let mnemonic = format!("{:?}", self.mnemonic).to_lowercase();
+                let operand = &self.operand;
+                write!(f, "{mnemonic: <7} {operand}")
+            }
+        }
     }
 }

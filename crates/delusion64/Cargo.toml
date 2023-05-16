@@ -3,6 +3,10 @@ name = "delusion64"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["debug-print"]
+debug-print = []
+
 [dependencies]
-mips-lifter = { path = "../mips-lifter" }
+mips-lifter = { path = "../mips-lifter", default-features = false }
 mips-decomp = { path = "../mips-decomp" }

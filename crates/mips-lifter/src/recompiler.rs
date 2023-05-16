@@ -11,13 +11,15 @@ pub fn recompile_instruction(
     instr: &Instruction,
     address: u64,
 ) {
-    // if instr.
-
     let i16_type = codegen.context.i16_type();
     let i32_type = codegen.context.i32_type();
     let i64_type = codegen.context.i64_type();
 
     match (&instr.mnemonic, &instr.operand) {
+        (Mnemonic::Nop, ..) => {
+            // Do nothing
+        }
+
         (
             Mnemonic::Daddiu,
             Operand::Immediate {
@@ -29,9 +31,14 @@ pub fn recompile_instruction(
             // Add sign-extended 16bit immediate and rs, store result in rt
             let immediate = i16_type.const_int(*immediate as _, true);
             let source = codegen.load_register(*source).into_int_value();
-            let result = codegen
+            let added = codegen
                 .builder
                 .build_int_add(source, immediate, "daddiu_result");
+
+            // Truncate the result to 16-bits
+            let result = codegen
+                .builder
+                .build_int_truncate(added, i16_type, "daddiu_result_trunc");
             codegen.store_register(*target, result.into());
         }
 

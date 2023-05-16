@@ -74,6 +74,9 @@ pub enum Mnemonic {
 
     // Special
     Mtc0,
+
+    // Psuedo
+    Nop,
 }
 
 impl Mnemonic {
@@ -146,9 +149,17 @@ impl From<u32> for Instruction {
                 let mnemonic = match func {
                     0b10_1101 => Mnemonic::Daddu,
                     0b00_1000 => Mnemonic::Jr,
-                    0b00_0000 => Mnemonic::Sll,
                     0b10_1011 => Mnemonic::Sltu,
                     0b11_1000 => Mnemonic::Dsll,
+                    0b00_0000 => {
+                        if value == 0 {
+                            // Psuedo instruction, shifting by 0 simply does nothing.
+                            Mnemonic::Nop
+                        } else {
+                            Mnemonic::Sll
+                        }
+                    }
+
                     _ => todo!("register opcode {func:#6b} {func:#x}"),
                 };
 
