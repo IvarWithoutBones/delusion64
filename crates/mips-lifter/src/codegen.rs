@@ -1,20 +1,21 @@
 use inkwell::{
-    basic_block::BasicBlock,
     builder::Builder,
     context::Context,
     execution_engine::{ExecutionEngine, JitFunction, UnsafeFunctionPointer},
     module::Module,
-    types::BasicMetadataTypeEnum,
-    values::{BasicMetadataValueEnum, BasicValueEnum, GlobalValue, PointerValue},
+    types::{BasicMetadataTypeEnum, IntType},
+    values::{BasicMetadataValueEnum, BasicValueEnum, GlobalValue, IntValue, PointerValue},
 };
 use mips_decomp::REGISTER_COUNT;
+
+// TODO: This should obviously not be defined here
+const MEMORY_SIZE: usize = 0x1000;
 
 pub struct CodeGen<'ctx> {
     pub context: &'ctx Context,
     pub module: Module<'ctx>,
     pub builder: Builder<'ctx>,
     pub execution_engine: ExecutionEngine<'ctx>,
-    exit_block: Option<BasicBlock<'ctx>>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -23,18 +24,50 @@ impl<'ctx> CodeGen<'ctx> {
         module: Module<'ctx>,
         execution_engine: ExecutionEngine<'ctx>,
     ) -> Self {
-        // Initialize the registers to zero
         let i64_type = context.i64_type();
+
+        // Initialize the registers to zero
         let regs = module.add_global(i64_type.array_type(REGISTER_COUNT as _), None, "registers");
         regs.set_initializer(&i64_type.array_type(REGISTER_COUNT as _).const_zero());
+
+        // Initialize the memory to zero
+        let memory = module.add_global(i64_type.array_type(MEMORY_SIZE as _), None, "memory");
+        memory.set_initializer(&i64_type.array_type(MEMORY_SIZE as _).const_zero());
 
         Self {
             context,
             module,
-            builder: context.create_builder(),
             execution_engine,
-            exit_block: None,
+            builder: context.create_builder(),
         }
+    }
+
+    pub fn memory_global(&self) -> GlobalValue<'ctx> {
+        self.module.get_global("memory").unwrap()
+    }
+
+    pub fn memory_ptr(&self, index: IntValue<'ctx>) -> PointerValue<'ctx> {
+        let i64_type = self.context.i64_type();
+
+        unsafe {
+            self.builder.build_in_bounds_gep(
+                i64_type.array_type(MEMORY_SIZE as _).get_element_type(),
+                self.memory_global().as_pointer_value(),
+                &[index],
+                "mem_ptr",
+            )
+        }
+    }
+
+    pub fn load_memory(&self, ty: IntType<'ctx>, index: IntValue<'ctx>) -> BasicValueEnum<'ctx> {
+        let name = format!("mem_{}", ty.get_bit_width());
+        let memory = self.memory_ptr(index);
+        self.builder.build_load(ty, memory, &name)
+    }
+
+    pub fn store_memory(&self, index: IntValue<'ctx>, value: BasicValueEnum<'ctx>) {
+        let memory = self.memory_ptr(index);
+        self.builder.build_store(memory, value);
     }
 
     pub fn registers_global(&self) -> GlobalValue<'ctx> {
@@ -104,15 +137,6 @@ impl<'ctx> CodeGen<'ctx> {
         unsafe { self.execution_engine.get_function(name).ok() }
     }
 
-    pub fn set_exit_block(&mut self, block: BasicBlock<'ctx>) {
-        self.exit_block = Some(block);
-    }
-
-    pub fn call_exit_block(&self) {
-        self.builder
-            .build_unconditional_branch(self.exit_block.unwrap());
-    }
-
     pub fn build_call(&self, name: &str, args: &[BasicMetadataValueEnum<'ctx>]) {
         self.builder
             .build_call(self.module.get_function(name).unwrap(), args, name);
@@ -126,5 +150,11 @@ impl<'ctx> CodeGen<'ctx> {
             .i64_type()
             .const_int(value.into(), false)
             .into()
+    }
+
+    pub fn sign_extend_to_i64(&self, value: IntValue<'ctx>) -> IntValue<'ctx> {
+        let i64_type = self.context.i64_type();
+        self.builder
+            .build_int_s_extend(value, i64_type, "sign_extend")
     }
 }

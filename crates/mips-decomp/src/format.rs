@@ -34,7 +34,7 @@ pub const fn register_name(index: u8) -> &'static str {
         27 => "k1",
         28 => "gp",
         29 => "sp",
-        30 => "fp",
+        30 => "s8",
         31 => "ra",
         _ => unreachable!(),
     }

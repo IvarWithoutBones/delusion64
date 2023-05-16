@@ -3,11 +3,9 @@ use inkwell::{context::Context, execution_engine::JitFunction, OptimizationLevel
 use mips_decomp::INSTRUCTION_SIZE;
 
 pub mod codegen;
-pub mod jit;
 pub mod label;
 pub mod recompiler;
 
-#[macro_export]
 macro_rules! c_fn {
     ($($arg:ident),*) => {
         unsafe extern "C" fn($($arg),*)
@@ -103,7 +101,7 @@ pub fn lift(bin: &[u8]) {
     let (context, module, labels) = label_pass.consume();
 
     // Set up the code generation context, and register debugging functions.
-    let mut codegen = CodeGen::new(context, module, execution_engine);
+    let codegen = CodeGen::new(context, module, execution_engine);
     #[cfg(feature = "debug-print")]
     {
         register_print_regs(&codegen);
@@ -112,11 +110,11 @@ pub fn lift(bin: &[u8]) {
 
     // Generate the main functions entry block
     codegen.builder.position_at_end(entry_block);
+    // codegen.store_register(4u32, codegen.context.i64_type().const_int(10, false).into());
     codegen
         .builder
         .build_unconditional_branch(labels.get(&0).unwrap().basic_block);
     // Generate the main functions exit block
-    codegen.set_exit_block(exit_block);
     codegen.builder.position_at_end(exit_block);
     #[cfg(feature = "debug-print")]
     call_print_regs(&codegen);
@@ -139,6 +137,10 @@ pub fn lift(bin: &[u8]) {
             }
 
             recompile_instruction(&codegen, &labels, instr, addr);
+
+            if addr as usize + INSTRUCTION_SIZE == bin.len() {
+                codegen.builder.build_unconditional_branch(exit_block);
+            }
         }
 
         // If the block doesn't end with a terminator, insert a branch to the next block.
@@ -162,23 +164,4 @@ pub fn lift(bin: &[u8]) {
     // Run the generated code.
     let main_func: JitFunction<c_fn!()> = codegen.get_function("main").unwrap();
     unsafe { main_func.call() }
-}
-
-// TODO: remove this, the jit module is just here as a reference for PHI nodes
-pub fn jit_test() {
-    let context = Context::create();
-    let module = context.create_module("codegen");
-    let execution_engine = module
-        .create_jit_execution_engine(OptimizationLevel::None)
-        .unwrap();
-
-    let codegen = jit::CodeGen::new(&context, module, execution_engine);
-    let func = codegen.jit_compile_loop().unwrap();
-
-    println!("Generated LLVM IR:\n\n```");
-    codegen.module.print_to_stderr();
-    println!("```\n");
-
-    let result = unsafe { func.call(10) };
-    println!("result: {result}");
 }
