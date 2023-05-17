@@ -1,4 +1,4 @@
-use crate::{codegen::CodeGen, label::Labels};
+use crate::{codegen::CodeGen, env::RuntimeFunction, label::Labels};
 use inkwell::IntPredicate;
 use mips_decomp::{
     instruction::{Instruction, Mnemonic, Operand},
@@ -47,7 +47,7 @@ pub fn recompile_instruction(
 
 fn recompile_register_instruction(
     codegen: &CodeGen,
-    _labels: &Labels,
+    labels: &Labels,
     instr: &Instruction,
     _address: u64,
     operands: (u8, u8, u8, u8),
@@ -122,7 +122,31 @@ fn recompile_register_instruction(
 
         Mnemonic::Jr => {
             // Jump to address stored in rs
-            // TODO: actually implement this
+            let source = codegen.load_register(source).into_int_value();
+
+            let block_id = {
+                let result = codegen.build_env_call(RuntimeFunction::GetBlockId, &[source.into()]);
+                result.try_as_basic_value().left().unwrap().into_int_value()
+            };
+
+            let not_found_block = codegen.build_basic_block("jr_id_not_found").unwrap();
+            let cases = labels
+                .values()
+                .map(|label| {
+                    let id = i64_type.const_int(label.id, false);
+                    (id, label.basic_block)
+                })
+                .collect::<Vec<_>>();
+
+            // Loop over all blocks and build a switch statement.
+            codegen
+                .builder
+                .build_switch(block_id, not_found_block, &cases);
+
+            // Build the else block.
+            codegen.builder.position_at_end(not_found_block);
+            codegen.print_constant_string("ERROR: unable to fetch basic block\n", "jr_error");
+            codegen.builder.build_return(None);
         }
 
         _ => todo!("unimplemented register instruction: {instr}"),
@@ -144,7 +168,7 @@ fn recompile_immediate_instruction(
         Mnemonic::Sd => {
             // Stores doubleword from rt, to memory address (base + offset)
             let source = codegen.load_register(source).into_int_value();
-            let offset = i16_type.const_int(immediate as _, false);
+            let offset = codegen.to_i64(i16_type.const_int(immediate as _, true));
             let address = codegen.builder.build_int_add(source, offset, "sd_address");
             codegen.store_memory(address, codegen.load_register(target));
         }
@@ -152,7 +176,7 @@ fn recompile_immediate_instruction(
         Mnemonic::Ld => {
             // Loads doubleword stored at memory address (base + offset), stores doubleword in rt
             let source = codegen.load_register(source).into_int_value();
-            let offset = i16_type.const_int(immediate as _, false);
+            let offset = codegen.to_i64(i16_type.const_int(immediate as _, false));
             let address = codegen.builder.build_int_add(source, offset, "ld_address");
             codegen.store_register(target, codegen.load_memory(i64_type, address));
         }

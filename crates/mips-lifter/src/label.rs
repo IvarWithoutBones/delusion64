@@ -10,6 +10,7 @@ pub struct Label<'ctx> {
     pub instructions: Vec<Instruction>,
     pub basic_block: BasicBlock<'ctx>,
     pub fall_through: Option<BasicBlock<'ctx>>,
+    pub id: u64,
 }
 
 impl Label<'_> {
@@ -47,12 +48,15 @@ impl<'ctx> LabelPass<'ctx> {
     pub fn run(&mut self) {
         let current_func = self.module.get_last_function().unwrap();
 
+        let mut id = 0;
         let mut pos = 0;
         for raw_block in self.raw_blocks.iter() {
             self.labels.entry(pos).or_insert_with(|| {
                 let name = Label::name(pos);
                 let basic_block = self.context.append_basic_block(current_func, &name);
+                id += 1;
                 Label {
+                    id: id as _,
                     start_address: pos,
                     instructions: raw_block.clone(),
                     fall_through: None,
@@ -86,11 +90,13 @@ impl<'ctx> LabelPass<'ctx> {
                                 .cloned()
                                 .collect();
 
+                            id += 1;
                             Label {
                                 start_address: target as _,
                                 fall_through: None,
                                 instructions,
                                 basic_block,
+                                id: id as _,
                             }
                         });
 
