@@ -1,10 +1,12 @@
 fn main() {
-    // mips_lifter::jit_test();
+    let mut args = std::env::args().skip(1);
 
     let bin = {
-        let path = std::env::args().nth(1).expect("no path given");
+        let path = args.next().expect("no file provided");
         std::fs::read(path).expect("failed to read file")
     };
 
-    mips_lifter::lift(&bin);
+    let maybe_output_path = args.next();
+    let entry_point = 0;
+    mips_lifter::lift(&bin, maybe_output_path.as_deref(), entry_point);
 }

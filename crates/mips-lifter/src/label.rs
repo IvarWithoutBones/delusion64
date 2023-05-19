@@ -102,8 +102,9 @@ impl<'ctx> LabelPass<'ctx> {
 
                         // Shrink the previous block containing the jump instruction, if it exists.
                         if let Some(prev_block) = self.labels.values_mut().find(|l| {
-                            l.range()
-                                .contains(&(target as u64 - INSTRUCTION_SIZE as u64))
+                            target
+                                .checked_sub(INSTRUCTION_SIZE as _)
+                                .map_or(false, |a| l.range().contains(&(a as _)))
                         }) {
                             prev_block.instructions.truncate(
                                 (target as usize - prev_block.start_address as usize)

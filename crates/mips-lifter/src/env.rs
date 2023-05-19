@@ -140,13 +140,14 @@ impl<'ctx, const REG_SIZE: usize, const MEM_SIZE: usize> Environment<'ctx, REG_S
     }
 
     unsafe extern "C" fn block_id(&mut self, addr: u64) -> u64 {
-        let label = self
-            .labels
-            .iter()
-            .find(|l| l.start_address == addr)
-            .unwrap();
-        println!("block_id({:#x}) = {}", addr, label.id);
-        label.id
+        if let Some(label) = self.labels.iter().find(|l| l.start_address == addr) {
+            let id = label.id;
+            println!("block_id({addr:#x}) = {id}"); // TODO: remove
+            id
+        } else {
+            self.print_registers();
+            panic!("failed to find label for address {addr:#x}");
+        }
     }
 
     fn block_id_function(&self, context: &ContextRef<'ctx>) -> (*const u8, FunctionType<'ctx>) {

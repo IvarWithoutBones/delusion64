@@ -166,7 +166,7 @@ impl<'ctx> CodeGen<'ctx> {
             .into()
     }
 
-    pub fn to_i64(&self, value: IntValue<'ctx>) -> IntValue<'ctx> {
+    pub fn truncate_to_i64(&self, value: IntValue<'ctx>) -> IntValue<'ctx> {
         let i64_type = self.context.i64_type();
         self.builder.build_int_truncate(value, i64_type, "to_i64")
     }
@@ -175,6 +175,12 @@ impl<'ctx> CodeGen<'ctx> {
         let i64_type = self.context.i64_type();
         self.builder
             .build_int_s_extend(value, i64_type, "sign_extend")
+    }
+
+    pub fn zero_extend_to_i64(&self, value: IntValue<'ctx>) -> IntValue<'ctx> {
+        let i64_type = self.context.i64_type();
+        self.builder
+            .build_int_z_extend(value, i64_type, "zero_extend")
     }
 
     pub fn build_basic_block(&self, name: &str) -> Option<BasicBlock<'ctx>> {

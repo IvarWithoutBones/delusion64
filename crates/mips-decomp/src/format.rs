@@ -90,9 +90,27 @@ impl fmt::Display for Instruction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.mnemonic {
             Mnemonic::Nop => write!(f, "nop"),
+
             Mnemonic::Jr => match self.operand {
                 Operand::Register { source, .. } => {
                     write!(f, "{: <7} {}", "jr", register_name(source))
+                }
+                _ => unreachable!(),
+            },
+
+            Mnemonic::Jalr => match self.operand {
+                Operand::Register {
+                    destination,
+                    source,
+                    ..
+                } => {
+                    write!(
+                        f,
+                        "{: <7} {}, {}",
+                        "jalr",
+                        register_name(destination),
+                        register_name(source)
+                    )
                 }
                 _ => unreachable!(),
             },

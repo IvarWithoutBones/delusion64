@@ -16,8 +16,9 @@ pub enum Operand {
         immediate: u16,
     },
 
-    #[allow(dead_code)]
-    Jump { target: u32 },
+    Jump {
+        target: u32,
+    },
 }
 
 impl Operand {
@@ -40,7 +41,6 @@ impl Operand {
         }
     }
 
-    #[allow(dead_code)]
     #[inline]
     const fn jump(from: u32) -> Self {
         Self::Jump {
@@ -55,13 +55,23 @@ pub enum Mnemonic {
     Addu,
     Daddu,
     Jr,
+    Jalr,
     Sll,
     Sltu,
     Dsll,
     Or,
     Xor,
+    Dsrl32,
+    Dsll32,
+    Div,
+    Teq,
+    Mfhi,
+    Mflo,
+    And,
+    Mult,
 
     // Immediate
+    Jal,
     Bne,
     Beq,
     Lb,
@@ -74,6 +84,7 @@ pub enum Mnemonic {
     Sd,
     Sw,
     Sb,
+    Sh,
     Lui,
     Ori,
     Addi,
@@ -81,21 +92,30 @@ pub enum Mnemonic {
     Slti,
     Sltiu,
     Addiu,
+    Andi,
+    Sdl,
+    Sdr,
 
     // Special
     Mtc0,
+    Mthi,
+    Mtlo,
 
     // Psuedo
     Nop,
+    Sync,
 }
 
 impl Mnemonic {
     pub const fn ends_block(&self) -> bool {
-        matches!(self, Self::Jr | Self::Beq | Self::Bne)
+        matches!(
+            self,
+            Self::Beq | Self::Bne | Self::Jalr | Self::Jr | Self::Jal
+        )
     }
 
     pub const fn has_delay_slot(&self) -> bool {
-        matches!(self, Self::Jr | Self::Beq | Self::Bne)
+        self.ends_block()
     }
 }
 
@@ -144,6 +164,15 @@ impl Instruction {
                 }
             }
 
+            Mnemonic::Jal => {
+                if let Operand::Jump { target } = self.operand {
+                    let target = (target << 2) as u64;
+                    Some(((pc as u64 & 0xFFFFFFFFF0000000) | target) as u32)
+                } else {
+                    unreachable!();
+                }
+            }
+
             _ => None,
         }
     }
@@ -160,10 +189,22 @@ impl From<u32> for Instruction {
                     0b10_0001 => Mnemonic::Addu,
                     0b10_1101 => Mnemonic::Daddu,
                     0b00_1000 => Mnemonic::Jr,
+                    0b00_1001 => Mnemonic::Jalr,
                     0b10_1011 => Mnemonic::Sltu,
                     0b11_1000 => Mnemonic::Dsll,
                     0b10_0101 => Mnemonic::Or,
                     0b10_0110 => Mnemonic::Xor,
+                    0b11_1110 => Mnemonic::Dsrl32,
+                    0b11_1100 => Mnemonic::Dsll32,
+                    0b01_1010 => Mnemonic::Div,
+                    0b11_0100 => Mnemonic::Teq,
+                    0b01_0000 => Mnemonic::Mfhi,
+                    0b01_0010 => Mnemonic::Mflo,
+                    0b01_0001 => Mnemonic::Mthi,
+                    0b01_0011 => Mnemonic::Mtlo,
+                    0b10_0100 => Mnemonic::And,
+                    0b01_1000 => Mnemonic::Mult,
+                    0b00_1111 => Mnemonic::Sync,
                     0b00_0000 => {
                         if value == 0 {
                             // Psuedo instruction, shifting by 0 simply does nothing.
@@ -173,7 +214,7 @@ impl From<u32> for Instruction {
                         }
                     }
 
-                    _ => todo!("register opcode {func:#6b} {func:#x}"),
+                    _ => todo!("register opcode {func:#06b} {func:#x}"),
                 };
 
                 (mnemonic, Operand::register(value))
@@ -184,11 +225,14 @@ impl From<u32> for Instruction {
                 let func = Self::coprocessor_function(value);
                 let mnemonic = match func {
                     0b0_0100 => Mnemonic::Mtc0,
-                    _ => todo!("coprocessor opcode {func:#6b} {func:#x}"),
+                    _ => todo!("coprocessor opcode {func:#06b} {func:#x}"),
                 };
 
                 (mnemonic, Operand::register(value))
             }
+
+            // Jump
+            0b00_0011 => (Mnemonic::Jal, Operand::jump(value)),
 
             // Immediate
             _ => {
@@ -203,6 +247,7 @@ impl From<u32> for Instruction {
                     0b10_1011 => Mnemonic::Sw,
                     0b11_1111 => Mnemonic::Sd,
                     0b10_1000 => Mnemonic::Sb,
+                    0b10_1001 => Mnemonic::Sh,
                     0b11_0111 => Mnemonic::Ld,
                     0b10_0101 => Mnemonic::Lhu,
                     0b10_0110 => Mnemonic::Lwr,
@@ -211,7 +256,10 @@ impl From<u32> for Instruction {
                     0b00_1101 => Mnemonic::Ori,
                     0b00_1000 => Mnemonic::Addi,
                     0b00_1001 => Mnemonic::Addiu,
-                    _ => todo!("opcode {opcode:#6b} {opcode:#x}"),
+                    0b00_1100 => Mnemonic::Andi,
+                    0b10_1100 => Mnemonic::Sdl,
+                    0b10_1101 => Mnemonic::Sdr,
+                    _ => todo!("opcode {opcode:#06b} {opcode:#x}"),
                 };
 
                 (mnemonic, Operand::immediate(value))

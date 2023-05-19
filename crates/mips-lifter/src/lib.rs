@@ -1,6 +1,6 @@
 use crate::{codegen::CodeGen, recompiler::recompile_instruction};
 use inkwell::{context::Context, execution_engine::JitFunction, OptimizationLevel};
-use mips_decomp::INSTRUCTION_SIZE;
+use mips_decomp::{INSTRUCTION_SIZE, REGISTER_COUNT};
 
 pub mod codegen;
 pub mod env;
@@ -13,7 +13,9 @@ macro_rules! c_fn {
     };
 }
 
-pub fn lift(bin: &[u8]) {
+const MEMORY_SIZE: usize = 0x500;
+
+pub fn lift(bin: &[u8], ir_path: Option<&str>, entry_point: u64) {
     let decomp = mips_decomp::Decompiler::from(bin);
     let blocks = mips_decomp::reorder_delay_slots(decomp.blocks().collect());
     #[cfg(feature = "debug-print")]
@@ -39,20 +41,26 @@ pub fn lift(bin: &[u8]) {
 
     let env = {
         let labels = labels.values().map(|l| l.to_owned()).collect::<Vec<_>>();
-        env::Environment::<32, 0x100>::new(labels)
+        env::Environment::<REGISTER_COUNT, MEMORY_SIZE>::new(labels)
     };
     let codegen = CodeGen::new(context, module, execution_engine, &env);
 
     // Generate the main functions entry block
     codegen.builder.position_at_end(entry_block);
+
     // Set the stack pointer
     codegen.store_register(
-        29u32,
-        codegen.context.i64_type().const_int(0x100, false).into(),
+        29u32, // Stack pointer
+        codegen
+            .context
+            .i64_type()
+            .const_int(MEMORY_SIZE as _, false)
+            .into(),
     );
+
     codegen
         .builder
-        .build_unconditional_branch(labels.get(&0).unwrap().basic_block);
+        .build_unconditional_branch(labels.get(&entry_point).unwrap().basic_block);
 
     // Generate the main functions exit block
     codegen.builder.position_at_end(exit_block);
@@ -74,11 +82,6 @@ pub fn lift(bin: &[u8]) {
                 codegen.print_constant_string(&instr, &storage_name);
             }
 
-            // TODO: remove
-            if addr == bin.len() as u64 - 4 {
-                break;
-            }
-
             recompile_instruction(&codegen, &labels, instr, addr);
         }
 
@@ -98,6 +101,12 @@ pub fn lift(bin: &[u8]) {
         println!("\nGenerated LLVM IR:\n```");
         codegen.module.print_to_stderr();
         println!("```\n");
+    }
+
+    // Write the generated LLVM IR to a file, if a path was provided.
+    if let Some(path) = ir_path {
+        codegen.module.print_to_file(path).unwrap();
+        println!("Wrote LLVM IR to '{path}'\n");
     }
 
     if let Err(err) = codegen.verify() {
