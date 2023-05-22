@@ -154,11 +154,12 @@ impl Instruction {
         self.mnemonic.has_delay_slot()
     }
 
-    pub const fn try_resolve_static_jump(&self, pc: u32) -> Option<u32> {
+    pub const fn try_resolve_static_jump(&self, pc: u32) -> Option<u64> {
         match self.mnemonic {
             Mnemonic::Beq | Mnemonic::Bne => {
                 if let Operand::Immediate { immediate, .. } = self.operand {
-                    Some((pc as i32 + (immediate as i16 * SIZE as i16) as i32) as u32)
+                    let offset = ((immediate as i16) as i64) * SIZE as i64;
+                    Some((pc as i64 + offset) as u64)
                 } else {
                     unreachable!();
                 }
@@ -167,7 +168,7 @@ impl Instruction {
             Mnemonic::Jal => {
                 if let Operand::Jump { target } = self.operand {
                     let target = (target << 2) as u64;
-                    Some(((pc as u64 & 0xFFFFFFFFF0000000) | target) as u32)
+                    Some((pc as u64 & 0xFFFFFFFFF0000000) | target)
                 } else {
                     unreachable!();
                 }

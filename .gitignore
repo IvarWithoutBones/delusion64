@@ -8,3 +8,6 @@
 # Direnv
 /.direnv
 /.envrc
+
+# Emulator
+*.z64

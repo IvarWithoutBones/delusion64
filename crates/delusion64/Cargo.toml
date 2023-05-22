@@ -9,4 +9,4 @@ debug-print = []
 
 [dependencies]
 mips-lifter = { path = "../mips-lifter", default-features = false }
-mips-decomp = { path = "../mips-decomp" }
+n64-cartridge = { path = "../n64-cartridge" }
