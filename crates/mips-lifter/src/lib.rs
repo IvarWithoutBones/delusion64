@@ -82,7 +82,7 @@ pub fn lift(bin: &[u8], ir_path: Option<&str>, entry_point: u64) {
                 codegen.print_constant_string(&instr, &storage_name);
             }
 
-            recompile_instruction(&codegen, &labels, instr, addr);
+            recompile_instruction(&codegen, &labels, &instr.clone().unwrap(), addr);
         }
 
         // If the block doesn't end with a terminator, insert a branch to the next block.

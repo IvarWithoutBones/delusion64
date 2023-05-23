@@ -179,8 +179,10 @@ impl Instruction {
     }
 }
 
-impl From<u32> for Instruction {
-    fn from(value: u32) -> Self {
+impl TryFrom<u32> for Instruction {
+    type Error = String;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
         let opcode = Self::opcode(value);
         let (mnemonic, operand) = match opcode {
             // Register
@@ -215,7 +217,11 @@ impl From<u32> for Instruction {
                         }
                     }
 
-                    _ => todo!("register opcode {func:#06b} {func:#x}"),
+                    _ => {
+                        return Err(format!(
+                            "unimplemented register opcode {func:#034b} {func:#x}",
+                        ))
+                    }
                 };
 
                 (mnemonic, Operand::register(value))
@@ -226,7 +232,12 @@ impl From<u32> for Instruction {
                 let func = Self::coprocessor_function(value);
                 let mnemonic = match func {
                     0b0_0100 => Mnemonic::Mtc0,
-                    _ => todo!("coprocessor opcode {func:#06b} {func:#x}"),
+
+                    _ => {
+                        return Err(format!(
+                            "unimplemented coprocessor opcode {func:#034b} {func:#x}",
+                        ))
+                    }
                 };
 
                 (mnemonic, Operand::register(value))
@@ -260,13 +271,14 @@ impl From<u32> for Instruction {
                     0b00_1100 => Mnemonic::Andi,
                     0b10_1100 => Mnemonic::Sdl,
                     0b10_1101 => Mnemonic::Sdr,
-                    _ => todo!("opcode {opcode:#06b} {opcode:#x}"),
+
+                    _ => return Err(format!("unimplemented opcode {opcode:#034b} {opcode:#x}")),
                 };
 
                 (mnemonic, Operand::immediate(value))
             }
         };
 
-        Self { mnemonic, operand }
+        Ok(Self { mnemonic, operand })
     }
 }

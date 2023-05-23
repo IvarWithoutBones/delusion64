@@ -1,12 +1,77 @@
 use crate::instruction::Instruction;
+use std::fmt;
 
 pub mod format;
 pub mod instruction;
 
 pub use instruction::SIZE as INSTRUCTION_SIZE;
 pub const REGISTER_COUNT: usize = 32;
-pub type Block = Vec<Instruction>;
+
+pub type Block = Vec<MaybeInstruction>;
 pub type BlockList = Vec<Block>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MaybeInstruction {
+    Instruction(Instruction),
+    Invalid(u32),
+}
+
+impl MaybeInstruction {
+    pub const fn try_resolve_static_jump(&self, pc: u32) -> Option<u64> {
+        match self {
+            Self::Instruction(instr) => instr.try_resolve_static_jump(pc),
+            Self::Invalid(_) => None,
+        }
+    }
+
+    pub const fn ends_block(&self) -> bool {
+        match self {
+            Self::Instruction(instr) => instr.ends_block(),
+            Self::Invalid(_) => true,
+        }
+    }
+
+    pub const fn has_delay_slot(&self) -> bool {
+        match self {
+            Self::Instruction(instr) => instr.has_delay_slot(),
+            Self::Invalid(_) => false,
+        }
+    }
+
+    pub const fn is_valid(&self) -> bool {
+        match self {
+            Self::Instruction(_) => true,
+            Self::Invalid(_) => false,
+        }
+    }
+
+    #[inline]
+    pub fn unwrap(self) -> Instruction {
+        match self {
+            Self::Instruction(instr) => instr,
+            Self::Invalid(value) => panic!("tried to unwrap invalid instruction: {value:#034b}"),
+        }
+    }
+}
+
+impl From<u32> for MaybeInstruction {
+    fn from(value: u32) -> Self {
+        if let Ok(instr) = value.try_into() {
+            Self::Instruction(instr)
+        } else {
+            Self::Invalid(value)
+        }
+    }
+}
+
+impl fmt::Display for MaybeInstruction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Instruction(instr) => write!(f, "{instr}"),
+            Self::Invalid(value) => write!(f, "invalid instruction: {value:#034b}"),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Endian {
@@ -35,11 +100,11 @@ impl<'a> Decompiler<'a> {
     pub fn next_instruction(&mut self) -> Option<Instruction> {
         let raw_instr = self.read_u32(self.pos)?;
         self.pos += INSTRUCTION_SIZE;
-        Some(raw_instr.into())
+        raw_instr.try_into().ok()
     }
 
     pub fn instruction_at(&self, pos: usize) -> Option<Instruction> {
-        Some(self.read_u32(pos)?.into())
+        self.read_u32(pos)?.try_into().ok()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = Instruction> + '_ {
@@ -61,10 +126,16 @@ impl<'a> Decompiler<'a> {
 
             let mut block = Vec::new();
             loop {
-                if let Some(instr) = self.instruction_at(pos) {
+                if let Some(raw) = self.read_u32(pos) {
                     pos += INSTRUCTION_SIZE;
-                    block.push(instr.clone());
-                    if instr.ends_block() {
+                    let (instr, ends_block) = {
+                        let instr: MaybeInstruction = raw.into();
+                        let ends_block = instr.ends_block();
+                        (instr, ends_block)
+                    };
+
+                    block.push(instr);
+                    if ends_block {
                         break;
                     }
                 } else {
@@ -72,6 +143,7 @@ impl<'a> Decompiler<'a> {
                     break;
                 }
             }
+
             Some(block)
         })
     }
@@ -84,7 +156,7 @@ impl<'a> Decompiler<'a> {
             for instr in block.iter() {
                 let formatted = format!("  {pos:#04x}    {instr}");
 
-                if instr.ends_block() {
+                if instr.is_valid() && instr.ends_block() {
                     // Last instruction in block, usually because of a jump.
                     if let Some(target) = instr.try_resolve_static_jump(pos) {
                         println!("{formatted: <40}-> {target:#04x}");
@@ -132,10 +204,28 @@ pub fn reorder_delay_slots(blocks: BlockList) -> BlockList {
     // Cloning isnt very efficient, but can be fixed later.
     let mut result = blocks.clone();
     for (block_idx, block) in blocks.iter().enumerate() {
-        if block.last().unwrap().has_delay_slot() {
+        if block.is_empty() || block_idx + 1 >= result.len() {
+            // No next block, so we can't swap.
+            continue;
+        }
+
+        let instr = block.last().unwrap();
+        if !instr.is_valid() {
+            // Can't swap invalid instructions.
+            continue;
+        }
+
+        if instr.has_delay_slot() {
             // Swap the last instruction with the first instruction of the next block.
+            let next_instr = result[block_idx + 1].first().unwrap();
+            if !next_instr.is_valid() {
+                // Can't swap invalid instructions.
+                continue;
+            }
+
             let next_instr = result[block_idx + 1].remove(0);
             let instr = result[block_idx].pop().unwrap();
+
             result[block_idx].push(next_instr);
             result[block_idx].push(instr);
 
@@ -145,6 +235,5 @@ pub fn reorder_delay_slots(blocks: BlockList) -> BlockList {
             }
         }
     }
-
     result
 }

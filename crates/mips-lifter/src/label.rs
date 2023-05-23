@@ -1,5 +1,5 @@
 use inkwell::{basic_block::BasicBlock, context::Context, module::Module};
-use mips_decomp::{instruction::Instruction, BlockList, INSTRUCTION_SIZE};
+use mips_decomp::{BlockList, MaybeInstruction, INSTRUCTION_SIZE};
 use std::{collections::HashMap, ops::Range};
 
 pub type Labels<'ctx> = HashMap<u64, Label<'ctx>>;
@@ -7,7 +7,7 @@ pub type Labels<'ctx> = HashMap<u64, Label<'ctx>>;
 #[derive(Debug, Clone)]
 pub struct Label<'ctx> {
     pub start_address: u64,
-    pub instructions: Vec<Instruction>,
+    pub instructions: Vec<MaybeInstruction>,
     pub basic_block: BasicBlock<'ctx>,
     pub fall_through: Option<BasicBlock<'ctx>>,
     pub id: u64,
