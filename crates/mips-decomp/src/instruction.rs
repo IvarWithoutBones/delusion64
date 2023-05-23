@@ -54,7 +54,6 @@ pub enum Mnemonic {
     // Register
     Addu,
     Daddu,
-    Jr,
     Jalr,
     Sll,
     Sltu,
@@ -63,14 +62,33 @@ pub enum Mnemonic {
     Xor,
     Dsrl32,
     Dsll32,
+    Dsra32,
     Div,
     Teq,
     Mfhi,
     Mflo,
     And,
     Mult,
+    Subu,
+    Teqi,
+    Tgei,
+    Tgeiu,
+    Tlti,
+    Tltiu,
+    Tnei,
+
+    // Branch
+    Blez,
+    Bgez,
+    Bgezal,
+    Bgezall,
+    Bltz,
+    Bltzal,
+    Bltzall,
+    Bltzl,
 
     // Immediate
+    Xori,
     Jal,
     Bne,
     Beq,
@@ -81,6 +99,8 @@ pub enum Mnemonic {
     Lh,
     Lhu,
     Lwr,
+    Swr,
+    Scd,
     Sd,
     Sw,
     Sb,
@@ -96,7 +116,13 @@ pub enum Mnemonic {
     Sdl,
     Sdr,
 
+    // Jump
+    Jr,
+    J,
+
     // Special
+    Sc,
+    Swcz,
     Mtc0,
     Mthi,
     Mtlo,
@@ -110,7 +136,20 @@ impl Mnemonic {
     pub const fn ends_block(&self) -> bool {
         matches!(
             self,
-            Self::Beq | Self::Bne | Self::Jalr | Self::Jr | Self::Jal
+            Self::Beq
+                | Self::Blez
+                | Self::Bne
+                | Self::Bgez
+                | Self::Bgezal
+                | Self::Bgezall
+                | Self::Bltz
+                | Self::Bltzal
+                | Self::Bltzall
+                | Self::Bltzl
+                | Self::Jalr
+                | Self::Jr
+                | Self::Jal
+                | Self::J
         )
     }
 
@@ -127,29 +166,29 @@ pub struct Instruction {
 
 impl Instruction {
     /// The `opcode` field for a raw instruction.
-    #[inline]
     const fn opcode(value: u32) -> u8 {
-        (value >> 26) as u8
+        ((value >> 26) & 0b11_1111) as u8
+    }
+
+    /// The `opcode` field for a branch instruction.
+    const fn branch_opcode(value: u32) -> u8 {
+        ((value >> 16) & 0b1_1111) as u8
     }
 
     /// The `function` field for a raw register instruction.
-    #[inline]
     const fn register_function(value: u32) -> u8 {
         (value & 0b11_1111) as u8
     }
 
     /// The `function` field for a raw coprocessor instruction.
-    #[inline]
     const fn coprocessor_function(value: u32) -> u8 {
         ((value >> 21) & 0b1_1111) as u8
     }
 
-    #[inline]
     pub const fn ends_block(&self) -> bool {
         self.mnemonic.ends_block()
     }
 
-    #[inline]
     pub const fn has_delay_slot(&self) -> bool {
         self.mnemonic.has_delay_slot()
     }
@@ -165,7 +204,7 @@ impl Instruction {
                 }
             }
 
-            Mnemonic::Jal => {
+            Mnemonic::Jal | Mnemonic::J => {
                 if let Operand::Jump { target } = self.operand {
                     let target = (target << 2) as u64;
                     Some((pc as u64 & 0xFFFFFFFFF0000000) | target)
@@ -199,6 +238,7 @@ impl TryFrom<u32> for Instruction {
                     0b10_0110 => Mnemonic::Xor,
                     0b11_1110 => Mnemonic::Dsrl32,
                     0b11_1100 => Mnemonic::Dsll32,
+                    0b11_1111 => Mnemonic::Dsra32,
                     0b01_1010 => Mnemonic::Div,
                     0b11_0100 => Mnemonic::Teq,
                     0b01_0000 => Mnemonic::Mfhi,
@@ -208,6 +248,7 @@ impl TryFrom<u32> for Instruction {
                     0b10_0100 => Mnemonic::And,
                     0b01_1000 => Mnemonic::Mult,
                     0b00_1111 => Mnemonic::Sync,
+                    0b10_0011 => Mnemonic::Subu,
                     0b00_0000 => {
                         if value == 0 {
                             // Psuedo instruction, shifting by 0 simply does nothing.
@@ -243,12 +284,47 @@ impl TryFrom<u32> for Instruction {
                 (mnemonic, Operand::register(value))
             }
 
+            // Branch/trap
+            0b00_0001 => {
+                let func = Self::branch_opcode(value);
+                let mnemonic = match func {
+                    0b0_0010 => Mnemonic::Bltzl,
+                    0b0_0000 => Mnemonic::Bltz,
+                    0b1_0000 => Mnemonic::Bltzal,
+                    0b1_0010 => Mnemonic::Bltzall,
+                    0b0_0001 => Mnemonic::Bgez,
+                    0b1_0001 => Mnemonic::Bgezal,
+                    0b1_0011 => Mnemonic::Bgezall,
+                    0b0_1100 => Mnemonic::Teqi,
+                    0b0_1000 => Mnemonic::Tgei,
+                    0b0_1001 => Mnemonic::Tgeiu,
+                    0b0_1010 => Mnemonic::Tlti,
+                    0b0_1011 => Mnemonic::Tltiu,
+                    0b0_1110 => Mnemonic::Tnei,
+                    _ => {
+                        return Err(format!(
+                            "unimplemented branch opcode {func:#034b} {func:#x}",
+                        ))
+                    }
+                };
+
+                (mnemonic, Operand::register(value))
+            }
+
+            // Misc
+            0b11_1000 => (Mnemonic::Sc, Operand::register(value)),
+            0b00_0110 => (Mnemonic::Blez, Operand::register(value)),
+
             // Jump
             0b00_0011 => (Mnemonic::Jal, Operand::jump(value)),
+            0b00_0010 => (Mnemonic::J, Operand::jump(value)),
 
             // Immediate
             _ => {
                 let mnemonic = match opcode {
+                    0b00_1110 => Mnemonic::Xori,
+                    0b11_1100 => Mnemonic::Scd,
+                    0b10_1110 => Mnemonic::Swr,
                     0b00_1010 => Mnemonic::Slti,
                     0b00_1011 => Mnemonic::Sltiu,
                     0b00_0100 => Mnemonic::Beq,
