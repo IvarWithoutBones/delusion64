@@ -8,6 +8,7 @@ use inkwell::{
     types::{BasicMetadataTypeEnum, IntType},
     values::{BasicMetadataValueEnum, BasicValueEnum, CallSiteValue, IntValue, PointerValue},
 };
+use mips_decomp::instruction::ParsedInstruction;
 
 const ENV_GLOBAL: &str = "env";
 
@@ -16,6 +17,7 @@ pub struct CodeGen<'ctx> {
     pub module: Module<'ctx>,
     pub builder: Builder<'ctx>,
     pub execution_engine: ExecutionEngine<'ctx>,
+    pub label_not_found: BasicBlock<'ctx>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -27,12 +29,26 @@ impl<'ctx> CodeGen<'ctx> {
     ) -> Self {
         env.init(&module, &execution_engine, ENV_GLOBAL);
 
-        Self {
+        let label_not_found =
+            context.append_basic_block(module.get_function("main").unwrap(), "label_not_found");
+
+        let codegen = Self {
             context,
             module,
-            execution_engine,
             builder: context.create_builder(),
-        }
+            execution_engine,
+            label_not_found,
+        };
+
+        // Initialize the error case for attempting to jump to a label that doesn't exist.
+        codegen.builder.position_at_end(label_not_found);
+        codegen.print_constant_string(
+            "ERROR: unable to fetch basic block\n",
+            "label_not_found_str",
+        );
+        codegen.builder.build_return(None);
+
+        codegen
     }
 
     pub fn verify(&self) -> Result<(), String> {
@@ -186,5 +202,11 @@ impl<'ctx> CodeGen<'ctx> {
     pub fn build_basic_block(&self, name: &str) -> Option<BasicBlock<'ctx>> {
         let func = self.builder.get_insert_block()?.get_parent()?;
         Some(self.context.append_basic_block(func, name))
+    }
+
+    pub fn base_plus_offset(&self, instr: &ParsedInstruction, name: &str) -> IntValue<'ctx> {
+        let base = self.load_register(instr.base()).into_int_value();
+        let offset = self.build_i64(instr.offset()).into_int_value();
+        self.builder.build_int_add(base, offset, name)
     }
 }

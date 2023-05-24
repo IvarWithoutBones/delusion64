@@ -9,12 +9,11 @@ fn main() {
     };
 
     let cart = Cartridge::new(&bin).expect("failed to parse cartridge");
-    println!("{cart:#?}");
 
     let maybe_output_path = args.next();
     let entry_point = 0;
     mips_lifter::lift(
-        cart.ipl3_boot_code.as_slice(),
+        &cart.ipl3_boot_code.as_slice()[0xc..0x800],
         maybe_output_path.as_deref(),
         entry_point,
     );

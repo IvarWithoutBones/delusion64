@@ -1,6 +1,6 @@
 use crate::{codegen::CodeGen, recompiler::recompile_instruction};
 use inkwell::{context::Context, execution_engine::JitFunction, OptimizationLevel};
-use mips_decomp::{INSTRUCTION_SIZE, REGISTER_COUNT};
+use mips_decomp::{MaybeInstruction, INSTRUCTION_SIZE, REGISTER_COUNT};
 
 pub mod codegen;
 pub mod env;
@@ -82,7 +82,11 @@ pub fn lift(bin: &[u8], ir_path: Option<&str>, entry_point: u64) {
                 codegen.print_constant_string(&instr, &storage_name);
             }
 
-            recompile_instruction(&codegen, &labels, &instr.clone().unwrap(), addr);
+            if let MaybeInstruction::Instruction(instr) = instr {
+                recompile_instruction(&codegen, &labels, instr, addr);
+            } else {
+                codegen.builder.build_unreachable();
+            }
         }
 
         // If the block doesn't end with a terminator, insert a branch to the next block.
@@ -113,6 +117,8 @@ pub fn lift(bin: &[u8], ir_path: Option<&str>, entry_point: u64) {
         println!("ERROR: Generated code failed to verify:\n\n{err}\nTerminating.");
         return;
     }
+
+    panic!();
 
     // Run the generated code.
     let main_func: JitFunction<c_fn!()> = codegen.get_function("main").unwrap();

@@ -1,360 +1,591 @@
-/// The size of a single instruction, in bytes.
-pub const SIZE: usize = 4;
+use std::fmt;
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum Operand {
-    Register {
-        source: u8,
-        target: u8,
-        destination: u8,
-        shift: u8,
-    },
+use crate::{
+    format::register_name,
+    pattern::{InstructionPattern, Operand},
+    INSTRUCTION_SIZE,
+};
 
-    Immediate {
-        source: u8,
-        target: u8,
-        immediate: u16,
-    },
-
-    Jump {
-        target: u32,
-    },
-}
-
-impl Operand {
-    #[inline]
-    const fn register(from: u32) -> Self {
-        Self::Register {
-            source: ((from >> 21) & 0b1_1111) as u8,
-            target: ((from >> 16) & 0b1_1111) as u8,
-            destination: ((from >> 11) & 0b1_1111) as u8,
-            shift: ((from >> 6) & 0b1_1111) as u8,
-        }
-    }
-
-    #[inline]
-    const fn immediate(from: u32) -> Self {
-        Self::Immediate {
-            source: ((from >> 21) & 0b1_1111) as u8,
-            target: ((from >> 16) & 0b1_1111) as u8,
-            immediate: (from & 0b1111_1111_1111_1111) as u16,
-        }
-    }
-
-    #[inline]
-    const fn jump(from: u32) -> Self {
-        Self::Jump {
-            target: from & 0b11_1111_1111_1111_1111_1111_1111,
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum Mnemonic {
-    // Register
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Mnenomic {
+    Add,
+    Addi,
+    Addiu,
     Addu,
-    Daddu,
-    Jalr,
-    Sll,
-    Sltu,
-    Dsll,
-    Or,
-    Xor,
-    Dsrl32,
-    Dsll32,
-    Dsra32,
-    Div,
-    Teq,
-    Mfhi,
-    Mflo,
     And,
-    Mult,
-    Subu,
-    Teqi,
-    Tgei,
-    Tgeiu,
-    Tlti,
-    Tltiu,
-    Tnei,
-
-    // Branch
-    Blez,
+    Andi,
+    Bczf,
+    Bczfl,
+    Bczt,
+    Bcztl,
+    Beq,
+    Beql,
     Bgez,
     Bgezal,
     Bgezall,
+    Bgezl,
+    Bgtz,
+    Bgtzl,
+    Blez,
+    Blezl,
     Bltz,
     Bltzal,
     Bltzall,
     Bltzl,
-
-    // Immediate
-    Xori,
-    Jal,
     Bne,
-    Beq,
+    Bnel,
+    Break,
+    Cache,
+    Cfcz,
+    Copz,
+    Ctcz,
+    Dadd,
+    Daddi,
+    Daddiu,
+    Daddu,
+    Ddiv,
+    Ddivu,
+    Div,
+    Divu,
+    Dmfc0,
+    Dmtc0,
+    Dmult,
+    Dmultu,
+    Dsll,
+    Dsllv,
+    Dsll32,
+    Dsra,
+    Dsrav,
+    Dsra32,
+    Dsrl,
+    Dsrlv,
+    Dsrl32,
+    Dsub,
+    Dsubu,
+    Eret,
+    J,
+    Jal,
+    Jalr,
+    JalrR31,
+    Jr,
     Lb,
     Lbu,
-    Lw,
     Ld,
+    Ldcz,
+    Ldl,
+    Ldr,
     Lh,
     Lhu,
-    Lwr,
-    Swr,
-    Scd,
-    Sd,
-    Sw,
-    Sb,
-    Sh,
+    Ll,
+    Lld,
     Lui,
-    Ori,
-    Addi,
-    Daddiu,
-    Slti,
-    Sltiu,
-    Addiu,
-    Andi,
-    Sdl,
-    Sdr,
-
-    // Jump
-    Jr,
-    J,
-
-    // Special
-    Sc,
-    Swcz,
+    Lw,
+    Lwcz,
+    Lwl,
+    Lwr,
+    Lwu,
+    Mfc0,
+    Mfcz,
+    Mfhi,
+    Mflo,
     Mtc0,
+    Mtcz,
     Mthi,
     Mtlo,
-
-    // Psuedo
-    Nop,
+    Mult,
+    Multu,
+    Nor,
+    Or,
+    Ori,
+    Sb,
+    Sc,
+    Scd,
+    Sd,
+    Sdcz,
+    Sdl,
+    Sdr,
+    Sh,
+    Sll,
+    Sllv,
+    Slt,
+    Slti,
+    Sltiu,
+    Sltu,
+    Sra,
+    Srav,
+    Srl,
+    Srlv,
+    Sub,
+    Subu,
+    Sw,
+    Swcz,
+    Swl,
+    Swr,
     Sync,
+    Syscall,
+    Teq,
+    Teqi,
+    Tge,
+    Tgei,
+    Tgeiu,
+    Tgeu,
+    Tlbp,
+    Tlbr,
+    Tlbwi,
+    Tlbwr,
+    Tlt,
+    Tlti,
+    Tltiu,
+    Tltu,
+    Tne,
+    Tnei,
+    Xor,
+    Xori,
+
+    // Floating point
+    AbsFmt,
+    AddFmt,
+    CCondFmtFs,
+    Bc1f,
+    Bc1fl,
+    Bc1t,
+    Bc1tl,
 }
 
-impl Mnemonic {
-    pub const fn ends_block(&self) -> bool {
+impl Mnenomic {
+    pub const fn has_delay_slot_offset(&self) -> bool {
         matches!(
             self,
-            Self::Beq
-                | Self::Blez
-                | Self::Bne
-                | Self::Bgez
-                | Self::Bgezal
-                | Self::Bgezall
-                | Self::Bltz
-                | Self::Bltzal
-                | Self::Bltzall
-                | Self::Bltzl
-                | Self::Jalr
-                | Self::Jr
-                | Self::Jal
-                | Self::J
+            Mnenomic::Bczf
+                | Mnenomic::Bczfl
+                | Mnenomic::Bczt
+                | Mnenomic::Bcztl
+                | Mnenomic::Beq
+                | Mnenomic::Beql
+                | Mnenomic::Bgez
+                | Mnenomic::Bgezal
+                | Mnenomic::Bgezall
+                | Mnenomic::Bgezl
+                | Mnenomic::Bgtz
+                | Mnenomic::Bgtzl
+                | Mnenomic::Blez
+                | Mnenomic::Blezl
+                | Mnenomic::Bltz
+                | Mnenomic::Bltzal
+                | Mnenomic::Bltzall
+                | Mnenomic::Bltzl
+                | Mnenomic::Bne
+                | Mnenomic::Bnel
         )
+    }
+
+    pub const fn ends_block(&self) -> bool {
+        self.has_delay_slot_offset()
+            | matches!(self, |Mnenomic::Break| Mnenomic::Eret
+                | Mnenomic::J
+                | Mnenomic::Jal
+                | Mnenomic::Jalr
+                | Mnenomic::JalrR31
+                | Mnenomic::Jr
+                | Mnenomic::Syscall
+                | Mnenomic::Teq
+                | Mnenomic::Teqi
+                | Mnenomic::Tge
+                | Mnenomic::Tgei
+                | Mnenomic::Tgeiu
+                | Mnenomic::Tgeu)
     }
 
     pub const fn has_delay_slot(&self) -> bool {
         self.ends_block()
     }
+
+    pub const fn has_static_jump(&self) -> bool {
+        self.has_delay_slot_offset() | matches!(self, Mnenomic::J | Mnenomic::Jal)
+    }
+
+    pub fn name(&self) -> String {
+        // It would be nice to not have to do dynamic allocations here,
+        // but I don't think it's worth writing a derive macro to get the variants name in lowercase.
+        format!("{self:?}").to_lowercase()
+    }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Instruction {
-    pub mnemonic: Mnemonic,
-    pub operand: Operand,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Signedness {
+    Signed32,
+    Signed16,
+    Unsigned32,
+    Unsigned16,
 }
 
-impl Instruction {
-    /// The `opcode` field for a raw instruction.
-    const fn opcode(value: u32) -> u8 {
-        ((value >> 26) & 0b11_1111) as u8
-    }
-
-    /// The `opcode` field for a branch instruction.
-    const fn branch_opcode(value: u32) -> u8 {
-        ((value >> 16) & 0b1_1111) as u8
-    }
-
-    /// The `function` field for a raw register instruction.
-    const fn register_function(value: u32) -> u8 {
-        (value & 0b11_1111) as u8
-    }
-
-    /// The `function` field for a raw coprocessor instruction.
-    const fn coprocessor_function(value: u32) -> u8 {
-        ((value >> 21) & 0b1_1111) as u8
-    }
-
-    pub const fn ends_block(&self) -> bool {
-        self.mnemonic.ends_block()
-    }
-
-    pub const fn has_delay_slot(&self) -> bool {
-        self.mnemonic.has_delay_slot()
-    }
-
-    pub const fn try_resolve_static_jump(&self, pc: u32) -> Option<u64> {
-        match self.mnemonic {
-            Mnemonic::Beq | Mnemonic::Bne => {
-                if let Operand::Immediate { immediate, .. } = self.operand {
-                    let offset = ((immediate as i16) as i64) * SIZE as i64;
-                    Some((pc as i64 + offset) as u64)
-                } else {
-                    unreachable!();
-                }
-            }
-
-            Mnemonic::Jal | Mnemonic::J => {
-                if let Operand::Jump { target } = self.operand {
-                    let target = (target << 2) as u64;
-                    Some((pc as u64 & 0xFFFFFFFFF0000000) | target)
-                } else {
-                    unreachable!();
-                }
-            }
-
-            _ => None,
+impl Signedness {
+    pub fn format(&self, num: u32) -> String {
+        match self {
+            Signedness::Signed32 => format!("{}", num as i32),
+            Signedness::Signed16 => format!("{}", num as i16),
+            Signedness::Unsigned32 => format!("{}", num),
+            Signedness::Unsigned16 => format!("{}", num as u16),
         }
     }
 }
 
-impl TryFrom<u32> for Instruction {
-    type Error = String;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Instruction {
+    pattern: InstructionPattern,
+    mnenomic: Mnenomic,
+    operands: &'static [(Operand, Signedness)],
+}
+
+impl Instruction {
+    pub const fn new(
+        mnenomic: Mnenomic,
+        pattern: &str,
+        operands: &'static [(Operand, Signedness)],
+    ) -> Self {
+        Self {
+            pattern: InstructionPattern::new(pattern),
+            mnenomic,
+            operands,
+        }
+    }
+
+    pub fn try_resolve_static_jump(&self, raw: u32, pc: u64) -> Option<u64> {
+        if !self.mnenomic.has_static_jump() {
+            return None;
+        }
+
+        match self.operands {
+            [.., (Operand::Offset, Signedness::Signed16)] => {
+                // Branch instructions
+                let mut offset = (self.pattern.get(Operand::Offset, raw)? as i16) as i64
+                    * INSTRUCTION_SIZE as i64;
+                if self.mnenomic.has_delay_slot_offset() {
+                    offset += INSTRUCTION_SIZE as i64;
+                }
+
+                Some((pc as i64 + offset) as u64)
+            }
+
+            [.., (Operand::Immediate, Signedness::Unsigned32)] => {
+                // Jump instructions
+                let target = (self.pattern.get(Operand::Immediate, raw)? << 2) as u64;
+                Some((pc & 0xFFFFFFFFF0000000) | target)
+            }
+
+            _ => todo!(
+                "instruction {:?} has static jump but could not resolve",
+                self.mnenomic
+            ),
+        }
+    }
+
+    pub fn format(&self, raw: u32) -> String {
+        if raw == 0 {
+            // Psuedo instruction
+            return "nop".to_string();
+        }
+
+        let mut result = format!("{: <8}", self.mnenomic.name());
+        for (i, (op, sign)) in self.operands.iter().enumerate() {
+            let num = self
+                .pattern
+                .get(*op, raw)
+                .unwrap_or_else(|| panic!("failed to get operand {op:?} for {:?}", self.mnenomic));
+
+            if op.is_register() {
+                result.push_str(register_name(num as _));
+            } else {
+                result.push_str(&sign.format(num));
+            }
+
+            if i < self.operands.len() - 1 {
+                result.push_str(", ");
+            }
+        }
+
+        result
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedInstruction {
+    instr: &'static Instruction,
+    raw: u32,
+}
+
+impl ParsedInstruction {
+    pub fn try_resolve_static_jump(&self, pc: u64) -> Option<u64> {
+        self.instr.try_resolve_static_jump(self.raw, pc)
+    }
+
+    pub const fn mnemonic(&self) -> &Mnenomic {
+        &self.instr.mnenomic
+    }
+
+    pub const fn ends_block(&self) -> bool {
+        self.instr.mnenomic.ends_block()
+    }
+
+    pub const fn has_delay_slot(&self) -> bool {
+        self.instr.mnenomic.has_delay_slot()
+    }
+
+    pub fn get(&self, op: Operand) -> Option<u32> {
+        self.instr.pattern.get(op, self.raw)
+    }
+
+    pub fn rt(&self) -> u32 {
+        self.get(Operand::Target).unwrap_or_else(|| {
+            panic!(
+                "failed to get target register for instruction {:?}",
+                self.instr.mnenomic.name()
+            )
+        })
+    }
+
+    pub fn rs(&self) -> u32 {
+        self.get(Operand::Source).unwrap_or_else(|| {
+            panic!(
+                "failed to get source register for instruction {:?}",
+                self.instr.mnenomic.name()
+            )
+        })
+    }
+
+    pub fn rd(&self) -> u32 {
+        self.get(Operand::Destination).unwrap_or_else(|| {
+            panic!(
+                "failed to get destination register for instruction {:?}",
+                self.instr.mnenomic.name()
+            )
+        })
+    }
+
+    pub fn sa(&self) -> u32 {
+        self.get(Operand::Immediate).unwrap_or_else(|| {
+            panic!(
+                "failed to get shift amount for instruction {:?}",
+                self.instr.mnenomic.name()
+            )
+        })
+    }
+
+    pub fn immediate(&self) -> u32 {
+        self.get(Operand::Immediate).unwrap_or_else(|| {
+            panic!(
+                "failed to get immediate for instruction {:?}",
+                self.instr.mnenomic.name()
+            )
+        })
+    }
+
+    pub fn offset(&self) -> u32 {
+        self.get(Operand::Offset).unwrap_or_else(|| {
+            panic!(
+                "failed to get offset for instruction {:?}",
+                self.instr.mnenomic.name()
+            )
+        })
+    }
+
+    pub fn base(&self) -> u32 {
+        self.get(Operand::Base).unwrap_or_else(|| {
+            panic!(
+                "failed to get base for instruction {:?}",
+                self.instr.mnenomic.name()
+            )
+        })
+    }
+}
+
+impl TryFrom<u32> for ParsedInstruction {
+    type Error = ();
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
-        let opcode = Self::opcode(value);
-        let (mnemonic, operand) = match opcode {
-            // Register
-            0b00_0000 => {
-                let func = Self::register_function(value);
-                let mnemonic = match func {
-                    0b10_0001 => Mnemonic::Addu,
-                    0b10_1101 => Mnemonic::Daddu,
-                    0b00_1000 => Mnemonic::Jr,
-                    0b00_1001 => Mnemonic::Jalr,
-                    0b10_1011 => Mnemonic::Sltu,
-                    0b11_1000 => Mnemonic::Dsll,
-                    0b10_0101 => Mnemonic::Or,
-                    0b10_0110 => Mnemonic::Xor,
-                    0b11_1110 => Mnemonic::Dsrl32,
-                    0b11_1100 => Mnemonic::Dsll32,
-                    0b11_1111 => Mnemonic::Dsra32,
-                    0b01_1010 => Mnemonic::Div,
-                    0b11_0100 => Mnemonic::Teq,
-                    0b01_0000 => Mnemonic::Mfhi,
-                    0b01_0010 => Mnemonic::Mflo,
-                    0b01_0001 => Mnemonic::Mthi,
-                    0b01_0011 => Mnemonic::Mtlo,
-                    0b10_0100 => Mnemonic::And,
-                    0b01_1000 => Mnemonic::Mult,
-                    0b00_1111 => Mnemonic::Sync,
-                    0b10_0011 => Mnemonic::Subu,
-                    0b00_0000 => {
-                        if value == 0 {
-                            // Psuedo instruction, shifting by 0 simply does nothing.
-                            Mnemonic::Nop
-                        } else {
-                            Mnemonic::Sll
-                        }
-                    }
-
-                    _ => {
-                        return Err(format!(
-                            "unimplemented register opcode {func:#034b} {func:#x}",
-                        ))
-                    }
-                };
-
-                (mnemonic, Operand::register(value))
-            }
-
-            // Coprocessor
-            0b01_0000 => {
-                let func = Self::coprocessor_function(value);
-                let mnemonic = match func {
-                    0b0_0100 => Mnemonic::Mtc0,
-
-                    _ => {
-                        return Err(format!(
-                            "unimplemented coprocessor opcode {func:#034b} {func:#x}",
-                        ))
-                    }
-                };
-
-                (mnemonic, Operand::register(value))
-            }
-
-            // Branch/trap
-            0b00_0001 => {
-                let func = Self::branch_opcode(value);
-                let mnemonic = match func {
-                    0b0_0010 => Mnemonic::Bltzl,
-                    0b0_0000 => Mnemonic::Bltz,
-                    0b1_0000 => Mnemonic::Bltzal,
-                    0b1_0010 => Mnemonic::Bltzall,
-                    0b0_0001 => Mnemonic::Bgez,
-                    0b1_0001 => Mnemonic::Bgezal,
-                    0b1_0011 => Mnemonic::Bgezall,
-                    0b0_1100 => Mnemonic::Teqi,
-                    0b0_1000 => Mnemonic::Tgei,
-                    0b0_1001 => Mnemonic::Tgeiu,
-                    0b0_1010 => Mnemonic::Tlti,
-                    0b0_1011 => Mnemonic::Tltiu,
-                    0b0_1110 => Mnemonic::Tnei,
-                    _ => {
-                        return Err(format!(
-                            "unimplemented branch opcode {func:#034b} {func:#x}",
-                        ))
-                    }
-                };
-
-                (mnemonic, Operand::register(value))
-            }
-
-            // Misc
-            0b11_1000 => (Mnemonic::Sc, Operand::register(value)),
-            0b00_0110 => (Mnemonic::Blez, Operand::register(value)),
-
-            // Jump
-            0b00_0011 => (Mnemonic::Jal, Operand::jump(value)),
-            0b00_0010 => (Mnemonic::J, Operand::jump(value)),
-
-            // Immediate
-            _ => {
-                let mnemonic = match opcode {
-                    0b00_1110 => Mnemonic::Xori,
-                    0b11_1100 => Mnemonic::Scd,
-                    0b10_1110 => Mnemonic::Swr,
-                    0b00_1010 => Mnemonic::Slti,
-                    0b00_1011 => Mnemonic::Sltiu,
-                    0b00_0100 => Mnemonic::Beq,
-                    0b01_1001 => Mnemonic::Daddiu,
-                    0b10_0000 => Mnemonic::Lb,
-                    0b10_0100 => Mnemonic::Lbu,
-                    0b10_0011 => Mnemonic::Lw,
-                    0b10_1011 => Mnemonic::Sw,
-                    0b11_1111 => Mnemonic::Sd,
-                    0b10_1000 => Mnemonic::Sb,
-                    0b10_1001 => Mnemonic::Sh,
-                    0b11_0111 => Mnemonic::Ld,
-                    0b10_0101 => Mnemonic::Lhu,
-                    0b10_0110 => Mnemonic::Lwr,
-                    0b00_0101 => Mnemonic::Bne,
-                    0b00_1111 => Mnemonic::Lui,
-                    0b00_1101 => Mnemonic::Ori,
-                    0b00_1000 => Mnemonic::Addi,
-                    0b00_1001 => Mnemonic::Addiu,
-                    0b00_1100 => Mnemonic::Andi,
-                    0b10_1100 => Mnemonic::Sdl,
-                    0b10_1101 => Mnemonic::Sdr,
-
-                    _ => return Err(format!("unimplemented opcode {opcode:#034b} {opcode:#x}")),
-                };
-
-                (mnemonic, Operand::immediate(value))
-            }
-        };
-
-        Ok(Self { mnemonic, operand })
+        decode(value)
+            .map(|instr| Self { instr, raw: value })
+            .ok_or(())
     }
+}
+
+impl fmt::Display for ParsedInstruction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.instr.format(self.raw))
+    }
+}
+
+macro_rules! operand {
+    ($name:ident) => {
+        (Operand::$name, Signedness::Unsigned32)
+    };
+
+    ($name:ident, $sign:ident) => {
+        (Operand::$name, Signedness::$sign)
+    };
+}
+
+macro_rules! instr {
+    ($mnenomic:ident, $pattern:expr) => {
+        Instruction::new(Mnenomic::$mnenomic, $pattern, &[])
+    };
+
+    ($mnenomic:ident, $pattern:expr, $($operands:tt)*) => {
+        Instruction::new(Mnenomic::$mnenomic, $pattern,&[$(operand! $operands),*])
+    };
+}
+
+/// Copied from the fantastic n64brew wiki, thanks!
+/// https://n64brew.dev/wiki/MIPS_III_instructions#CPU_Instruction_Set
+#[rustfmt::skip]
+const INSTRUCTIONS: &[Instruction] = &[
+    instr!(Add,     "0000 00ss ssst tttt dddd d000 0010 0000", (Destination)(Source)(Target)),
+    instr!(Addi,    "0010 00ss ssst tttt kkkk kkkk kkkk kkkk", (Target)(Source)(Immediate, Signed16)),
+    instr!(Addiu,   "0010 01ss ssst tttt kkkk kkkk kkkk kkkk", (Target)(Source)(Immediate, Signed16)),
+    instr!(Addu,    "0000 00ss ssst tttt dddd d000 0010 0001", (Destination)(Source)(Target)),
+    instr!(And,     "0000 00ss ssst tttt dddd d000 0010 0100", (Destination)(Source)(Target)),
+    instr!(Andi,    "0011 00ss ssst tttt kkkk kkkk kkkk kkkk", (Target)(Source)(Immediate)),
+    instr!(Bczf,    "0100 xx01 0000 0000 ffff ffff ffff ffff", (Offset, Signed16)),
+    instr!(Bczfl,   "0100 xx01 0000 0010 ffff ffff ffff ffff", (Offset, Signed16)),
+    instr!(Bczt,    "0100 xx01 0000 0001 ffff ffff ffff ffff", (Offset, Signed16)),
+    instr!(Bcztl,   "0100 xx01 0000 0011 ffff ffff ffff ffff", (Offset, Signed16)),
+    instr!(Beq,     "0001 00ss ssst tttt ffff ffff ffff ffff", (Source)(Target)(Offset, Signed16)),
+    instr!(Beql,    "0101 00ss ssst tttt ffff ffff ffff ffff", (Source)(Target)(Offset, Signed16)),
+    instr!(Bgez,    "0000 01ss sss0 0001 ffff ffff ffff ffff", (Source)(Offset, Signed16)),
+    instr!(Bgezal,  "0000 01ss sss1 0001 ffff ffff ffff ffff", (Source)(Offset, Signed16)),
+    instr!(Bgezall, "0000 01ss sss1 0011 ffff ffff ffff ffff", (Source)(Offset, Signed16)),
+    instr!(Bgezl,   "0000 01ss sss0 0011 ffff ffff ffff ffff", (Source)(Offset, Signed16)),
+    instr!(Bgtz,    "0001 11ss sss0 0000 ffff ffff ffff ffff", (Source)(Offset, Signed16)),
+    instr!(Bgtzl,   "0101 11ss sss0 0000 ffff ffff ffff ffff", (Source)(Offset, Signed16)),
+    instr!(Blez,    "0001 10ss sss0 0000 ffff ffff ffff ffff", (Source)(Offset, Signed16)),
+    instr!(Blezl,   "0101 10ss sss0 0000 ffff ffff ffff ffff", (Source)(Offset, Signed16)),
+    instr!(Bltz,    "0000 01ss sss0 0000 ffff ffff ffff ffff", (Source)(Offset, Signed16)),
+    instr!(Bltzal,  "0000 01ss sss1 0000 ffff ffff ffff ffff", (Source)(Offset, Signed16)),
+    instr!(Bltzall, "0000 01ss sss1 0010 ffff ffff ffff ffff", (Source)(Offset, Signed16)),
+    instr!(Bltzl,   "0000 01ss sss0 0010 ffff ffff ffff ffff", (Source)(Offset, Signed16)),
+    instr!(Bne,     "0001 01ss ssst tttt ffff ffff ffff ffff", (Source)(Target)(Offset, Signed16)),
+    instr!(Bnel,    "0101 01ss ssst tttt ffff ffff ffff ffff", (Source)(Target)(Offset, Signed16)),
+    instr!(Break,   "0000 00kk kkkk kkkk kkkk kkkk kk00 1101"),
+    instr!(Cache,   "1011 11bb bbbk kkkk ffff ffff ffff ffff", (Immediate)(Offset, Signed16)(Base)),
+    instr!(Cfcz,    "0100 xx00 010t tttt dddd d000 0000 0000", (Target)(Destination)),
+    instr!(Copz,    "0100 xx1k kkkk kkkk kkkk kkkk kkkk kkkk", (Immediate)),
+    instr!(Ctcz,    "0100 xx00 110t tttt dddd d000 0000 0000", (Target)(Destination)),
+    instr!(Dadd,    "0000 00ss ssst tttt dddd d000 0010 1100", (Destination)(Source)(Target)),
+    instr!(Daddi,   "0110 00ss ssst tttt kkkk kkkk kkkk kkkk", (Target)(Source)(Immediate, Signed16)),
+    instr!(Daddiu,  "0110 01ss ssst tttt kkkk kkkk kkkk kkkk", (Target)(Source)(Immediate, Signed16)),
+    instr!(Daddu,   "0000 00ss ssst tttt dddd d000 0010 1101", (Destination)(Source)(Target)),
+    instr!(Ddiv,    "0000 00ss ssst tttt 0000 0000 0001 1110", (Source)(Target)),
+    instr!(Ddivu,   "0000 00ss ssst tttt 0000 0000 0001 1111", (Source)(Target)),
+    instr!(Div,     "0000 00ss ssst tttt 0000 0000 0001 1010", (Source)(Target)),
+    instr!(Divu,    "0000 00ss ssst tttt 0000 0000 0001 1011", (Source)(Target)),
+    instr!(Dmfc0,   "0100 0000 001t tttt dddd d000 0000 0000", (Target)(Destination)),
+    instr!(Dmtc0,   "0100 0000 101t tttt dddd d000 0000 0000", (Target)(Destination)),
+    instr!(Dmult,   "0000 00ss ssst tttt 0000 0000 0001 1100", (Source)(Target)),
+    instr!(Dmultu,  "0000 00ss ssst tttt 0000 0000 0001 1101", (Source)(Target)),
+    instr!(Dsll,    "0000 0000 000t tttt dddd dkkk kk11 1000", (Destination)(Target)(Immediate)),
+    instr!(Dsllv,   "0000 00ss ssst tttt dddd d000 0001 0100", (Destination)(Target)(Source)),
+    instr!(Dsll32,  "0000 0000 000t tttt dddd dkkk kk11 1100", (Destination)(Target)(Immediate)),
+    instr!(Dsra,    "0000 0000 000t tttt dddd dkkk kk11 1011", (Destination)(Target)(Immediate)),
+    instr!(Dsrav,   "0000 00ss ssst tttt dddd d000 0001 0111", (Destination)(Target)(Source)),
+    instr!(Dsra32,  "0000 0000 000t tttt dddd dkkk kk11 1111", (Destination)(Target)(Immediate)),
+    instr!(Dsrl,    "0000 0000 000t tttt dddd dkkk kk11 1010", (Destination)(Target)(Immediate)),
+    instr!(Dsrlv,   "0000 00ss ssst tttt dddd d000 0001 0110", (Destination)(Target)(Source)),
+    instr!(Dsrl32,  "0000 0000 000t tttt dddd dkkk kk11 1110", (Destination)(Target)(Immediate)),
+    instr!(Dsub,    "0000 00ss ssst tttt dddd d000 0010 1110", (Destination)(Source)(Target)),
+    instr!(Dsubu,   "0000 00ss ssst tttt dddd d000 0010 1111", (Destination)(Source)(Target)),
+    instr!(Eret,    "0100 0010 0000 0000 0000 0000 0001 1000"),
+    instr!(J,       "0000 10kk kkkk kkkk kkkk kkkk kkkk kkkk", (Immediate)),
+    instr!(Jal,     "0000 11kk kkkk kkkk kkkk kkkk kkkk kkkk", (Immediate)),
+    instr!(Jalr,    "0000 00ss sss0 0000 dddd d000 0000 1001", (Destination)(Source)),
+    instr!(JalrR31, "0000 00ss sss0 0000 1111 1000 0000 1001", (Source)),
+    instr!(Jr,      "0000 00ss sss0 0000 0000 0000 0000 1000", (Source)),
+    instr!(Lb,      "1000 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Lbu,     "1001 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Ld,      "1101 11bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Ldcz,    "1101 xxbb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Ldl,     "0110 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Ldr,     "0110 11bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Lh,      "1000 01bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Lhu,     "1001 01bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Ll,      "1100 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Lld,     "1101 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Lui,     "0011 1100 000t tttt kkkk kkkk kkkk kkkk", (Target)(Immediate, Signed16)),
+    instr!(Lw,      "1000 11bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Lwcz,    "1100 xxbb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Lwl,     "1000 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Lwr,     "1001 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Lwu,     "1001 11bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Mfc0,    "0100 0000 000t tttt dddd d000 0000 0000", (Target)(Destination)),
+    instr!(Mfcz,    "0100 xx00 000t tttt dddd d000 0000 0000", (Target)(Destination)),
+    instr!(Mfhi,    "0000 0000 0000 0000 dddd d000 0001 0000", (Destination)),
+    instr!(Mflo,    "0000 0000 0000 0000 dddd d000 0001 0010", (Destination)),
+    instr!(Mtc0,    "0100 0000 100t tttt dddd d000 0000 0000", (Target)(Destination)),
+    instr!(Mtcz,    "0100 xx00 100t tttt dddd d000 0000 0000", (Destination)(Destination)),
+    instr!(Mthi,    "0000 00ss sss0 0000 0000 0000 0001 0001", (Source)),
+    instr!(Mtlo,    "0000 00ss sss0 0000 0000 0000 0001 0011", (Source)),
+    instr!(Mult,    "0000 00ss ssst tttt 0000 0000 0001 1000", (Source)(Target)),
+    instr!(Multu,   "0000 00ss ssst tttt 0000 0000 0001 1001", (Source)(Target)),
+    instr!(Nor,     "0000 00ss ssst tttt dddd d000 0010 0111", (Destination)(Source)(Target)),
+    instr!(Or,      "0000 00ss ssst tttt dddd d000 0010 0101", (Destination)(Source)(Target)),
+    instr!(Ori,     "0011 01ss ssst tttt kkkk kkkk kkkk kkkk", (Target)(Source)(Immediate)),
+    instr!(Sb,      "1010 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Sc,      "1110 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Scd,     "1111 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Sd,      "1111 11bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Sdcz,    "1111 xxbb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Sdl,     "1011 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Sdr,     "1011 01bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Sh,      "1010 01bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Sll,     "0000 0000 000t tttt dddd dkkk kk00 0000", (Destination)(Target)(Immediate)),
+    instr!(Sllv,    "0000 00ss ssst tttt dddd d000 0000 0100", (Destination)(Target)(Source)),
+    instr!(Slt,     "0000 00ss ssst tttt dddd d000 0010 1010", (Destination)(Source)(Target)),
+    instr!(Slti,    "0010 10ss ssst tttt kkkk kkkk kkkk kkkk", (Target)(Source)(Immediate)),
+    instr!(Sltiu,   "0010 11ss ssst tttt kkkk kkkk kkkk kkkk", (Target)(Source)(Immediate)),
+    instr!(Sltu,    "0000 00ss ssst tttt dddd d000 0010 1011", (Destination)(Source)(Target)),
+    instr!(Sra,     "0000 0000 000t tttt dddd dkkk kk00 0011", (Destination)(Target)(Immediate)),
+    instr!(Srav,    "0000 00ss ssst tttt dddd d000 0000 0111", (Destination)(Target)(Source)),
+    instr!(Srl,     "0000 0000 000t tttt dddd dkkk kk00 0010", (Destination)(Target)(Immediate)),
+    instr!(Srlv,    "0000 00ss ssst tttt dddd d000 0000 0110", (Destination)(Target)(Source)),
+    instr!(Sub,     "0000 00ss ssst tttt dddd d000 0010 0010", (Destination)(Source)(Target)),
+    instr!(Subu,    "0000 00ss ssst tttt dddd d000 0010 0011", (Destination)(Source)(Target)),
+    instr!(Sw,      "1010 11bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Swcz,    "1110 xxbb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Swl,     "1010 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Swr,     "1011 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Sync,    "0000 0000 0000 0000 0000 0000 0000 1111"),
+    instr!(Syscall, "0000 00kk kkkk kkkk kkkk kkkk kk00 1100"),
+    instr!(Teq,     "0000 00ss ssst tttt kkkk kkkk kk11 0100", (Source)(Target)),
+    instr!(Teqi,    "0000 01ss sss0 1100 kkkk kkkk kkkk kkkk", (Source)(Immediate)),
+    instr!(Tge,     "0000 00ss ssst tttt kkkk kkkk kk11 0000", (Source)(Target)),
+    instr!(Tgei,    "0000 01ss sss0 1000 kkkk kkkk kkkk kkkk", (Source)(Immediate)),
+    instr!(Tgeiu,   "0000 01ss sss0 1001 kkkk kkkk kkkk kkkk", (Source)(Immediate)),
+    instr!(Tgeu,    "0000 00ss ssst tttt kkkk kkkk kk11 0001", (Source)(Target)),
+    instr!(Tlbp,    "0100 0010 0000 0000 0000 0000 0000 1000"),
+    instr!(Tlbr,    "0100 0010 0000 0000 0000 0000 0000 0001"),
+    instr!(Tlbwi,   "0100 0010 0000 0000 0000 0000 0000 0010"),
+    instr!(Tlbwr,   "0100 0010 0000 0000 0000 0000 0000 0110"),
+    instr!(Tlt,     "0000 00ss ssst tttt kkkk kkkk kk11 0010", (Source)(Target)),
+    instr!(Tlti,    "0000 01ss sss0 1010 kkkk kkkk kkkk kkkk", (Source)(Immediate)),
+    instr!(Tltiu,   "0000 01ss sss0 1011 kkkk kkkk kkkk kkkk", (Source)(Immediate)),
+    instr!(Tltu,    "0000 00ss ssst tttt kkkk kkkk kk11 0011", (Source)(Target)),
+    instr!(Tne,     "0000 00ss ssst tttt kkkk kkkk kk11 0110", (Source)(Target)),
+    instr!(Tnei,    "0000 01ss sss0 1110 kkkk kkkk kkkk kkkk", (Source)(Immediate)),
+    instr!(Xor,     "0000 00ss ssst tttt dddd d000 0010 0110", (Destination)(Source)(Target)),
+    instr!(Xori,    "0011 10ss ssst tttt kkkk kkkk kkkk kkkk", (Target)(Source)(Immediate)),
+
+    // Floating point
+    instr!(AbsFmt,     "0100 01aa aaa0 0000 ssss sddd dd00 0101", (Destination)(Source)),
+    instr!(AddFmt,     "0100 01aa aaat tttt ssss sddd dd00 0000", (Destination)(Source)),
+    instr!(CCondFmtFs, "0100 01aa aaat tttt ssss s000 0011 cccc", (Source)(Target)(Condition)),
+    instr!(Bc1f,       "0100 0101 0000 0000 ffff ffff ffff ffff", (Offset)),
+    instr!(Bc1fl,      "0100 0101 0000 0010 ffff ffff ffff ffff", (Offset)),
+    instr!(Bc1t,       "0100 0101 0000 0001 ffff ffff ffff ffff", (Offset)),
+    instr!(Bc1tl,      "0100 0101 0000 0011 ffff ffff ffff ffff", (Offset)),
+];
+
+fn decode(instr: u32) -> Option<&'static Instruction> {
+    // This is inefficient, if it proves to be a bottleneck we can optimise it in a few ways:
+    // - Eliminate matching ranges if they are found not to match.
+    // - Cache the result of `bit_range` on the input, to be reused for matching ranges.
+    INSTRUCTIONS.iter().find(|i| i.pattern.matches(instr))
 }

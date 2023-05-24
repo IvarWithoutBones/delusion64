@@ -1,10 +1,10 @@
-use crate::instruction::Instruction;
-use std::fmt;
+use crate::instruction::ParsedInstruction;
 
 pub mod format;
 pub mod instruction;
+pub mod pattern;
 
-pub use instruction::SIZE as INSTRUCTION_SIZE;
+pub const INSTRUCTION_SIZE: usize = 4;
 pub const REGISTER_COUNT: usize = 32;
 
 pub type Block = Vec<MaybeInstruction>;
@@ -12,12 +12,12 @@ pub type BlockList = Vec<Block>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MaybeInstruction {
-    Instruction(Instruction),
+    Instruction(ParsedInstruction),
     Invalid(u32),
 }
 
 impl MaybeInstruction {
-    pub const fn try_resolve_static_jump(&self, pc: u32) -> Option<u64> {
+    pub fn try_resolve_static_jump(&self, pc: u64) -> Option<u64> {
         match self {
             Self::Instruction(instr) => instr.try_resolve_static_jump(pc),
             Self::Invalid(_) => None,
@@ -46,7 +46,7 @@ impl MaybeInstruction {
     }
 
     #[inline]
-    pub fn unwrap(self) -> Instruction {
+    pub fn unwrap(self) -> ParsedInstruction {
         match self {
             Self::Instruction(instr) => instr,
             Self::Invalid(value) => panic!("tried to unwrap invalid instruction: {value:#034b}"),
@@ -64,11 +64,11 @@ impl From<u32> for MaybeInstruction {
     }
 }
 
-impl fmt::Display for MaybeInstruction {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for MaybeInstruction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Instruction(instr) => write!(f, "{instr}"),
-            Self::Invalid(value) => write!(f, "invalid instruction: {value:#034b}"),
+            Self::Invalid(value) => write!(f, "unknown: {value:#034b}"),
         }
     }
 }
@@ -97,17 +97,17 @@ impl<'a> Decompiler<'a> {
         }
     }
 
-    pub fn next_instruction(&mut self) -> Option<Instruction> {
+    pub fn next_instruction(&mut self) -> Option<ParsedInstruction> {
         let raw_instr = self.read_u32(self.pos)?;
         self.pos += INSTRUCTION_SIZE;
         raw_instr.try_into().ok()
     }
 
-    pub fn instruction_at(&self, pos: usize) -> Option<Instruction> {
+    pub fn instruction_at(&self, pos: usize) -> Option<ParsedInstruction> {
         self.read_u32(pos)?.try_into().ok()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = Instruction> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = ParsedInstruction> + '_ {
         let mut pos = 0;
         std::iter::from_fn(move || {
             let instr = self.instruction_at(pos)?;
@@ -167,13 +167,13 @@ impl<'a> Decompiler<'a> {
                     println!("{formatted}");
                 }
 
-                pos += INSTRUCTION_SIZE as u32;
+                pos += INSTRUCTION_SIZE as u64;
             }
         }
     }
 
     fn read_u32(&self, from_pos: usize) -> Option<u32> {
-        debug_assert!(from_pos % 4 == 0);
+        debug_assert!(from_pos % INSTRUCTION_SIZE == 0);
 
         let data = [
             *self.bin.get(from_pos)?,

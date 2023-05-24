@@ -1,7 +1,7 @@
 use binrw::BinRead;
 use std::fmt;
 
-pub const LEN: usize = 0x3F;
+pub const LEN: usize = 0x40;
 
 /// The version of the libultra SDK the ROM was compiled with.
 pub struct LibultraVersion {

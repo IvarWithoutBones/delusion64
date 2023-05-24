@@ -1,61 +1,24 @@
 use crate::{codegen::CodeGen, env::RuntimeFunction, label::Labels};
 use inkwell::IntPredicate;
 use mips_decomp::{
-    instruction::{Instruction, Mnemonic, Operand},
+    instruction::{Mnenomic, ParsedInstruction},
     INSTRUCTION_SIZE,
 };
 
 pub fn recompile_instruction(
     codegen: &CodeGen,
     labels: &Labels,
-    instr: &Instruction,
+    instr: &ParsedInstruction,
     address: u64,
 ) {
-    match instr.operand {
-        Operand::Immediate {
-            source,
-            target,
-            immediate,
-        } => {
-            recompile_immediate_instruction(
-                codegen,
-                labels,
-                instr,
-                address,
-                (source, target, immediate),
-            );
-        }
+    let mnemonic = instr.mnemonic();
+    let i8_type = codegen.context.i8_type();
+    let i16_type = codegen.context.i16_type();
+    let i32_type = codegen.context.i32_type();
+    let i64_type = codegen.context.i64_type();
 
-        Operand::Register {
-            source,
-            target,
-            destination,
-            shift,
-        } => {
-            recompile_register_instruction(
-                codegen,
-                labels,
-                instr,
-                address,
-                (source, target, destination, shift),
-            );
-        }
-
-        Operand::Jump { target } => {
-            recompile_jump_instruction(codegen, labels, instr, address, target);
-        }
-    }
-}
-
-fn recompile_jump_instruction(
-    codegen: &CodeGen,
-    labels: &Labels,
-    instr: &Instruction,
-    address: u64,
-    _target: u32,
-) {
-    match instr.mnemonic {
-        Mnemonic::Jal => {
+    match mnemonic {
+        Mnenomic::Jal => {
             // Jump to target address, stores return address in r31 (ra)
             let target = instr.try_resolve_static_jump(address as _).unwrap();
             let target_block = labels.get(&(target as _)).unwrap().basic_block;
@@ -71,82 +34,62 @@ fn recompile_jump_instruction(
             codegen.builder.build_unconditional_branch(target_block);
         }
 
-        _ => todo!("unimplemented jump instruction: {instr}"),
-    }
-}
-
-fn recompile_register_instruction(
-    codegen: &CodeGen,
-    labels: &Labels,
-    instr: &Instruction,
-    address: u64,
-    operands: (u8, u8, u8, u8),
-) {
-    let (source, target, destination, shift) = operands;
-    let i32_type = codegen.context.i32_type();
-    let i64_type = codegen.context.i64_type();
-
-    match instr.mnemonic {
-        Mnemonic::Nop => {
-            // Do nothing.
-        }
-
-        Mnemonic::And => {
+        Mnenomic::And => {
             // AND rs with rt, store result in rd
-            let source = codegen.load_register(source).into_int_value();
-            let target = codegen.load_register(target).into_int_value();
+            let source = codegen.load_register(instr.rs()).into_int_value();
+            let target = codegen.load_register(instr.rt()).into_int_value();
             let result = codegen.builder.build_and(source, target, "and_result");
-            codegen.store_register(destination, result.into());
+            codegen.store_register(instr.rd(), result.into());
         }
 
-        Mnemonic::Xor => {
+        Mnenomic::Xor => {
             // XOR rs with rt, store result in rd
-            let source = codegen.load_register(source).into_int_value();
-            let target = codegen.load_register(target).into_int_value();
+            let source = codegen.load_register(instr.rs()).into_int_value();
+            let target = codegen.load_register(instr.rt()).into_int_value();
             let result = codegen.builder.build_xor(source, target, "xor_result");
-            codegen.store_register(destination, result.into());
+            codegen.store_register(instr.rd(), result.into());
         }
 
-        Mnemonic::Addu => {
+        Mnenomic::Addu => {
             // Add rs and rt, store result in rd
-            let source = codegen.load_register(source).into_int_value();
-            let target = codegen.load_register(target).into_int_value();
+            let source = codegen.load_register(instr.rs()).into_int_value();
+            let target = codegen.load_register(instr.rt()).into_int_value();
             let result = codegen.builder.build_int_add(source, target, "addu_result");
-            codegen.store_register(destination, result.into());
+            codegen.store_register(instr.rd(), result.into());
         }
 
-        Mnemonic::Or => {
+        Mnenomic::Or => {
             // OR rs and rt, store result in rd
-            let source = codegen.load_register(source).into_int_value();
-            let target = codegen.load_register(target).into_int_value();
+            let source = codegen.load_register(instr.rs()).into_int_value();
+            let target = codegen.load_register(instr.rt()).into_int_value();
             let result = codegen.builder.build_or(source, target, "or_result");
-            codegen.store_register(destination, result.into());
+            codegen.store_register(instr.rd(), result.into());
         }
 
-        Mnemonic::Daddu => {
+        Mnenomic::Daddu => {
             // Add rs and rt, store result in rd
-            let source = codegen.load_register(source).into_int_value();
-            let target = codegen.load_register(target).into_int_value();
+            let source = codegen.load_register(instr.rs()).into_int_value();
+            let target = codegen.load_register(instr.rt()).into_int_value();
             let result = codegen
                 .builder
                 .build_int_add(source, target, "daddu_result");
-            codegen.store_register(destination, result.into());
+            codegen.store_register(instr.rd(), result.into());
         }
 
-        Mnemonic::Dsll => {
+        Mnenomic::Dsll => {
             // Shift rt left by sa bits, store result in rd (64-bits)
-            let shift = i64_type.const_int(shift as _, false);
-            let target = codegen.load_register(target).into_int_value();
+            let shift = i64_type.const_int(instr.sa() as _, false);
+            let target = codegen.load_register(instr.rt()).into_int_value();
             let result = codegen
                 .builder
                 .build_left_shift(target, shift, "dsll_result");
-            codegen.store_register(destination, result.into());
+            codegen.store_register(instr.rd(), result.into());
         }
 
-        Mnemonic::Sltu => {
+        Mnenomic::Sltu => {
             // If unsigned rs is less than unsigned rt, store one in rd, otherwise store zero.
-            let source = codegen.load_register(source).into_int_value();
-            let target = codegen.load_register(target).into_int_value();
+            let source = codegen.load_register(instr.rs()).into_int_value();
+            let target = codegen.load_register(instr.rt()).into_int_value();
 
             let cmp =
                 codegen
@@ -157,13 +100,13 @@ fn recompile_register_instruction(
             let result = codegen
                 .builder
                 .build_int_z_extend(cmp, i64_type, "sltu_result");
-            codegen.store_register(destination, result.into());
+            codegen.store_register(instr.rd(), result.into());
         }
 
-        Mnemonic::Sll => {
+        Mnenomic::Sll => {
             // Shift rt left by sa bits, store result in rd (32-bits)
-            let shift = i64_type.const_int(shift as _, false);
-            let target = codegen.load_register(target).into_int_value();
+            let shift = i64_type.const_int(instr.sa() as _, false);
+            let target = codegen.load_register(instr.rt()).into_int_value();
             let result = codegen.builder.build_left_shift(target, shift, "sll_shift");
 
             // Truncate the result to 32-bits.
@@ -171,40 +114,38 @@ fn recompile_register_instruction(
                 .builder
                 .build_int_truncate(result, i32_type, "sll_truncate");
 
-            codegen.store_register(destination, result.into());
+            codegen.store_register(instr.rd(), result.into());
         }
 
-        Mnemonic::Dsll32 => {
+        Mnenomic::Dsll32 => {
             // Shift rt left by (32 + sa) bits, store result in rd
-            let target = codegen.load_register(target).into_int_value();
-            let shift = i64_type.const_int((shift + 32) as _, false);
+            let target = codegen.load_register(instr.rt()).into_int_value();
+            let shift = i64_type.const_int((instr.sa() + 32) as _, false);
             let result = codegen
                 .builder
                 .build_left_shift(target, shift, "dsll32_shift");
-            codegen.store_register(destination, result.into());
+            codegen.store_register(instr.rd(), result.into());
         }
 
-        Mnemonic::Dsrl32 => {
+        Mnenomic::Dsrl32 => {
             // Shift rt right by (32 + sa) bits, store sign-extended result in rd
-            let target = codegen.load_register(target).into_int_value();
-            let shift = i64_type.const_int((shift + 32) as _, false);
+            let target = codegen.load_register(instr.rt()).into_int_value();
+            let shift = i64_type.const_int((instr.sa() + 32) as _, false);
             let result = codegen
                 .builder
                 .build_right_shift(target, shift, true, "dsrl32_shift");
-            codegen.store_register(destination, result.into());
+            codegen.store_register(instr.rd(), result.into());
         }
 
-        Mnemonic::Jr => {
+        Mnenomic::Jr => {
             // Jump to address stored in rs
-            let source = codegen.load_register(source).into_int_value();
+            let source = codegen.load_register(instr.rs()).into_int_value();
 
             let block_id = {
                 let result = codegen.build_env_call(RuntimeFunction::GetBlockId, &[source.into()]);
                 result.try_as_basic_value().left().unwrap().into_int_value()
             };
 
-            let current_block = codegen.builder.get_insert_block().unwrap();
-            let not_found_block = codegen.build_basic_block("jr_id_not_found").unwrap();
             let cases = labels
                 .values()
                 .map(|label| {
@@ -216,30 +157,22 @@ fn recompile_register_instruction(
             // Loop over all blocks and build a switch statement.
             codegen
                 .builder
-                .build_switch(block_id, not_found_block, &cases);
-
-            // Build the else block.
-            codegen.builder.position_at_end(not_found_block);
-            codegen.print_constant_string("ERROR: unable to fetch basic block\n", "jr_error");
-            codegen.builder.build_return(None);
-            codegen.builder.position_at_end(current_block);
+                .build_switch(block_id, codegen.label_not_found, &cases);
         }
 
-        Mnemonic::Jalr => {
+        Mnenomic::Jalr => {
             // Jump to address stored in rs, stores return address in rd
-            let source = codegen.load_register(source).into_int_value();
+            let source = codegen.load_register(instr.rs()).into_int_value();
 
             // Store the return address
             let return_addr = i64_type.const_int(address + INSTRUCTION_SIZE as u64, false);
-            codegen.store_register(destination, return_addr.into());
+            codegen.store_register(instr.rd(), return_addr.into());
 
             let block_id = {
                 let result = codegen.build_env_call(RuntimeFunction::GetBlockId, &[source.into()]);
                 result.try_as_basic_value().left().unwrap().into_int_value()
             };
 
-            let current_block = codegen.builder.get_insert_block().unwrap();
-            let not_found_block = codegen.build_basic_block("jalr_id_not_found").unwrap();
             let cases = labels
                 .values()
                 .map(|label| {
@@ -251,53 +184,22 @@ fn recompile_register_instruction(
             // Build a switch statement to find the target block.
             codegen
                 .builder
-                .build_switch(block_id, not_found_block, &cases);
-
-            // Build the else block.
-            codegen.builder.position_at_end(not_found_block);
-            codegen.print_constant_string("ERROR: unable to fetch basic block\n", "jarl_error");
-            codegen.builder.build_return(None);
-            codegen.builder.position_at_end(current_block);
+                .build_switch(block_id, codegen.label_not_found, &cases);
         }
 
-        _ => todo!("unimplemented register instruction: {instr}"),
-    }
-}
-
-fn recompile_immediate_instruction(
-    codegen: &CodeGen,
-    labels: &Labels,
-    instr: &Instruction,
-    address: u64,
-    operands: (u8, u8, u16),
-) {
-    let (source, target, immediate) = operands;
-    let i8_type = codegen.context.i8_type();
-    let i16_type = codegen.context.i16_type();
-    let i32_type = codegen.context.i32_type();
-    let i64_type = codegen.context.i64_type();
-
-    match instr.mnemonic {
-        Mnemonic::Sh => {
+        Mnenomic::Sh => {
             // Stores halfword from rt, to memory address (base + offset)
-            let source = codegen.load_register(source).into_int_value();
-            let offset = codegen.truncate_to_i64(i16_type.const_int(immediate as _, true));
-            let address = codegen.builder.build_int_add(source, offset, "sh_address");
-
-            let target = codegen.load_register(target).into_int_value();
+            let address = codegen.base_plus_offset(instr, "sh_address");
+            let target = codegen.load_register(instr.rt()).into_int_value();
             let target = codegen
                 .builder
-                .build_int_truncate(target, i32_type, "sh_truncate");
-
+                .build_int_truncate(target, i16_type, "sh_truncate");
             codegen.store_memory(address, target.into());
         }
 
-        Mnemonic::Sdl => {
+        Mnenomic::Sdl => {
             // Loads a portion of rt, stores 1-8 bytes in high-order portion of memory address (base + offset)
-            let source = codegen.load_register(source).into_int_value();
-            let offset = codegen.truncate_to_i64(i16_type.const_int(immediate as _, true));
-            let address = codegen.builder.build_int_add(source, offset, "sdl_address");
-
+            let address = codegen.base_plus_offset(instr, "sdl_address");
             let data = {
                 let addr = codegen.builder.build_and(
                     address,
@@ -318,7 +220,7 @@ fn recompile_immediate_instruction(
             };
 
             let old_register = {
-                let reg = codegen.load_register(target).into_int_value();
+                let reg = codegen.load_register(instr.rt()).into_int_value();
                 codegen
                     .builder
                     .build_right_shift(reg, shift, false, "sdl_reg_shift")
@@ -337,15 +239,12 @@ fn recompile_immediate_instruction(
                 codegen.builder.build_or(and, old_register, "sdl_result_or")
             };
 
-            codegen.store_register(target, result.into());
+            codegen.store_register(instr.rt(), result.into());
         }
 
-        Mnemonic::Sdr => {
+        Mnenomic::Sdr => {
             // Loads a portion of rt, stores 1-8 bytes in low-order portion of memory address (base + offset)
-            let source = codegen.load_register(source).into_int_value();
-            let offset = codegen.truncate_to_i64(i16_type.const_int(immediate as _, true));
-            let address = codegen.builder.build_int_add(source, offset, "sdl_address");
-
+            let address = codegen.base_plus_offset(instr, "sdr_address");
             let data = {
                 let addr = codegen.builder.build_and(
                     address,
@@ -365,7 +264,7 @@ fn recompile_immediate_instruction(
             };
 
             let old_register = {
-                let reg = codegen.load_register(target).into_int_value();
+                let reg = codegen.load_register(instr.rt()).into_int_value();
                 codegen
                     .builder
                     .build_left_shift(reg, shift, "sdr_reg_shift")
@@ -382,109 +281,134 @@ fn recompile_immediate_instruction(
                 codegen.builder.build_or(and, old_register, "sdr_result_or")
             };
 
-            codegen.store_register(target, result.into());
+            codegen.store_register(instr.rt(), result.into());
         }
 
-        Mnemonic::Sb => {
+        Mnenomic::Sb => {
             // Stores least-significant byte from rt, to memory address (base + offset)
-            let target = codegen.load_register(target).into_int_value();
-
+            let target = codegen.load_register(instr.rt()).into_int_value();
             // TODO: is this the least significant byte?
             let target = codegen
                 .builder
                 .build_int_truncate(target, i8_type, "sb_truncate");
-            let target = codegen.zero_extend_to_i64(target);
 
-            let offset = codegen.truncate_to_i64(i16_type.const_int(immediate as _, true));
-            let address = codegen.builder.build_int_add(target, offset, "sb_address");
-            codegen.store_memory(address, codegen.load_register(source));
+            let address = codegen.base_plus_offset(instr, "sb_address");
+            codegen.store_memory(address, target.into());
         }
 
-        Mnemonic::Sd => {
+        Mnenomic::Sd => {
             // Stores doubleword from rt, to memory address (base + offset)
-            let source = codegen.load_register(source).into_int_value();
-            let offset = codegen.truncate_to_i64(i16_type.const_int(immediate as _, true));
-            let address = codegen.builder.build_int_add(source, offset, "sd_address");
-            codegen.store_memory(address, codegen.load_register(target));
+            let target = codegen.load_register(instr.rt()).into_int_value();
+            let address = codegen.base_plus_offset(instr, "sd_address");
+            codegen.store_memory(address, target.into());
         }
 
-        Mnemonic::Ld => {
+        Mnenomic::Ld => {
             // Loads doubleword stored at memory address (base + offset), stores doubleword in rt
-            let source = codegen.load_register(source).into_int_value();
-            let offset = codegen.truncate_to_i64(i16_type.const_int(immediate as _, false));
-            let address = codegen.builder.build_int_add(source, offset, "ld_address");
-            codegen.store_register(target, codegen.load_memory(i64_type, address));
+            let address = codegen.base_plus_offset(instr, "ld_address");
+            let value = codegen.load_memory(i64_type, address);
+            codegen.store_register(instr.rt(), value);
         }
 
-        Mnemonic::Lbu => {
+        Mnenomic::Lbu => {
             // Loads byte stored at memory address (base + offset), stores zero-extended byte in rt
-            let source = codegen.load_register(source).into_int_value();
-            let offset = codegen.truncate_to_i64(i16_type.const_int(immediate as _, false));
-            let address = codegen.builder.build_int_add(source, offset, "lbu_address");
-
+            let address = codegen.base_plus_offset(instr, "lbu_address");
             let value = {
                 let value = codegen.load_memory(i8_type, address);
                 codegen.zero_extend_to_i64(value.into_int_value())
             };
-            codegen.store_register(target, value.into());
+
+            codegen.store_register(instr.rt(), value.into());
         }
 
-        Mnemonic::Lb => {
+        Mnenomic::Lb => {
             // Loads byte stored at memory address (base + offset), stores sign-extended byte in rt
-            let source = codegen.load_register(source).into_int_value();
-            let offset = codegen.truncate_to_i64(i16_type.const_int(immediate as _, false));
-            let address = codegen.builder.build_int_add(source, offset, "lb_address");
-
+            let address = codegen.base_plus_offset(instr, "lb_address");
             let value = {
                 let value = codegen.load_memory(i8_type, address);
                 codegen.sign_extend_to_i64(value.into_int_value())
             };
-            codegen.store_register(target, value.into());
+            codegen.store_register(instr.rt(), value.into());
         }
 
-        Mnemonic::Lui => {
+        Mnenomic::Lw => {
+            // Loads word stored at memory address (base + offset), stores sign-extended word in rt
+            let address = codegen.base_plus_offset(instr, "lw_address");
+            let value = {
+                let value = codegen.load_memory(i32_type, address);
+                codegen.sign_extend_to_i64(value.into_int_value())
+            };
+            codegen.store_register(instr.rt(), value.into());
+        }
+
+        Mnenomic::Lui => {
             // 16-bit immediate is shifted left 16 bits using trailing zeros, result placed in rt
-            let immediate = codegen.zero_extend_to_i64(i16_type.const_int(immediate as _, false));
+            let immediate =
+                codegen.zero_extend_to_i64(i16_type.const_int(instr.immediate() as _, false));
             let shift_amount = i64_type.const_int(16, false);
             let result = codegen
                 .builder
                 .build_left_shift(immediate, shift_amount, "lui_result");
-            codegen.store_register(target, result.into());
+            codegen.store_register(instr.rt(), result.into());
         }
 
-        Mnemonic::Addiu => {
+        Mnenomic::Addiu => {
             // Add sign-extended 16bit immediate and rs, store result in rt
-            let immediate = codegen.sign_extend_to_i64(i16_type.const_int(immediate as _, true));
-            let source = codegen.load_register(source).into_int_value();
+            let immediate =
+                codegen.sign_extend_to_i64(i16_type.const_int(instr.immediate() as _, true));
+            let source = codegen.load_register(instr.rs()).into_int_value();
             let result = codegen
                 .builder
                 .build_int_add(source, immediate, "addiu_result");
-            codegen.store_register(target, result.into());
+            codegen.store_register(instr.rt(), result.into());
         }
 
-        Mnemonic::Andi => {
+        Mnenomic::Andi => {
             // AND rs with zero-extended immediate, store result in rt
-            let source = codegen.load_register(source).into_int_value();
-            let immediate = codegen.zero_extend_to_i64(i16_type.const_int(immediate as _, false));
+            let source = codegen.load_register(instr.rs()).into_int_value();
+            let immediate =
+                codegen.zero_extend_to_i64(i16_type.const_int(instr.immediate() as _, false));
             let result = codegen.builder.build_and(source, immediate, "andi_result");
-            codegen.store_register(target, result.into());
+            codegen.store_register(instr.rt(), result.into());
         }
 
-        Mnemonic::Daddiu => {
+        Mnenomic::Addi => {
             // Add sign-extended 16bit immediate and rs, store result in rt
-            let immediate = codegen.sign_extend_to_i64(i16_type.const_int(immediate as _, true));
-            let source = codegen.load_register(source).into_int_value();
+            let immediate =
+                codegen.sign_extend_to_i64(i16_type.const_int(instr.immediate() as _, true));
+            let source = codegen.load_register(instr.rs()).into_int_value();
+            let result = codegen
+                .builder
+                .build_int_add(source, immediate, "addi_result");
+            codegen.store_register(instr.rt(), result.into());
+        }
+
+        Mnenomic::Ori => {
+            // OR rs and zero-extended immediate, store result in rt
+            let source = codegen.load_register(instr.rs()).into_int_value();
+            let immediate =
+                codegen.zero_extend_to_i64(i16_type.const_int(instr.immediate() as _, false));
+            let result = codegen.builder.build_or(source, immediate, "ori_result");
+            codegen.store_register(instr.rt(), result.into());
+        }
+
+        Mnenomic::Daddiu => {
+            // Add sign-extended 16bit immediate and rs, store result in rt
+            let immediate =
+                codegen.sign_extend_to_i64(i16_type.const_int(instr.immediate() as _, true));
+            let source = codegen.load_register(instr.rs()).into_int_value();
             let result = codegen
                 .builder
                 .build_int_add(source, immediate, "daddiu_result");
 
-            codegen.store_register(target, result.into());
+            codegen.store_register(instr.rt(), result.into());
         }
 
-        Mnemonic::Sltiu => {
+        Mnenomic::Sltiu => {
             // If unsigned rs is less than sign-extended immediate, store one in rt, otherwise store zero
-            let immediate = codegen.sign_extend_to_i64(i16_type.const_int(immediate as _, true));
-            let source = codegen.load_register(source).into_int_value();
+            let immediate =
+                codegen.sign_extend_to_i64(i16_type.const_int(instr.immediate() as _, true));
+            let source = codegen.load_register(instr.rs()).into_int_value();
             let cmp = codegen.builder.build_int_compare(
                 IntPredicate::ULT,
                 source,
@@ -497,13 +421,13 @@ fn recompile_immediate_instruction(
                 .builder
                 .build_int_z_extend(cmp, i64_type, "sltiu_result");
 
-            codegen.store_register(target, result.into());
+            codegen.store_register(instr.rt(), result.into());
         }
 
-        Mnemonic::Beq => {
+        Mnenomic::Beq => {
             // If rs equals rt, branch to address
-            let source = codegen.load_register(source).into_int_value();
-            let target = codegen.load_register(target).into_int_value();
+            let source = codegen.load_register(instr.rs()).into_int_value();
+            let target = codegen.load_register(instr.rt()).into_int_value();
 
             let cmp =
                 codegen
@@ -525,10 +449,10 @@ fn recompile_immediate_instruction(
                 .build_conditional_branch(cmp, then_block, else_block);
         }
 
-        Mnemonic::Bne => {
+        Mnenomic::Bne => {
             // If rs is not equal to rt, branch to address.
-            let source = codegen.load_register(source).into_int_value();
-            let target = codegen.load_register(target).into_int_value();
+            let source = codegen.load_register(instr.rs()).into_int_value();
+            let target = codegen.load_register(instr.rt()).into_int_value();
 
             let cmp =
                 codegen
@@ -550,6 +474,6 @@ fn recompile_immediate_instruction(
                 .build_conditional_branch(cmp, then_block, else_block);
         }
 
-        _ => todo!("unimplemented immediate instruction: {instr}"),
+        _ => todo!("instruction {} at {address:#x}", instr.mnemonic().name()),
     }
 }
