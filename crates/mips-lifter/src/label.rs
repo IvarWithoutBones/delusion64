@@ -112,6 +112,45 @@ impl<'ctx> LabelPass<'ctx> {
                             );
                         }
                     }
+
+                    // Generate labels for instructions that discard delay slots.
+                    if instr.discards_delay_slot() {
+                        let start_address = pos + (INSTRUCTION_SIZE * 2) as u64;
+                        self.labels.entry(start_address).or_insert_with(|| {
+                            let name = Label::name(start_address);
+                            let basic_block = self.context.append_basic_block(current_func, &name);
+
+                            let instructions = self
+                                .raw_blocks
+                                .iter()
+                                .flatten()
+                                .skip(start_address as usize / INSTRUCTION_SIZE)
+                                .take_while(|instr| !instr.ends_block())
+                                .cloned()
+                                .collect();
+
+                            id += 1;
+                            Label {
+                                id: id as _,
+                                start_address,
+                                instructions,
+                                fall_through: None,
+                                basic_block,
+                            }
+                        });
+
+                        // Shrink the previous block if it exists.
+                        if let Some(prev_block) = self.labels.values_mut().find(|l| {
+                            start_address
+                                .checked_sub(INSTRUCTION_SIZE as _)
+                                .map_or(false, |a| l.range().contains(&(a as _)))
+                        }) {
+                            prev_block.instructions.truncate(
+                                (start_address as usize - prev_block.start_address as usize)
+                                    / INSTRUCTION_SIZE,
+                            );
+                        }
+                    }
                 }
 
                 pos += INSTRUCTION_SIZE as u64;
@@ -123,7 +162,7 @@ impl<'ctx> LabelPass<'ctx> {
         for curr in self.labels.values_mut() {
             let fall_through = search_labels
                 .values()
-                .find(|next| next.start_address == curr.end_address())
+                .find(|next| next.id != curr.id && next.start_address == curr.end_address())
                 .map(|l| l.basic_block);
 
             curr.fall_through = fall_through;

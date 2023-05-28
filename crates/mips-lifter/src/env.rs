@@ -7,7 +7,8 @@ use std::pin::Pin;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuntimeFunction {
-    GetRegisterPtr,
+    GetGeneralRegisterPtr,
+    GetCp0RegisterPtr,
     GetMemoryPtr,
     GetBlockId,
     PrintString,
@@ -16,7 +17,8 @@ pub enum RuntimeFunction {
 impl RuntimeFunction {
     pub const fn name(&self) -> &'static str {
         match self {
-            Self::GetRegisterPtr => "get_register_ptr",
+            Self::GetGeneralRegisterPtr => "get_register_ptr",
+            Self::GetCp0RegisterPtr => "get_cp0_register_ptr",
             Self::GetMemoryPtr => "get_memory_ptr",
             Self::GetBlockId => "get_block_id",
             Self::PrintString => "print_string",
@@ -25,7 +27,8 @@ impl RuntimeFunction {
 
     pub const fn argument_count(&self) -> usize {
         match self {
-            Self::GetRegisterPtr => 1,
+            Self::GetGeneralRegisterPtr => 1,
+            Self::GetCp0RegisterPtr => 1,
             Self::GetMemoryPtr => 1,
             Self::GetBlockId => 1,
             Self::PrintString => 2,
@@ -41,7 +44,8 @@ impl RuntimeFunction {
         execution_engine: &ExecutionEngine<'ctx>,
     ) {
         let (ptr, ty) = match self {
-            Self::GetRegisterPtr => env.register_ptr_function(context),
+            Self::GetGeneralRegisterPtr => env.general_register_ptr_function(context),
+            Self::GetCp0RegisterPtr => env.cp0_register_ptr_function(context),
             Self::GetMemoryPtr => env.memory_ptr_function(context),
             Self::GetBlockId => env.block_id_function(context),
             Self::PrintString => env.print_string_function(context),
@@ -55,15 +59,18 @@ impl RuntimeFunction {
 pub struct Environment<'ctx, const REG_SIZE: usize, const MEM_SIZE: usize> {
     labels: Vec<Label<'ctx>>,
     // TODO: would be neat to split these into their own trait
-    registers: Box<[u64; REG_SIZE]>,
+    general_registers: Box<[u64; REG_SIZE]>,
+    cp0_registers: Box<[u64; 32]>,
     memory: Box<[u8; MEM_SIZE]>,
 }
 
 impl<'ctx, const REG_SIZE: usize, const MEM_SIZE: usize> Environment<'ctx, REG_SIZE, MEM_SIZE> {
     pub fn new(labels: Vec<Label<'ctx>>) -> Pin<Box<Self>> {
         Box::pin(Self {
-            registers: Box::new([0; REG_SIZE]),
-            memory: Box::new([0; MEM_SIZE]),
+            general_registers: Box::new([0; REG_SIZE]),
+            cp0_registers: Box::new([0; 32]),
+            // Allocate memory directly on the heap using a vec to avoid stack overflows
+            memory: vec![0; MEM_SIZE].into_boxed_slice().try_into().unwrap(),
             labels,
         })
     }
@@ -82,31 +89,71 @@ impl<'ctx, const REG_SIZE: usize, const MEM_SIZE: usize> Environment<'ctx, REG_S
         execution_engine.add_global_mapping(&env_struct, self as *const _ as _);
 
         // Add mappings to the runtime functions
-        RuntimeFunction::GetRegisterPtr.init(self, &context, module, execution_engine);
+        RuntimeFunction::GetGeneralRegisterPtr.init(self, &context, module, execution_engine);
+        RuntimeFunction::GetCp0RegisterPtr.init(self, &context, module, execution_engine);
         RuntimeFunction::GetMemoryPtr.init(self, &context, module, execution_engine);
         RuntimeFunction::GetBlockId.init(self, &context, module, execution_engine);
         RuntimeFunction::PrintString.init(self, &context, module, execution_engine);
     }
 
     pub fn print_registers(&self) {
-        println!("\nregisters:");
-        for (i, r) in self.registers.iter().enumerate() {
-            let name = mips_decomp::format::register_name(i as _);
-            println!("{name: <4} = {r:#x}");
+        println!("\ngeneral registers:");
+        for (i, r) in self.general_registers.iter().enumerate() {
+            let name = mips_decomp::format::general_register_name(i as _);
+            println!("{name: <8} = {r:#x}");
+        }
+
+        println!("\ncp0 registers:");
+        for (i, r) in self.cp0_registers.iter().enumerate() {
+            let name = mips_decomp::format::cp0_register_name(i as _);
+            println!("{name: <8} = {r:#x}");
         }
     }
 
-    unsafe extern "C" fn register_ptr(&mut self, index: u64) -> *mut u64 {
-        self.registers.get_mut(index as usize).unwrap()
+    unsafe extern "C" fn general_register_ptr(&mut self, index: u64) -> *mut u64 {
+        self.general_registers
+            .get_mut(index as usize)
+            .unwrap_or_else(
+                || panic!("general register index out of bounds: {index:#x} (max: 32)",),
+            )
     }
 
-    fn register_ptr_function(&self, context: &ContextRef<'ctx>) -> (*const u8, FunctionType<'ctx>) {
+    fn general_register_ptr_function(
+        &self,
+        context: &ContextRef<'ctx>,
+    ) -> (*const u8, FunctionType<'ctx>) {
         let i64_type = context.i64_type();
         let ptr_type = i64_type.ptr_type(AddressSpace::default());
 
-        // NOTE: Signature must match the `register_ptr()` function!
+        // NOTE: Signature must match the `general_register_ptr()` function!
         (
-            Self::register_ptr as *const u8,
+            Self::general_register_ptr as *const u8,
+            i64_type.ptr_type(AddressSpace::default()).fn_type(
+                &[
+                    ptr_type.into(), // self
+                    i64_type.into(), // index
+                ],
+                false,
+            ),
+        )
+    }
+
+    unsafe extern "C" fn cp0_register_ptr(&mut self, index: u64) -> *mut u64 {
+        self.cp0_registers
+            .get_mut(index as usize)
+            .unwrap_or_else(|| panic!("cp0 register index out of bounds: {index:#x} (max: 32)",))
+    }
+
+    fn cp0_register_ptr_function(
+        &self,
+        context: &ContextRef<'ctx>,
+    ) -> (*const u8, FunctionType<'ctx>) {
+        let i64_type = context.i64_type();
+        let ptr_type = i64_type.ptr_type(AddressSpace::default());
+
+        // NOTE: Signature must match the `cp0_register_ptr()` function!
+        (
+            Self::cp0_register_ptr as *const u8,
             i64_type.ptr_type(AddressSpace::default()).fn_type(
                 &[
                     ptr_type.into(), // self
@@ -118,7 +165,9 @@ impl<'ctx, const REG_SIZE: usize, const MEM_SIZE: usize> Environment<'ctx, REG_S
     }
 
     unsafe extern "C" fn memory_ptr(&mut self, index: u64) -> *mut u8 {
-        self.memory.get_mut(index as usize).unwrap()
+        self.memory.get_mut(index as usize).unwrap_or_else(|| {
+            panic!("memory index out of bounds: {index:#x} (max: {MEM_SIZE:#x})",)
+        })
     }
 
     fn memory_ptr_function(&self, context: &ContextRef<'ctx>) -> (*const u8, FunctionType<'ctx>) {

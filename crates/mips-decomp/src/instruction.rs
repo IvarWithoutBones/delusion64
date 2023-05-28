@@ -1,10 +1,8 @@
-use std::fmt;
-
 use crate::{
-    format::register_name,
+    format::{cp0_register_name, general_register_name},
     pattern::{InstructionPattern, Operand},
-    INSTRUCTION_SIZE,
 };
+use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mnenomic {
@@ -153,7 +151,20 @@ pub enum Mnenomic {
 }
 
 impl Mnenomic {
-    pub const fn has_delay_slot_offset(&self) -> bool {
+    // All cp0 instructions use rd as the coprocessor register.
+    pub const fn uses_cp0_destination(&self) -> bool {
+        matches!(
+            self,
+            Mnenomic::Mfc0
+                | Mnenomic::Mfcz
+                | Mnenomic::Mtc0
+                | Mnenomic::Mtcz
+                | Mnenomic::Dmfc0
+                | Mnenomic::Dmtc0
+        )
+    }
+
+    pub const fn is_branch(&self) -> bool {
         matches!(
             self,
             Mnenomic::Bczf
@@ -180,7 +191,7 @@ impl Mnenomic {
     }
 
     pub const fn ends_block(&self) -> bool {
-        self.has_delay_slot_offset()
+        self.is_branch()
             | matches!(self, |Mnenomic::Break| Mnenomic::Eret
                 | Mnenomic::J
                 | Mnenomic::Jal
@@ -196,12 +207,28 @@ impl Mnenomic {
                 | Mnenomic::Tgeu)
     }
 
+    pub const fn discards_delay_slot(&self) -> bool {
+        matches!(
+            self,
+            Mnenomic::Bczfl
+                | Mnenomic::Bcztl
+                | Mnenomic::Beql
+                | Mnenomic::Bgezall
+                | Mnenomic::Bgezl
+                | Mnenomic::Bgtzl
+                | Mnenomic::Blezl
+                | Mnenomic::Bltzall
+                | Mnenomic::Bltzl
+                | Mnenomic::Bnel
+        )
+    }
+
     pub const fn has_delay_slot(&self) -> bool {
         self.ends_block()
     }
 
     pub const fn has_static_jump(&self) -> bool {
-        self.has_delay_slot_offset() | matches!(self, Mnenomic::J | Mnenomic::Jal)
+        self.is_branch() | matches!(self, Mnenomic::J | Mnenomic::Jal)
     }
 
     pub fn name(&self) -> String {
@@ -258,12 +285,7 @@ impl Instruction {
         match self.operands {
             [.., (Operand::Offset, Signedness::Signed16)] => {
                 // Branch instructions
-                let mut offset = (self.pattern.get(Operand::Offset, raw)? as i16) as i64
-                    * INSTRUCTION_SIZE as i64;
-                if self.mnenomic.has_delay_slot_offset() {
-                    offset += INSTRUCTION_SIZE as i64;
-                }
-
+                let offset = ((self.pattern.get(Operand::Offset, raw)? as i16) << 2) as i64;
                 Some((pc as i64 + offset) as u64)
             }
 
@@ -294,7 +316,11 @@ impl Instruction {
                 .unwrap_or_else(|| panic!("failed to get operand {op:?} for {:?}", self.mnenomic));
 
             if op.is_register() {
-                result.push_str(register_name(num as _));
+                if self.mnenomic.uses_cp0_destination() && op == &Operand::Destination {
+                    result.push_str(cp0_register_name(num as _));
+                } else {
+                    result.push_str(general_register_name(num as _));
+                }
             } else {
                 result.push_str(&sign.format(num));
             }
@@ -329,6 +355,10 @@ impl ParsedInstruction {
 
     pub const fn has_delay_slot(&self) -> bool {
         self.instr.mnenomic.has_delay_slot()
+    }
+
+    pub const fn discards_delay_slot(&self) -> bool {
+        self.instr.mnenomic.discards_delay_slot()
     }
 
     pub fn get(&self, op: Operand) -> Option<u32> {

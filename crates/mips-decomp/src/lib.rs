@@ -38,6 +38,13 @@ impl MaybeInstruction {
         }
     }
 
+    pub const fn discards_delay_slot(&self) -> bool {
+        match self {
+            Self::Instruction(instr) => instr.discards_delay_slot(),
+            Self::Invalid(_) => false,
+        }
+    }
+
     pub const fn is_valid(&self) -> bool {
         match self {
             Self::Instruction(_) => true,

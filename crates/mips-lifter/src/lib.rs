@@ -13,7 +13,9 @@ macro_rules! c_fn {
     };
 }
 
-const MEMORY_SIZE: usize = 0x500;
+// TODO: move this to a more appropriate location
+// const MEMORY_SIZE: usize = 0xFFFFFFFF;
+const MEMORY_SIZE: usize = 0xa470000d;
 
 pub fn lift(bin: &[u8], ir_path: Option<&str>, entry_point: u64) {
     let decomp = mips_decomp::Decompiler::from(bin);
@@ -49,7 +51,7 @@ pub fn lift(bin: &[u8], ir_path: Option<&str>, entry_point: u64) {
     codegen.builder.position_at_end(entry_block);
 
     // Set the stack pointer
-    codegen.store_register(
+    codegen.store_gpr(
         29u32, // Stack pointer
         codegen
             .context
@@ -118,7 +120,7 @@ pub fn lift(bin: &[u8], ir_path: Option<&str>, entry_point: u64) {
         return;
     }
 
-    panic!();
+    // panic!();
 
     // Run the generated code.
     let main_func: JitFunction<c_fn!()> = codegen.get_function("main").unwrap();

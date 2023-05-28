@@ -74,20 +74,21 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.build_store(memory, value);
     }
 
-    fn register_ptr(&self, index: u64) -> PointerValue<'ctx> {
-        let i64_type = self.context.i64_type();
+    fn register_ptr(&self, func: RuntimeFunction, index: u64) -> PointerValue<'ctx> {
+        assert!(matches!(
+            func,
+            RuntimeFunction::GetGeneralRegisterPtr | RuntimeFunction::GetCp0RegisterPtr
+        ));
 
-        self.build_env_call(
-            RuntimeFunction::GetRegisterPtr,
-            &[i64_type.const_int(index, false).into()],
-        )
-        .try_as_basic_value()
-        .left()
-        .unwrap()
-        .into_pointer_value()
+        let i64_type = self.context.i64_type();
+        self.build_env_call(func, &[i64_type.const_int(index, false).into()])
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_pointer_value()
     }
 
-    pub fn load_register<T>(&self, index: T) -> BasicValueEnum<'ctx>
+    pub fn load_gpr<T>(&self, index: T) -> BasicValueEnum<'ctx>
     where
         T: Into<u64>,
     {
@@ -96,23 +97,42 @@ impl<'ctx> CodeGen<'ctx> {
             // Register zero is always zero
             self.context.i64_type().const_zero().into()
         } else {
-            let name = mips_decomp::format::register_name(index as _);
+            let name = mips_decomp::format::general_register_name(index as _);
             let i64_type = self.context.i64_type();
-            let register = self.register_ptr(index);
+            let register = self.register_ptr(RuntimeFunction::GetGeneralRegisterPtr, index);
             self.builder.build_load(i64_type, register, name)
         }
     }
 
-    pub fn store_register<T>(&self, index: T, value: BasicValueEnum<'ctx>)
+    pub fn store_gpr<T>(&self, index: T, value: BasicValueEnum<'ctx>)
     where
         T: Into<u64>,
     {
         let index = index.into();
         if index != 0 {
             // Register zero is read-only
-            let register = self.register_ptr(index);
+            let register = self.register_ptr(RuntimeFunction::GetGeneralRegisterPtr, index);
             self.builder.build_store(register, value);
         }
+    }
+
+    pub fn load_cp0_reg<T>(&self, index: T) -> BasicValueEnum<'ctx>
+    where
+        T: Into<u64>,
+    {
+        let index = index.into();
+        let i64_type = self.context.i64_type();
+        let name = mips_decomp::format::cp0_register_name(index as _);
+        let register = self.register_ptr(RuntimeFunction::GetGeneralRegisterPtr, index);
+        self.builder.build_load(i64_type, register, name)
+    }
+
+    pub fn store_cp0_reg<T>(&self, index: T, value: BasicValueEnum<'ctx>)
+    where
+        T: Into<u64>,
+    {
+        let register = self.register_ptr(RuntimeFunction::GetCp0RegisterPtr, index.into());
+        self.builder.build_store(register, value);
     }
 
     pub fn add_function<F>(&self, name: &str, func: *const F, args: &[BasicMetadataTypeEnum<'ctx>])
@@ -205,7 +225,7 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     pub fn base_plus_offset(&self, instr: &ParsedInstruction, name: &str) -> IntValue<'ctx> {
-        let base = self.load_register(instr.base()).into_int_value();
+        let base = self.load_gpr(instr.base()).into_int_value();
         let offset = self.build_i64(instr.offset()).into_int_value();
         self.builder.build_int_add(base, offset, name)
     }
