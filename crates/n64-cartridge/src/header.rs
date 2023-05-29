@@ -1,8 +1,6 @@
 use binrw::BinRead;
 use std::fmt;
 
-pub const LEN: usize = 0x40;
-
 /// The version of the libultra SDK the ROM was compiled with.
 pub struct LibultraVersion {
     pub major: u8,
@@ -81,7 +79,7 @@ pub struct Header {
     pub boot_address: u32,
     #[br(map = LibultraVersion::new)]
     pub libultra_version: LibultraVersion,
-    pub ipl3_check_code: u64,
+    pub ipl3_checksum: u64,
     _reserved_1: u64,
     #[br(map = Header::read_title)]
     pub title: String,
@@ -122,7 +120,7 @@ impl fmt::Debug for Header {
             .field("libultra_version", &self.libultra_version)
             .field(
                 "ipl3_check_code",
-                &format_args!("{:#016X}", self.ipl3_check_code),
+                &format_args!("{:#016X}", self.ipl3_checksum),
             )
             .field("title", &self.title)
             .field("game_code", &self.game_code)

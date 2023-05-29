@@ -1,4 +1,8 @@
-use crate::{codegen::CodeGen, env::RuntimeFunction, label::Labels};
+use crate::{
+    codegen::{CodeGen, HiLo},
+    env::RuntimeFunction,
+    label::Labels,
+};
 use inkwell::IntPredicate;
 use mips_decomp::{
     instruction::{Mnenomic, ParsedInstruction},
@@ -20,8 +24,32 @@ pub fn recompile_instruction(
     match mnemonic {
         Mnenomic::Mtc0 => {
             // Copy contents of GPR rt, to CP0's coprocessor register rd
-            let target = codegen.load_gpr(instr.rt()).into_int_value();
-            codegen.store_cp0_reg(instr.rd(), target.into());
+            let target = codegen.load_gpr(instr.rt());
+            codegen.store_cp0_reg(instr.rd(), target);
+        }
+
+        Mnenomic::Mfc0 => {
+            // Copy contents of CP0's coprocessor register rd, to GPR rt
+            let destination = codegen.load_cp0_reg(instr.rd());
+            codegen.store_gpr(instr.rt(), destination);
+        }
+
+        Mnenomic::Lwcz => {
+            // Copies word stored at memory address (base + offset), to CPz register rt
+            assert_ne!(instr.coprocessor(), 1); // TODO: remove once the FPU is implemented
+            let address = codegen.base_plus_offset(instr, "lwcz_address");
+            let value = codegen.load_memory(i32_type, address);
+            codegen.store_cp0_reg(instr.rt(), value);
+        }
+
+        Mnenomic::Copz => {
+            // Perform coprocessor operation
+            // TODO: Implement this
+        }
+
+        Mnenomic::Break => {
+            // Causes breakpoint exception
+            // TODO: Implement this
         }
 
         Mnenomic::Jal => {
@@ -36,7 +64,15 @@ pub fn recompile_instruction(
             codegen.store_gpr(31u32, return_address.into());
 
             // Jump to the target
-            println!("jumping from {address:#x} to {:x}", target);
+            println!("jumping from {address:#x} to {target:#x}");
+            codegen.builder.build_unconditional_branch(target_block);
+        }
+
+        Mnenomic::J => {
+            // Jump to target address
+            let target = instr.try_resolve_static_jump(address as _).unwrap();
+            let target_block = labels.get(&(target as _)).unwrap().basic_block;
+            println!("jumping from {address:#x} to {target:#x}");
             codegen.builder.build_unconditional_branch(target_block);
         }
 
@@ -54,6 +90,16 @@ pub fn recompile_instruction(
             let target = codegen.load_gpr(instr.rt()).into_int_value();
             let result = codegen.builder.build_xor(source, target, "xor_result");
             codegen.store_gpr(instr.rd(), result.into());
+        }
+
+        Mnenomic::Xori => {
+            // XOR rs with zero-extended immediate, store result in rd
+            let source = codegen.load_gpr(instr.rs()).into_int_value();
+            let immediate =
+                codegen.zero_extend_to_i64(i16_type.const_int(instr.immediate() as _, false));
+
+            let result = codegen.builder.build_xor(source, immediate, "xori_result");
+            codegen.store_gpr(instr.rt(), result.into());
         }
 
         Mnenomic::Addu => {
@@ -193,7 +239,34 @@ pub fn recompile_instruction(
 
         Mnenomic::Multu => {
             // Multiply unsigned rs by unsigned rt, store low-order word of result in register LO and high-order word in HI
-            // TODO: Implement
+            let source = codegen.load_gpr(instr.rs()).into_int_value();
+            let target = codegen.load_gpr(instr.rt()).into_int_value();
+
+            let result = codegen
+                .builder
+                .build_int_mul(source, target, "multu_result");
+
+            // Store the low-order word in LO.
+            let lo = codegen
+                .builder
+                .build_int_truncate(result, i32_type, "multu_lo");
+            codegen.store_hi_lo(HiLo::Lo, lo.into());
+
+            // Store the high-order word in HI.
+            let hi = codegen.builder.build_right_shift(
+                result,
+                i64_type.const_int(u64::BITS as u64 / 2, false),
+                false,
+                "multu_hi",
+            );
+            codegen.store_hi_lo(HiLo::Hi, hi.into());
+        }
+
+        Mnenomic::Mflo => {
+            // Copy contents of register LO to rd
+            // TODO: Should produce incorrect results if any of the two following instructions modify the HI and LO registers
+            let lo = codegen.load_hi_lo(HiLo::Lo).into_int_value();
+            codegen.store_gpr(instr.rd(), lo.into());
         }
 
         Mnenomic::Jr => {
@@ -254,6 +327,48 @@ pub fn recompile_instruction(
                 .builder
                 .build_int_truncate(target, i16_type, "sh_truncate");
             codegen.store_memory(address, target.into());
+        }
+
+        Mnenomic::Lwr => {
+            // Loads a portion of a word beginning at memory address (base + offset), stores 1-4 bytes in low-order portion of rt
+            let address = codegen.base_plus_offset(instr, "lwr_address");
+
+            let shift = {
+                let three = i64_type.const_int(3, false);
+                let eight = i64_type.const_int(8, false);
+
+                let xor = codegen.builder.build_xor(address, three, "lwr_shift_xor");
+                let and = codegen.builder.build_and(xor, three, "lwr_shift_and");
+                codegen.builder.build_int_mul(eight, and, "lwr_shift_mul")
+            };
+
+            let mask = {
+                let max = i64_type.const_all_ones();
+                let mask = codegen
+                    .builder
+                    .build_right_shift(max, shift, false, "lwr_mask");
+                codegen.builder.build_not(mask, "lwr_mask_not")
+            };
+
+            let data = {
+                let not_three = i64_type.const_int(!3, false);
+                let addr = codegen
+                    .builder
+                    .build_and(address, not_three, "lwr_data_and");
+                let data = codegen.load_memory(i64_type, addr).into_int_value();
+
+                codegen
+                    .builder
+                    .build_right_shift(data, shift, false, "lwr_data_shift")
+            };
+
+            let result = {
+                let reg = codegen.load_gpr(instr.rt()).into_int_value();
+                let anded = codegen.builder.build_and(reg, mask, "lwr_result_and");
+                codegen.builder.build_or(anded, data, "lwr_result_or")
+            };
+
+            codegen.store_gpr(instr.rt(), result.into());
         }
 
         Mnenomic::Sdl => {
@@ -703,6 +818,78 @@ pub fn recompile_instruction(
                 .basic_block;
             let else_block = labels
                 .get(&(address + (2 * INSTRUCTION_SIZE) as u64))
+                .unwrap()
+                .basic_block;
+
+            codegen
+                .builder
+                .build_conditional_branch(cmp, then_block, else_block);
+        }
+
+        Mnenomic::Blezl => {
+            // If rs is less than or equal to zero, branch to address (delay slot + offset), otherwise discard delay slot instruction
+            let source = codegen.load_gpr(instr.rs()).into_int_value();
+            let zero = i64_type.const_int(0, false);
+
+            let cmp =
+                codegen
+                    .builder
+                    .build_int_compare(IntPredicate::SLE, source, zero, "blezl_cmp");
+
+            let then_block = labels
+                .get(&(instr.try_resolve_static_jump(address as _).unwrap() as _))
+                .unwrap()
+                .basic_block;
+            let else_block = labels
+                .get(&(address + (2 * INSTRUCTION_SIZE) as u64))
+                .unwrap()
+                .basic_block;
+
+            codegen
+                .builder
+                .build_conditional_branch(cmp, then_block, else_block);
+        }
+
+        Mnenomic::Bgezl => {
+            // If rs is greater than or equal to zero, branch to address (delay slot + offset), otherwise discard delay slot instruction
+            let source = codegen.load_gpr(instr.rs()).into_int_value();
+            let zero = i64_type.const_int(0, false);
+
+            let cmp =
+                codegen
+                    .builder
+                    .build_int_compare(IntPredicate::SGE, source, zero, "blezl_cmp");
+
+            let then_block = labels
+                .get(&(instr.try_resolve_static_jump(address as _).unwrap() as _))
+                .unwrap()
+                .basic_block;
+            let else_block = labels
+                .get(&(address + (2 * INSTRUCTION_SIZE) as u64))
+                .unwrap()
+                .basic_block;
+
+            codegen
+                .builder
+                .build_conditional_branch(cmp, then_block, else_block);
+        }
+
+        Mnenomic::Bgez => {
+            // If rs is greater than or equal to zero, branch to address (delay slot + offset)
+            let source = codegen.load_gpr(instr.rs()).into_int_value();
+            let zero = i64_type.const_int(0, false);
+
+            let cmp =
+                codegen
+                    .builder
+                    .build_int_compare(IntPredicate::SGE, source, zero, "bgez_cmp");
+
+            let then_block = labels
+                .get(&(instr.try_resolve_static_jump(address as _).unwrap() as _))
+                .unwrap()
+                .basic_block;
+            let else_block = labels
+                .get(&(address + INSTRUCTION_SIZE as u64))
                 .unwrap()
                 .basic_block;
 

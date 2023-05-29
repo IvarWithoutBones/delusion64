@@ -8,13 +8,16 @@ fn main() {
         std::fs::read(path).expect("failed to read file")
     };
 
-    let cart = Cartridge::new(&bin).expect("failed to parse cartridge");
+    let cart = Cartridge::new(&bin).unwrap_or_else(|e| {
+        eprintln!("failed to parse cartridge: {e}");
+        std::process::exit(1);
+    });
+    println!("{cart:#?}");
 
     let maybe_output_path = args.next();
     let entry_point = 0;
     mips_lifter::lift(
-        // &cart.ipl3_boot_code.as_slice()[..0xb2c],
-        &cart.ipl3_boot_code.as_slice()[..0x500],
+        &cart.ipl3_boot_code.as_slice()[..0xb2c],
         maybe_output_path.as_deref(),
         entry_point,
     );

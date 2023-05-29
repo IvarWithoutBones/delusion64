@@ -427,6 +427,15 @@ impl ParsedInstruction {
             )
         })
     }
+
+    pub fn coprocessor(&self) -> u32 {
+        self.get(Operand::Coprocessor).unwrap_or_else(|| {
+            panic!(
+                "failed to get coprocessor for instruction {:?}",
+                self.instr.mnenomic.name()
+            )
+        })
+    }
 }
 
 impl TryFrom<u32> for ParsedInstruction {
@@ -475,10 +484,10 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Addu,    "0000 00ss ssst tttt dddd d000 0010 0001", (Destination)(Source)(Target)),
     instr!(And,     "0000 00ss ssst tttt dddd d000 0010 0100", (Destination)(Source)(Target)),
     instr!(Andi,    "0011 00ss ssst tttt kkkk kkkk kkkk kkkk", (Target)(Source)(Immediate)),
-    instr!(Bczf,    "0100 xx01 0000 0000 ffff ffff ffff ffff", (Offset, Signed16)),
-    instr!(Bczfl,   "0100 xx01 0000 0010 ffff ffff ffff ffff", (Offset, Signed16)),
-    instr!(Bczt,    "0100 xx01 0000 0001 ffff ffff ffff ffff", (Offset, Signed16)),
-    instr!(Bcztl,   "0100 xx01 0000 0011 ffff ffff ffff ffff", (Offset, Signed16)),
+    instr!(Bczf,    "0100 xx01 0000 0000 ffff ffff ffff ffff", (Coprocessor)(Offset, Signed16)),
+    instr!(Bczfl,   "0100 xx01 0000 0010 ffff ffff ffff ffff", (Coprocessor)(Offset, Signed16)),
+    instr!(Bczt,    "0100 xx01 0000 0001 ffff ffff ffff ffff", (Coprocessor)(Offset, Signed16)),
+    instr!(Bcztl,   "0100 xx01 0000 0011 ffff ffff ffff ffff", (Coprocessor)(Offset, Signed16)),
     instr!(Beq,     "0001 00ss ssst tttt ffff ffff ffff ffff", (Source)(Target)(Offset, Signed16)),
     instr!(Beql,    "0101 00ss ssst tttt ffff ffff ffff ffff", (Source)(Target)(Offset, Signed16)),
     instr!(Bgez,    "0000 01ss sss0 0001 ffff ffff ffff ffff", (Source)(Offset, Signed16)),
@@ -497,9 +506,9 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Bnel,    "0101 01ss ssst tttt ffff ffff ffff ffff", (Source)(Target)(Offset, Signed16)),
     instr!(Break,   "0000 00kk kkkk kkkk kkkk kkkk kk00 1101"),
     instr!(Cache,   "1011 11bb bbbk kkkk ffff ffff ffff ffff", (Immediate)(Offset, Signed16)(Base)),
-    instr!(Cfcz,    "0100 xx00 010t tttt dddd d000 0000 0000", (Target)(Destination)),
-    instr!(Copz,    "0100 xx1k kkkk kkkk kkkk kkkk kkkk kkkk", (Immediate)),
-    instr!(Ctcz,    "0100 xx00 110t tttt dddd d000 0000 0000", (Target)(Destination)),
+    instr!(Cfcz,    "0100 xx00 010t tttt dddd d000 0000 0000", (Coprocessor)(Target)(Destination)),
+    instr!(Copz,    "0100 xx1k kkkk kkkk kkkk kkkk kkkk kkkk", (Coprocessor)(Immediate)),
+    instr!(Ctcz,    "0100 xx00 110t tttt dddd d000 0000 0000", (Coprocessor)(Target)(Destination)),
     instr!(Dadd,    "0000 00ss ssst tttt dddd d000 0010 1100", (Destination)(Source)(Target)),
     instr!(Daddi,   "0110 00ss ssst tttt kkkk kkkk kkkk kkkk", (Target)(Source)(Immediate, Signed16)),
     instr!(Daddiu,  "0110 01ss ssst tttt kkkk kkkk kkkk kkkk", (Target)(Source)(Immediate, Signed16)),
@@ -532,7 +541,7 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Lb,      "1000 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Lbu,     "1001 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Ld,      "1101 11bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
-    instr!(Ldcz,    "1101 xxbb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Ldcz,    "1101 xxbb bbbt tttt ffff ffff ffff ffff", (Coprocessor)(Target)(Offset, Signed16)(Base)),
     instr!(Ldl,     "0110 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Ldr,     "0110 11bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Lh,      "1000 01bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
@@ -541,16 +550,16 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Lld,     "1101 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Lui,     "0011 1100 000t tttt kkkk kkkk kkkk kkkk", (Target)(Immediate, Signed16)),
     instr!(Lw,      "1000 11bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
-    instr!(Lwcz,    "1100 xxbb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Lwcz,    "1100 xxbb bbbt tttt ffff ffff ffff ffff", (Coprocessor)(Target)(Offset, Signed16)(Base)),
     instr!(Lwl,     "1000 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Lwr,     "1001 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Lwu,     "1001 11bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Mfc0,    "0100 0000 000t tttt dddd d000 0000 0000", (Target)(Destination)),
-    instr!(Mfcz,    "0100 xx00 000t tttt dddd d000 0000 0000", (Target)(Destination)),
+    instr!(Mfcz,    "0100 xx00 000t tttt dddd d000 0000 0000", (Coprocessor)(Target)(Destination)),
     instr!(Mfhi,    "0000 0000 0000 0000 dddd d000 0001 0000", (Destination)),
     instr!(Mflo,    "0000 0000 0000 0000 dddd d000 0001 0010", (Destination)),
     instr!(Mtc0,    "0100 0000 100t tttt dddd d000 0000 0000", (Target)(Destination)),
-    instr!(Mtcz,    "0100 xx00 100t tttt dddd d000 0000 0000", (Destination)(Destination)),
+    instr!(Mtcz,    "0100 xx00 100t tttt dddd d000 0000 0000", (Coprocessor)(Destination)(Destination)),
     instr!(Mthi,    "0000 00ss sss0 0000 0000 0000 0001 0001", (Source)),
     instr!(Mtlo,    "0000 00ss sss0 0000 0000 0000 0001 0011", (Source)),
     instr!(Mult,    "0000 00ss ssst tttt 0000 0000 0001 1000", (Source)(Target)),
@@ -562,7 +571,7 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Sc,      "1110 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Scd,     "1111 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Sd,      "1111 11bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
-    instr!(Sdcz,    "1111 xxbb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Sdcz,    "1111 xxbb bbbt tttt ffff ffff ffff ffff", (Coprocessor)(Target)(Offset, Signed16)(Base)),
     instr!(Sdl,     "1011 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Sdr,     "1011 01bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Sh,      "1010 01bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
@@ -579,7 +588,7 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Sub,     "0000 00ss ssst tttt dddd d000 0010 0010", (Destination)(Source)(Target)),
     instr!(Subu,    "0000 00ss ssst tttt dddd d000 0010 0011", (Destination)(Source)(Target)),
     instr!(Sw,      "1010 11bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
-    instr!(Swcz,    "1110 xxbb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Swcz,    "1110 xxbb bbbt tttt ffff ffff ffff ffff", (Coprocessor)(Target)(Offset, Signed16)(Base)),
     instr!(Swl,     "1010 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Swr,     "1011 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Sync,    "0000 0000 0000 0000 0000 0000 0000 1111"),

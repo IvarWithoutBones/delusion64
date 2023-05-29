@@ -5,12 +5,55 @@ use inkwell::{
     context::Context,
     execution_engine::{ExecutionEngine, JitFunction, UnsafeFunctionPointer},
     module::Module,
-    types::{BasicMetadataTypeEnum, IntType},
+    types::IntType,
     values::{BasicMetadataValueEnum, BasicValueEnum, CallSiteValue, IntValue, PointerValue},
 };
 use mips_decomp::instruction::ParsedInstruction;
 
 const ENV_GLOBAL: &str = "env";
+
+enum RegisterType {
+    GeneralPurpose,
+    Cp0,
+    HiLo,
+}
+
+impl RegisterType {
+    const fn global_name(&self) -> &'static str {
+        match self {
+            Self::GeneralPurpose => "gprs",
+            Self::Cp0 => "cp0_regs",
+            Self::HiLo => "hi_lo_regs",
+        }
+    }
+
+    const fn register_count(&self) -> usize {
+        match self {
+            Self::GeneralPurpose => 32,
+            Self::Cp0 => 32,
+            Self::HiLo => 2,
+        }
+    }
+
+    const fn name(&self, index: u8) -> &'static str {
+        match self {
+            Self::GeneralPurpose => mips_decomp::format::general_register_name(index),
+            Self::Cp0 => mips_decomp::format::cp0_register_name(index),
+            Self::HiLo => match index {
+                0 => "hi",
+                1 => "lo",
+                _ => unreachable!(),
+            },
+        }
+    }
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HiLo {
+    Hi,
+    Lo,
+}
 
 pub struct CodeGen<'ctx> {
     pub context: &'ctx Context,
@@ -27,7 +70,14 @@ impl<'ctx> CodeGen<'ctx> {
         execution_engine: ExecutionEngine<'ctx>,
         env: &Environment<'ctx, REG_LEN, MEM_LEN>,
     ) -> Self {
-        env.init(&module, &execution_engine, ENV_GLOBAL);
+        env.init(
+            &module,
+            &execution_engine,
+            ENV_GLOBAL,
+            RegisterType::GeneralPurpose.global_name(),
+            RegisterType::Cp0.global_name(),
+            RegisterType::HiLo.global_name(),
+        );
 
         let label_not_found =
             context.append_basic_block(module.get_function("main").unwrap(), "label_not_found");
@@ -74,18 +124,29 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.build_store(memory, value);
     }
 
-    fn register_ptr(&self, func: RuntimeFunction, index: u64) -> PointerValue<'ctx> {
-        assert!(matches!(
-            func,
-            RuntimeFunction::GetGeneralRegisterPtr | RuntimeFunction::GetCp0RegisterPtr
-        ));
-
+    fn register_pointer<T>(&self, ty: RegisterType, index: T, name: &str) -> PointerValue<'ctx>
+    where
+        T: Into<u64>,
+    {
+        let index = index.into();
+        assert!(index <= ty.register_count() as _);
         let i64_type = self.context.i64_type();
-        self.build_env_call(func, &[i64_type.const_int(index, false).into()])
-            .try_as_basic_value()
-            .left()
+        let name = format!("{name}_ptr");
+
+        let registers_ptr = self
+            .module
+            .get_global(ty.global_name())
             .unwrap()
-            .into_pointer_value()
+            .as_pointer_value();
+
+        unsafe {
+            self.builder.build_in_bounds_gep(
+                i64_type,
+                registers_ptr,
+                &[i64_type.const_int(index, false)],
+                &name,
+            )
+        }
     }
 
     pub fn load_gpr<T>(&self, index: T) -> BasicValueEnum<'ctx>
@@ -97,10 +158,11 @@ impl<'ctx> CodeGen<'ctx> {
             // Register zero is always zero
             self.context.i64_type().const_zero().into()
         } else {
-            let name = mips_decomp::format::general_register_name(index as _);
             let i64_type = self.context.i64_type();
-            let register = self.register_ptr(RuntimeFunction::GetGeneralRegisterPtr, index);
-            self.builder.build_load(i64_type, register, name)
+            let name = mips_decomp::format::general_register_name(index as _);
+            let register = self.register_pointer(RegisterType::GeneralPurpose, index, name);
+            self.builder
+                .build_load(i64_type, register, &format!("{name}_"))
         }
     }
 
@@ -111,7 +173,9 @@ impl<'ctx> CodeGen<'ctx> {
         let index = index.into();
         if index != 0 {
             // Register zero is read-only
-            let register = self.register_ptr(RuntimeFunction::GetGeneralRegisterPtr, index);
+            let ty = RegisterType::GeneralPurpose;
+            let name = ty.name(index as _);
+            let register = self.register_pointer(ty, index, name);
             self.builder.build_store(register, value);
         }
     }
@@ -122,8 +186,9 @@ impl<'ctx> CodeGen<'ctx> {
     {
         let index = index.into();
         let i64_type = self.context.i64_type();
-        let name = mips_decomp::format::cp0_register_name(index as _);
-        let register = self.register_ptr(RuntimeFunction::GetGeneralRegisterPtr, index);
+        let ty = RegisterType::Cp0;
+        let name = ty.name(index as _);
+        let register = self.register_pointer(ty, index, name);
         self.builder.build_load(i64_type, register, name)
     }
 
@@ -131,18 +196,26 @@ impl<'ctx> CodeGen<'ctx> {
     where
         T: Into<u64>,
     {
-        let register = self.register_ptr(RuntimeFunction::GetCp0RegisterPtr, index.into());
+        let index = index.into();
+        let ty = RegisterType::Cp0;
+        let name = ty.name(index as _);
+        let register = self.register_pointer(ty, index, name);
         self.builder.build_store(register, value);
     }
 
-    pub fn add_function<F>(&self, name: &str, func: *const F, args: &[BasicMetadataTypeEnum<'ctx>])
-    where
-        F: UnsafeFunctionPointer,
-    {
-        let fn_type = self.context.void_type().fn_type(args, false);
-        let function = self.module.add_function(name, fn_type, None);
-        self.execution_engine
-            .add_global_mapping(&function, func as *const _ as _);
+    pub fn load_hi_lo(&self, variant: HiLo) -> BasicValueEnum<'ctx> {
+        let i64_type = self.context.i64_type();
+        let ty = RegisterType::HiLo;
+        let name = ty.name(variant as _);
+        let register = self.register_pointer(ty, variant as u32, name);
+        self.builder.build_load(i64_type, register, name)
+    }
+
+    pub fn store_hi_lo(&self, variant: HiLo, value: BasicValueEnum<'ctx>) {
+        let ty = RegisterType::HiLo;
+        let name = ty.name(variant as _);
+        let register = self.register_pointer(ty, variant as u32, name);
+        self.builder.build_store(register, value);
     }
 
     pub fn get_function<F>(&self, name: &str) -> Option<JitFunction<F>>
