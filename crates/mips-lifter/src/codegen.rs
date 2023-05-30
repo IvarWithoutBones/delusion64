@@ -1,4 +1,4 @@
-use crate::env::{Environment, RuntimeFunction};
+use crate::env::{function::RuntimeFunction, Environment, Memory};
 use inkwell::{
     basic_block::BasicBlock,
     builder::Builder,
@@ -6,11 +6,11 @@ use inkwell::{
     execution_engine::{ExecutionEngine, JitFunction, UnsafeFunctionPointer},
     module::Module,
     types::IntType,
-    values::{BasicMetadataValueEnum, BasicValueEnum, CallSiteValue, IntValue, PointerValue},
+    values::{
+        BasicMetadataValueEnum, BasicValueEnum, CallSiteValue, GlobalValue, IntValue, PointerValue,
+    },
 };
 use mips_decomp::instruction::ParsedInstruction;
-
-const ENV_GLOBAL: &str = "env";
 
 enum RegisterType {
     GeneralPurpose,
@@ -19,14 +19,6 @@ enum RegisterType {
 }
 
 impl RegisterType {
-    const fn global_name(&self) -> &'static str {
-        match self {
-            Self::GeneralPurpose => "gprs",
-            Self::Cp0 => "cp0_regs",
-            Self::HiLo => "hi_lo_regs",
-        }
-    }
-
     const fn register_count(&self) -> usize {
         match self {
             Self::GeneralPurpose => 32,
@@ -60,24 +52,23 @@ pub struct CodeGen<'ctx> {
     pub module: Module<'ctx>,
     pub builder: Builder<'ctx>,
     pub execution_engine: ExecutionEngine<'ctx>,
+
     pub label_not_found: BasicBlock<'ctx>,
+    env_global: GlobalValue<'ctx>,
+    gprs_global: GlobalValue<'ctx>,
+    hi_lo_global: GlobalValue<'ctx>,
+    cp0_regs_global: GlobalValue<'ctx>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
-    pub fn new<const REG_LEN: usize, const MEM_LEN: usize>(
+    pub fn new<Mem: Memory>(
         context: &'ctx Context,
         module: Module<'ctx>,
         execution_engine: ExecutionEngine<'ctx>,
-        env: &Environment<'ctx, REG_LEN, MEM_LEN>,
+        env: &Environment<'ctx, Mem>,
     ) -> Self {
-        env.init(
-            &module,
-            &execution_engine,
-            ENV_GLOBAL,
-            RegisterType::GeneralPurpose.global_name(),
-            RegisterType::Cp0.global_name(),
-            RegisterType::HiLo.global_name(),
-        );
+        let (env_global, gprs_global, hi_lo_global, cp0_regs_global) =
+            env.init(&module, &execution_engine);
 
         let label_not_found =
             context.append_basic_block(module.get_function("main").unwrap(), "label_not_found");
@@ -88,6 +79,10 @@ impl<'ctx> CodeGen<'ctx> {
             builder: context.create_builder(),
             execution_engine,
             label_not_found,
+            env_global,
+            gprs_global,
+            hi_lo_global,
+            cp0_regs_global,
         };
 
         // Initialize the error case for attempting to jump to a label that doesn't exist.
@@ -105,23 +100,32 @@ impl<'ctx> CodeGen<'ctx> {
         self.module.verify().map_err(|e| e.to_string())
     }
 
-    pub fn memory_ptr(&self, index: IntValue<'ctx>) -> PointerValue<'ctx> {
-        self.build_env_call(RuntimeFunction::GetMemoryPtr, &[index.into()])
+    pub fn read_memory(&self, ty: IntType<'ctx>, address: IntValue<'ctx>) -> BasicValueEnum<'ctx> {
+        let func = match ty.get_bit_width() {
+            8 => RuntimeFunction::ReadI8,
+            16 => RuntimeFunction::ReadI16,
+            32 => RuntimeFunction::ReadI32,
+            64 => RuntimeFunction::ReadI64,
+            _ => panic!("unimplemented load_memory type: {ty}"),
+        };
+
+        self.build_env_call(func, &[address.into()])
             .try_as_basic_value()
             .left()
             .unwrap()
-            .into_pointer_value()
     }
 
-    pub fn load_memory(&self, ty: IntType<'ctx>, index: IntValue<'ctx>) -> BasicValueEnum<'ctx> {
-        let name = format!("i{}_mem", ty.get_bit_width());
-        let memory = self.memory_ptr(index);
-        self.builder.build_load(ty, memory, &name)
-    }
+    pub fn write_memory(&self, address: IntValue<'ctx>, value: BasicValueEnum<'ctx>) {
+        let ty = value.get_type().into_int_type();
+        let func = match ty.get_bit_width() {
+            8 => RuntimeFunction::WriteI8,
+            16 => RuntimeFunction::WriteI16,
+            32 => RuntimeFunction::WriteI32,
+            64 => RuntimeFunction::WriteI64,
+            _ => panic!("unimplemented store_memory type: {ty}"),
+        };
 
-    pub fn store_memory(&self, index: IntValue<'ctx>, value: BasicValueEnum<'ctx>) {
-        let memory = self.memory_ptr(index);
-        self.builder.build_store(memory, value);
+        self.build_env_call(func, &[address.into(), value.into()]);
     }
 
     fn register_pointer<T>(&self, ty: RegisterType, index: T, name: &str) -> PointerValue<'ctx>
@@ -133,11 +137,11 @@ impl<'ctx> CodeGen<'ctx> {
         let i64_type = self.context.i64_type();
         let name = format!("{name}_ptr");
 
-        let registers_ptr = self
-            .module
-            .get_global(ty.global_name())
-            .unwrap()
-            .as_pointer_value();
+        let registers_ptr = match ty {
+            RegisterType::GeneralPurpose => self.gprs_global.as_pointer_value(),
+            RegisterType::Cp0 => self.cp0_regs_global.as_pointer_value(),
+            RegisterType::HiLo => self.hi_lo_global.as_pointer_value(),
+        };
 
         unsafe {
             self.builder.build_in_bounds_gep(
@@ -241,11 +245,7 @@ impl<'ctx> CodeGen<'ctx> {
     ) -> CallSiteValue<'ctx> {
         debug_assert_eq!(function.argument_count(), args.len());
 
-        let env_ptr = self
-            .module
-            .get_global(ENV_GLOBAL)
-            .unwrap()
-            .as_pointer_value();
+        let env_ptr = self.env_global.as_pointer_value();
         let args = [env_ptr.into()]
             .iter()
             .chain(args.iter())

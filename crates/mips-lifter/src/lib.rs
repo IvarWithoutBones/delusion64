@@ -1,6 +1,6 @@
 use crate::{codegen::CodeGen, recompiler::recompile_instruction};
 use inkwell::{context::Context, execution_engine::JitFunction, OptimizationLevel};
-use mips_decomp::{MaybeInstruction, INSTRUCTION_SIZE, REGISTER_COUNT};
+use mips_decomp::{MaybeInstruction, INSTRUCTION_SIZE};
 
 pub mod codegen;
 pub mod env;
@@ -15,9 +15,9 @@ macro_rules! c_fn {
 
 // TODO: move this to a more appropriate location
 // const MEMORY_SIZE: usize = 0xFFFFFFFF;
-const MEMORY_SIZE: usize = 0xa470000d;
+const MEMORY_SIZE: usize = 0xa5000000;
 
-pub fn lift(bin: &[u8], ir_path: Option<&str>, entry_point: u64) {
+pub fn lift<Mem: env::Memory>(mem: Mem, bin: &[u8], ir_path: Option<&str>, entry_point: u64) {
     let decomp = mips_decomp::Decompiler::from(bin);
     let blocks = mips_decomp::reorder_delay_slots(decomp.blocks().collect());
     #[cfg(feature = "debug-print")]
@@ -43,7 +43,7 @@ pub fn lift(bin: &[u8], ir_path: Option<&str>, entry_point: u64) {
 
     let env = {
         let labels = labels.values().map(|l| l.to_owned()).collect::<Vec<_>>();
-        env::Environment::<REGISTER_COUNT, MEMORY_SIZE>::new(labels)
+        env::Environment::new(mem, labels)
     };
     let codegen = CodeGen::new(context, module, execution_engine, &env);
 

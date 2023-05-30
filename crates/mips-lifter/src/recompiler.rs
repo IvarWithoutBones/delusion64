@@ -1,6 +1,6 @@
 use crate::{
     codegen::{CodeGen, HiLo},
-    env::RuntimeFunction,
+    env::function::RuntimeFunction,
     label::Labels,
 };
 use inkwell::IntPredicate;
@@ -37,8 +37,8 @@ pub fn recompile_instruction(
         Mnenomic::Lwcz => {
             // Copies word stored at memory address (base + offset), to CPz register rt
             assert_ne!(instr.coprocessor(), 1); // TODO: remove once the FPU is implemented
-            let address = codegen.base_plus_offset(instr, "lwcz_address");
-            let value = codegen.load_memory(i32_type, address);
+            let address = codegen.base_plus_offset(instr, "lwcz_addr");
+            let value = codegen.read_memory(i32_type, address);
             codegen.store_cp0_reg(instr.rt(), value);
         }
 
@@ -80,7 +80,7 @@ pub fn recompile_instruction(
             // AND rs with rt, store result in rd
             let source = codegen.load_gpr(instr.rs()).into_int_value();
             let target = codegen.load_gpr(instr.rt()).into_int_value();
-            let result = codegen.builder.build_and(source, target, "and_result");
+            let result = codegen.builder.build_and(source, target, "and_res");
             codegen.store_gpr(instr.rd(), result.into());
         }
 
@@ -88,7 +88,7 @@ pub fn recompile_instruction(
             // XOR rs with rt, store result in rd
             let source = codegen.load_gpr(instr.rs()).into_int_value();
             let target = codegen.load_gpr(instr.rt()).into_int_value();
-            let result = codegen.builder.build_xor(source, target, "xor_result");
+            let result = codegen.builder.build_xor(source, target, "xor_res");
             codegen.store_gpr(instr.rd(), result.into());
         }
 
@@ -98,7 +98,7 @@ pub fn recompile_instruction(
             let immediate =
                 codegen.zero_extend_to_i64(i16_type.const_int(instr.immediate() as _, false));
 
-            let result = codegen.builder.build_xor(source, immediate, "xori_result");
+            let result = codegen.builder.build_xor(source, immediate, "xori_res");
             codegen.store_gpr(instr.rt(), result.into());
         }
 
@@ -106,7 +106,7 @@ pub fn recompile_instruction(
             // Add rs and rt, store result in rd
             let source = codegen.load_gpr(instr.rs()).into_int_value();
             let target = codegen.load_gpr(instr.rt()).into_int_value();
-            let result = codegen.builder.build_int_add(source, target, "addu_result");
+            let result = codegen.builder.build_int_add(source, target, "addu_res");
             codegen.store_gpr(instr.rd(), result.into());
         }
 
@@ -114,7 +114,7 @@ pub fn recompile_instruction(
             // OR rs and rt, store result in rd
             let source = codegen.load_gpr(instr.rs()).into_int_value();
             let target = codegen.load_gpr(instr.rt()).into_int_value();
-            let result = codegen.builder.build_or(source, target, "or_result");
+            let result = codegen.builder.build_or(source, target, "or_res");
             codegen.store_gpr(instr.rd(), result.into());
         }
 
@@ -122,9 +122,7 @@ pub fn recompile_instruction(
             // Add rs and rt, store result in rd
             let source = codegen.load_gpr(instr.rs()).into_int_value();
             let target = codegen.load_gpr(instr.rt()).into_int_value();
-            let result = codegen
-                .builder
-                .build_int_add(source, target, "daddu_result");
+            let result = codegen.builder.build_int_add(source, target, "daddu_res");
             codegen.store_gpr(instr.rd(), result.into());
         }
 
@@ -132,9 +130,7 @@ pub fn recompile_instruction(
             // Shift rt left by sa bits, store result in rd (64-bits)
             let shift = i64_type.const_int(instr.sa() as _, false);
             let target = codegen.load_gpr(instr.rt()).into_int_value();
-            let result = codegen
-                .builder
-                .build_left_shift(target, shift, "dsll_result");
+            let result = codegen.builder.build_left_shift(target, shift, "dsll_res");
             codegen.store_gpr(instr.rd(), result.into());
         }
 
@@ -151,7 +147,7 @@ pub fn recompile_instruction(
             // Convert the comparison to a numeric value.
             let result = codegen
                 .builder
-                .build_int_z_extend(cmp, i64_type, "sltu_result");
+                .build_int_z_extend(cmp, i64_type, "sltu_res");
             codegen.store_gpr(instr.rd(), result.into());
         }
 
@@ -164,7 +160,7 @@ pub fn recompile_instruction(
             // Truncate the result to 32-bits.
             let result = codegen
                 .builder
-                .build_int_truncate(result, i32_type, "sll_truncate");
+                .build_int_truncate(result, i32_type, "sll_trunc");
 
             codegen.store_gpr(instr.rd(), result.into());
         }
@@ -177,7 +173,7 @@ pub fn recompile_instruction(
             // Limit the shift to 31 bits.
             let shift = codegen
                 .builder
-                .build_int_truncate(source, i32_type, "sllv_truncate");
+                .build_int_truncate(source, i32_type, "sllv_trunc");
             let shift = codegen
                 .builder
                 .build_int_z_extend(shift, i64_type, "sllv_extend");
@@ -226,7 +222,7 @@ pub fn recompile_instruction(
             // Limit the shift to 31 bits.
             let shift = codegen
                 .builder
-                .build_int_truncate(source, i32_type, "srlv_truncate");
+                .build_int_truncate(source, i32_type, "srlv_trunc");
             let shift = codegen
                 .builder
                 .build_int_z_extend(shift, i64_type, "srlv_extend");
@@ -242,9 +238,7 @@ pub fn recompile_instruction(
             let source = codegen.load_gpr(instr.rs()).into_int_value();
             let target = codegen.load_gpr(instr.rt()).into_int_value();
 
-            let result = codegen
-                .builder
-                .build_int_mul(source, target, "multu_result");
+            let result = codegen.builder.build_int_mul(source, target, "multu_res");
 
             // Store the low-order word in LO.
             let lo = codegen
@@ -321,17 +315,17 @@ pub fn recompile_instruction(
 
         Mnenomic::Sh => {
             // Stores halfword from rt, to memory address (base + offset)
-            let address = codegen.base_plus_offset(instr, "sh_address");
+            let address = codegen.base_plus_offset(instr, "sh_addr");
             let target = codegen.load_gpr(instr.rt()).into_int_value();
             let target = codegen
                 .builder
-                .build_int_truncate(target, i16_type, "sh_truncate");
-            codegen.store_memory(address, target.into());
+                .build_int_truncate(target, i16_type, "sh_trunc");
+            codegen.write_memory(address, target.into());
         }
 
         Mnenomic::Lwr => {
             // Loads a portion of a word beginning at memory address (base + offset), stores 1-4 bytes in low-order portion of rt
-            let address = codegen.base_plus_offset(instr, "lwr_address");
+            let address = codegen.base_plus_offset(instr, "lwr_addr");
 
             let shift = {
                 let three = i64_type.const_int(3, false);
@@ -355,7 +349,7 @@ pub fn recompile_instruction(
                 let addr = codegen
                     .builder
                     .build_and(address, not_three, "lwr_data_and");
-                let data = codegen.load_memory(i64_type, addr).into_int_value();
+                let data = codegen.read_memory(i64_type, addr).into_int_value();
 
                 codegen
                     .builder
@@ -373,14 +367,14 @@ pub fn recompile_instruction(
 
         Mnenomic::Sdl => {
             // Loads a portion of rt, stores 1-8 bytes in high-order portion of memory address (base + offset)
-            let address = codegen.base_plus_offset(instr, "sdl_address");
+            let address = codegen.base_plus_offset(instr, "sdl_addr");
             let data = {
                 let addr = codegen.builder.build_and(
                     address,
                     i64_type.const_int(!7, false),
                     "sdl_data_and",
                 );
-                codegen.load_memory(i64_type, addr).into_int_value()
+                codegen.read_memory(i64_type, addr).into_int_value()
             };
 
             let shift = {
@@ -418,14 +412,14 @@ pub fn recompile_instruction(
 
         Mnenomic::Sdr => {
             // Loads a portion of rt, stores 1-8 bytes in low-order portion of memory address (base + offset)
-            let address = codegen.base_plus_offset(instr, "sdr_address");
+            let address = codegen.base_plus_offset(instr, "sdr_addr");
             let data = {
                 let addr = codegen.builder.build_and(
                     address,
                     i64_type.const_int(!7, false),
                     "sdr_data_and",
                 );
-                codegen.load_memory(i64_type, addr).into_int_value()
+                codegen.read_memory(i64_type, addr).into_int_value()
             };
 
             let shift = {
@@ -460,14 +454,14 @@ pub fn recompile_instruction(
 
         Mnenomic::Sw => {
             // Stores word from rt, to memory address (base + offset)
-            let address = codegen.base_plus_offset(instr, "sw_address");
+            let address = codegen.base_plus_offset(instr, "sw_addr");
             let target = {
                 let target = codegen.load_gpr(instr.rt()).into_int_value();
                 codegen
                     .builder
-                    .build_int_truncate(target, i32_type, "sb_truncate")
+                    .build_int_truncate(target, i32_type, "sw_trunc")
             };
-            codegen.store_memory(address, target.into());
+            codegen.write_memory(address, target.into());
         }
 
         Mnenomic::Sb => {
@@ -476,31 +470,31 @@ pub fn recompile_instruction(
             // TODO: is this the least significant byte?
             let target = codegen
                 .builder
-                .build_int_truncate(target, i8_type, "sb_truncate");
+                .build_int_truncate(target, i8_type, "sb_trunc");
 
-            let address = codegen.base_plus_offset(instr, "sb_address");
-            codegen.store_memory(address, target.into());
+            let address = codegen.base_plus_offset(instr, "sb_addr");
+            codegen.write_memory(address, target.into());
         }
 
         Mnenomic::Sd => {
             // Stores doubleword from rt, to memory address (base + offset)
             let target = codegen.load_gpr(instr.rt()).into_int_value();
-            let address = codegen.base_plus_offset(instr, "sd_address");
-            codegen.store_memory(address, target.into());
+            let address = codegen.base_plus_offset(instr, "sd_addr");
+            codegen.write_memory(address, target.into());
         }
 
         Mnenomic::Ld => {
             // Loads doubleword stored at memory address (base + offset), stores doubleword in rt
-            let address = codegen.base_plus_offset(instr, "ld_address");
-            let value = codegen.load_memory(i64_type, address);
+            let address = codegen.base_plus_offset(instr, "ld_addr");
+            let value = codegen.read_memory(i64_type, address);
             codegen.store_gpr(instr.rt(), value);
         }
 
         Mnenomic::Lbu => {
             // Loads byte stored at memory address (base + offset), stores zero-extended byte in rt
-            let address = codegen.base_plus_offset(instr, "lbu_address");
+            let address = codegen.base_plus_offset(instr, "lbu_addr");
             let value = {
-                let value = codegen.load_memory(i8_type, address);
+                let value = codegen.read_memory(i8_type, address);
                 codegen.zero_extend_to_i64(value.into_int_value())
             };
 
@@ -509,9 +503,9 @@ pub fn recompile_instruction(
 
         Mnenomic::Lb => {
             // Loads byte stored at memory address (base + offset), stores sign-extended byte in rt
-            let address = codegen.base_plus_offset(instr, "lb_address");
+            let address = codegen.base_plus_offset(instr, "lb_addr");
             let value = {
-                let value = codegen.load_memory(i8_type, address);
+                let value = codegen.read_memory(i8_type, address);
                 codegen.sign_extend_to_i64(value.into_int_value())
             };
             codegen.store_gpr(instr.rt(), value.into());
@@ -519,9 +513,9 @@ pub fn recompile_instruction(
 
         Mnenomic::Lw => {
             // Loads word stored at memory address (base + offset), stores sign-extended word in rt
-            let address = codegen.base_plus_offset(instr, "lw_address");
+            let address = codegen.base_plus_offset(instr, "lw_addr");
             let value = {
-                let value = codegen.load_memory(i32_type, address);
+                let value = codegen.read_memory(i32_type, address);
                 codegen.sign_extend_to_i64(value.into_int_value())
             };
             codegen.store_gpr(instr.rt(), value.into());
@@ -534,7 +528,7 @@ pub fn recompile_instruction(
             let shift_amount = i64_type.const_int(16, false);
             let result = codegen
                 .builder
-                .build_left_shift(immediate, shift_amount, "lui_result");
+                .build_left_shift(immediate, shift_amount, "lui_res");
             codegen.store_gpr(instr.rt(), result.into());
         }
 
@@ -545,7 +539,7 @@ pub fn recompile_instruction(
             let source = codegen.load_gpr(instr.rs()).into_int_value();
             let result = codegen
                 .builder
-                .build_int_add(source, immediate, "addiu_result");
+                .build_int_add(source, immediate, "addiu_res");
             codegen.store_gpr(instr.rt(), result.into());
         }
 
@@ -554,9 +548,7 @@ pub fn recompile_instruction(
             let immediate =
                 codegen.sign_extend_to_i64(i16_type.const_int(instr.immediate() as _, true));
             let source = codegen.load_gpr(instr.rs()).into_int_value();
-            let result = codegen
-                .builder
-                .build_int_add(source, immediate, "addi_result");
+            let result = codegen.builder.build_int_add(source, immediate, "addi_res");
             codegen.store_gpr(instr.rt(), result.into());
         }
 
@@ -564,7 +556,7 @@ pub fn recompile_instruction(
             // Add rs and rt, store result in rd
             let source = codegen.load_gpr(instr.rs()).into_int_value();
             let target = codegen.load_gpr(instr.rt()).into_int_value();
-            let result = codegen.builder.build_int_add(source, target, "add_result");
+            let result = codegen.builder.build_int_add(source, target, "add_res");
             codegen.store_gpr(instr.rd(), result.into());
         }
 
@@ -573,7 +565,7 @@ pub fn recompile_instruction(
             let source = codegen.load_gpr(instr.rs()).into_int_value();
             let immediate =
                 codegen.zero_extend_to_i64(i16_type.const_int(instr.immediate() as _, false));
-            let result = codegen.builder.build_and(source, immediate, "andi_result");
+            let result = codegen.builder.build_and(source, immediate, "andi_res");
             codegen.store_gpr(instr.rt(), result.into());
         }
 
@@ -582,7 +574,7 @@ pub fn recompile_instruction(
             let source = codegen.load_gpr(instr.rs()).into_int_value();
             let immediate =
                 codegen.zero_extend_to_i64(i16_type.const_int(instr.immediate() as _, false));
-            let result = codegen.builder.build_or(source, immediate, "ori_result");
+            let result = codegen.builder.build_or(source, immediate, "ori_res");
             codegen.store_gpr(instr.rt(), result.into());
         }
 
@@ -593,7 +585,7 @@ pub fn recompile_instruction(
             let source = codegen.load_gpr(instr.rs()).into_int_value();
             let result = codegen
                 .builder
-                .build_int_add(source, immediate, "daddiu_result");
+                .build_int_add(source, immediate, "daddiu_res");
 
             codegen.store_gpr(instr.rt(), result.into());
         }
@@ -609,9 +601,7 @@ pub fn recompile_instruction(
                         .builder
                         .build_int_compare(IntPredicate::SLT, source, target, "slt_cmp");
 
-                codegen
-                    .builder
-                    .build_int_z_extend(cmp, i64_type, "slt_result")
+                codegen.builder.build_int_z_extend(cmp, i64_type, "slt_res")
             };
 
             codegen.store_gpr(instr.rd(), result.into());
@@ -633,7 +623,7 @@ pub fn recompile_instruction(
 
                 codegen
                     .builder
-                    .build_int_z_extend(cmp, i64_type, "slti_result")
+                    .build_int_z_extend(cmp, i64_type, "slti_res")
             };
 
             codegen.store_gpr(instr.rt(), result.into());
@@ -654,7 +644,7 @@ pub fn recompile_instruction(
             // Convert the comparison to a numeric value.
             let result = codegen
                 .builder
-                .build_int_z_extend(cmp, i64_type, "sltiu_result");
+                .build_int_z_extend(cmp, i64_type, "sltiu_res");
 
             codegen.store_gpr(instr.rt(), result.into());
         }
@@ -663,7 +653,7 @@ pub fn recompile_instruction(
             // Subtract rt from rs, store result in rd
             let source = codegen.load_gpr(instr.rs()).into_int_value();
             let target = codegen.load_gpr(instr.rt()).into_int_value();
-            let result = codegen.builder.build_int_sub(target, source, "subu_result");
+            let result = codegen.builder.build_int_sub(target, source, "subu_res");
             codegen.store_gpr(instr.rd(), result.into());
         }
 
