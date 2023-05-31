@@ -1,4 +1,6 @@
-use crate::{codegen::CodeGen, recompiler::recompile_instruction};
+use std::net::TcpStream;
+
+use crate::{codegen::CodeGen, env::function::RuntimeFunction, recompiler::recompile_instruction};
 use inkwell::{context::Context, execution_engine::JitFunction, OptimizationLevel};
 use mips_decomp::{register, MaybeInstruction, INSTRUCTION_SIZE};
 
@@ -7,17 +9,11 @@ pub mod env;
 pub mod label;
 pub mod recompiler;
 
-macro_rules! c_fn {
-    ($($arg:ident),*) => {
-        unsafe extern "C" fn($($arg),*)
-    };
-}
-
-// TODO: move this to a more appropriate location
-// const MEMORY_SIZE: usize = 0xFFFFFFFF;
-const MEMORY_SIZE: usize = 0xa5000000;
-
-pub fn lift<Mem: env::Memory>(mem: Mem, bin: &[u8], ir_path: Option<&str>, entry_point: u64) {
+pub fn lift<Mem>(mem: Mem, bin: &[u8], ir_path: Option<&str>, gdb_stream: Option<TcpStream>)
+where
+    Mem: env::Memory,
+{
+    let entry_point = 0;
     let decomp = mips_decomp::Decompiler::from(bin);
     let blocks = mips_decomp::reorder_delay_slots(decomp.blocks().collect());
     #[cfg(feature = "debug-print")]
@@ -43,7 +39,7 @@ pub fn lift<Mem: env::Memory>(mem: Mem, bin: &[u8], ir_path: Option<&str>, entry
 
     let env = {
         let labels = labels.values().map(|l| l.to_owned()).collect::<Vec<_>>();
-        env::Environment::new(mem, labels)
+        env::Environment::new(mem, labels, gdb_stream)
     };
     let codegen = CodeGen::new(context, module, execution_engine, &env);
 
@@ -56,7 +52,7 @@ pub fn lift<Mem: env::Memory>(mem: Mem, bin: &[u8], ir_path: Option<&str>, entry
         codegen
             .context
             .i64_type()
-            .const_int(MEMORY_SIZE as _, false)
+            .const_int(0x500 as _, false)
             .into(),
     );
 
@@ -84,6 +80,13 @@ pub fn lift<Mem: env::Memory>(mem: Mem, bin: &[u8], ir_path: Option<&str>, entry
                 codegen.print_constant_string(&instr, &storage_name);
             }
 
+            let pc = codegen.build_i64(addr).into_int_value();
+            codegen.write_special_reg(register::Special::Pc, pc.into());
+
+            // Call the `on_instruction` callback from the environment, used for the debugger.
+            env_call!(codegen, RuntimeFunction::OnInstruction, []);
+
+            // Recompile the instruction.
             if let MaybeInstruction::Instruction(instr) = instr {
                 recompile_instruction(&codegen, &labels, instr, addr);
             } else {
@@ -120,10 +123,8 @@ pub fn lift<Mem: env::Memory>(mem: Mem, bin: &[u8], ir_path: Option<&str>, entry
         return;
     }
 
-    // panic!();
-
     // Run the generated code.
-    let main_func: JitFunction<c_fn!()> = codegen.get_function("main").unwrap();
+    let main_func: JitFunction<unsafe extern "C" fn()> = codegen.get_function("main").unwrap();
     unsafe { main_func.call() }
 
     env.print_registers();

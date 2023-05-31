@@ -3,8 +3,10 @@ use crate::{
     register,
 };
 use std::fmt;
+use strum::{EnumVariantNames, VariantNames};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(EnumVariantNames, Debug, Clone, Copy, PartialEq, Eq)]
+#[strum(serialize_all = "lowercase")]
 pub enum Mnenomic {
     Add,
     Addi,
@@ -64,6 +66,7 @@ pub enum Mnenomic {
     J,
     Jal,
     Jalr,
+    #[strum(serialize = "jalr")]
     JalrR31,
     Jr,
     Lb,
@@ -231,10 +234,8 @@ impl Mnenomic {
         self.is_branch() | matches!(self, Mnenomic::J | Mnenomic::Jal)
     }
 
-    pub fn name(&self) -> String {
-        // It would be nice to not have to do dynamic allocations here,
-        // but I don't think it's worth writing a derive macro to get the variants name in lowercase.
-        format!("{self:?}").to_lowercase()
+    pub const fn name(&self) -> &'static str {
+        Self::VARIANTS[*self as usize]
     }
 }
 
@@ -345,8 +346,8 @@ impl ParsedInstruction {
         self.instr.try_resolve_static_jump(self.raw, pc)
     }
 
-    pub const fn mnemonic(&self) -> &Mnenomic {
-        &self.instr.mnenomic
+    pub const fn mnemonic(&self) -> Mnenomic {
+        self.instr.mnenomic
     }
 
     pub const fn ends_block(&self) -> bool {

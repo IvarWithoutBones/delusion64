@@ -1,6 +1,5 @@
 use crate::instruction::ParsedInstruction;
 
-pub mod format;
 pub mod instruction;
 pub mod register;
 mod pattern;

@@ -1,119 +1,61 @@
-use core::fmt;
+use crate::emu::Emulator;
+use clap::Parser;
 use n64_cartridge::Cartridge;
-use std::mem::size_of;
+use std::{
+    io,
+    net::{TcpListener, TcpStream},
+};
 
-const MEMORY_SIZE: usize = 0xa5000000;
+mod emu;
 
-struct Emulator {
-    memory: Box<[u8; MEMORY_SIZE]>,
+const DEFAULT_GDB_PORT: u16 = 9001;
+
+/// Blocks until a GDB client connects via TCP
+pub fn wait_for_gdb_connection(port: Option<u16>) -> io::Result<TcpStream> {
+    let sockaddr = format!("localhost:{}", port.unwrap_or(DEFAULT_GDB_PORT));
+    eprintln!("Waiting for a GDB connection on {sockaddr:?}...");
+    let sock = TcpListener::bind(sockaddr)?;
+    let (stream, addr) = sock.accept()?;
+
+    eprintln!("Debugger connected from {addr}");
+    Ok(stream)
 }
 
-impl Emulator {
-    fn new() -> Self {
-        Self {
-            // Allocate memory directly on the heap using a vec to avoid stack overflows
-            memory: vec![0; MEMORY_SIZE].into_boxed_slice().try_into().unwrap(),
-        }
-    }
+#[derive(Parser, Debug)]
+#[command(author = "IvarWithoutBones")]
+struct CommandLineInterface {
+    #[clap(short, long)]
+    rom: String,
 
-    #[inline]
-    unsafe fn read<T>(&self, addr: u64) -> T
-    where
-        T: Copy + Sized + fmt::LowerHex,
-    {
-        let ty = std::any::type_name::<T>();
-        print!("read_{ty}: {addr:#x}");
+    #[clap(short, long, value_name = "path")]
+    llvm_ir_output: Option<String>,
 
-        let addr = addr as usize;
-        let values = self
-            .memory
-            .get(addr..addr + size_of::<T>())
-            .unwrap_or_else(|| panic!("read memory index out of bounds: {addr:#x}"));
-
-        let value = unsafe { std::ptr::read_unaligned(values.as_ptr() as _) };
-        println!(" = {value:#x}");
-        value
-    }
-
-    #[inline]
-    unsafe fn write<T>(&mut self, addr: u64, value: T)
-    where
-        T: Copy + Sized + fmt::LowerHex,
-    {
-        let ty = std::any::type_name::<T>();
-        println!("write_{ty}: {addr:#x} = {value:#x}");
-
-        let addr = addr as usize;
-        let values = self
-            .memory
-            .get_mut(addr..addr + size_of::<T>())
-            .unwrap_or_else(|| panic!("write memory index out of bounds: {addr:#x}"));
-        unsafe { std::ptr::write_unaligned(values.as_mut_ptr() as _, value) }
-    }
-}
-
-impl mips_lifter::env::Memory for Emulator {
-    #[inline]
-    fn read_u8(&self, addr: u64) -> u8 {
-        unsafe { self.read(addr) }
-    }
-
-    #[inline]
-    fn read_u16(&self, addr: u64) -> u16 {
-        unsafe { self.read(addr) }
-    }
-
-    #[inline]
-    fn read_u32(&self, addr: u64) -> u32 {
-        unsafe { self.read(addr) }
-    }
-
-    #[inline]
-    fn read_u64(&self, addr: u64) -> u64 {
-        unsafe { self.read(addr) }
-    }
-
-    #[inline]
-    fn write_u8(&mut self, addr: u64, value: u8) {
-        unsafe { self.write(addr, value) }
-    }
-
-    #[inline]
-    fn write_u16(&mut self, addr: u64, value: u16) {
-        unsafe { self.write(addr, value) }
-    }
-
-    #[inline]
-    fn write_u32(&mut self, addr: u64, value: u32) {
-        unsafe { self.write(addr, value) }
-    }
-
-    #[inline]
-    fn write_u64(&mut self, addr: u64, value: u64) {
-        unsafe { self.write(addr, value) }
-    }
+    #[clap(short, long, value_name = "port")]
+    gdb: Option<Option<u16>>,
 }
 
 fn main() {
-    let mut args = std::env::args().skip(1);
+    let cli = CommandLineInterface::parse();
 
-    let bin = {
-        let path = args.next().expect("no file provided");
-        std::fs::read(path).expect("failed to read file")
-    };
-
+    let bin = std::fs::read(cli.rom).expect("failed to read file");
     let cart = Cartridge::new(&bin).unwrap_or_else(|e| {
         eprintln!("failed to parse cartridge: {e}");
         std::process::exit(1);
     });
     println!("{cart:#?}");
 
-    let maybe_output_path = args.next();
-    let entry_point = 0;
+    let mut emulator = Emulator::new();
+    emulator.memory[0x8000..cart.ipl3_boot_code.len() + 0x8000]
+        .copy_from_slice(&*cart.ipl3_boot_code);
+
+    let maybe_gdb_stream = cli
+        .gdb
+        .map(|port| wait_for_gdb_connection(port).expect("failed to wait for GDB connection"));
+
     mips_lifter::lift(
-        Emulator::new(),
+        emulator,
         &cart.ipl3_boot_code.as_slice()[..0xb2c],
-        maybe_output_path.as_deref(),
-        entry_point,
+        cli.llvm_ir_output.as_deref(),
+        maybe_gdb_stream,
     );
 }

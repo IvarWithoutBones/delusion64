@@ -106,6 +106,7 @@
           rustToolchain.availableComponents.rust-analyzer
           llvmPackages.clang
           mipsBinutils
+          pkgs.gdb
 
           compile-llc
           build-llvm-ir

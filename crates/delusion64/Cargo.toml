@@ -8,5 +8,6 @@ default = ["debug-print"]
 debug-print = []
 
 [dependencies]
+clap = { version = "4.3.0", features = ["derive"] }
 mips-lifter = { path = "../mips-lifter", default-features = false }
 n64-cartridge = { path = "../n64-cartridge" }

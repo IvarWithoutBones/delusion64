@@ -1,37 +1,74 @@
 use self::function::RuntimeFunction;
 use crate::{codegen, label::Label};
 use inkwell::{execution_engine::ExecutionEngine, module::Module, AddressSpace};
-use mips_decomp::register::{
-    self, CoprocessorRegisters, GeneralPurposeRegisters, SpecialRegisters,
-};
-use std::{fmt, pin::Pin};
+use mips_decomp::register;
+use std::{fmt, mem::size_of, net::TcpStream, pin::Pin};
 
 pub mod function;
+pub mod gdb;
 
 pub trait Memory {
     fn read_u8(&self, addr: u64) -> u8;
-    fn read_u16(&self, addr: u64) -> u16;
-    fn read_u32(&self, addr: u64) -> u32;
-    fn read_u64(&self, addr: u64) -> u64;
-
     fn write_u8(&mut self, addr: u64, value: u8);
-    fn write_u16(&mut self, addr: u64, value: u16);
-    fn write_u32(&mut self, addr: u64, value: u32);
-    fn write_u64(&mut self, addr: u64, value: u64);
+
+    #[inline]
+    fn read_u16(&self, mut addr: u64) -> u16 {
+        u16::from_be_bytes([0; size_of::<u16>()].map(|_| {
+            addr += 1;
+            self.read_u8(addr - 1)
+        }))
+    }
+
+    #[inline]
+    fn read_u32(&self, mut addr: u64) -> u32 {
+        u32::from_be_bytes([0; size_of::<u32>()].map(|_| {
+            addr += 1;
+            self.read_u8(addr - 1)
+        }))
+    }
+
+    #[inline]
+    fn read_u64(&self, mut addr: u64) -> u64 {
+        u64::from_be_bytes([0; size_of::<u64>()].map(|_| {
+            addr += 1;
+            self.read_u8(addr - 1)
+        }))
+    }
+
+    #[inline]
+    fn write_u16(&mut self, addr: u64, value: u16) {
+        for (i, v) in value.to_be_bytes().iter().enumerate() {
+            self.write_u8(addr + i as u64, *v);
+        }
+    }
+
+    #[inline]
+    fn write_u32(&mut self, addr: u64, value: u32) {
+        for (i, v) in value.to_be_bytes().iter().enumerate() {
+            self.write_u8(addr + i as u64, *v);
+        }
+    }
+
+    #[inline]
+    fn write_u64(&mut self, addr: u64, value: u64) {
+        for (i, v) in value.to_be_bytes().iter().enumerate() {
+            self.write_u8(addr + i as u64, *v);
+        }
+    }
 }
 
 pub struct Registers {
-    general_purpose: Pin<Box<GeneralPurposeRegisters>>,
-    special: Pin<Box<SpecialRegisters>>,
-    coprocessor: Pin<Box<CoprocessorRegisters>>,
+    general_purpose: Pin<Box<[u64; register::GeneralPurpose::count()]>>,
+    special: Pin<Box<[u64; register::Special::count()]>>,
+    coprocessor: Pin<Box<[u64; register::Coprocessor::count()]>>,
 }
 
 impl Default for Registers {
     fn default() -> Self {
         Self {
-            general_purpose: Box::pin(GeneralPurposeRegisters::default()),
-            special: Box::pin(SpecialRegisters::default()),
-            coprocessor: Box::pin(CoprocessorRegisters::default()),
+            general_purpose: Box::pin([0; register::GeneralPurpose::count()]),
+            special: Box::pin([0; register::Special::count()]),
+            coprocessor: Box::pin([0; register::Coprocessor::count()]),
         }
     }
 }
@@ -39,19 +76,19 @@ impl Default for Registers {
 impl fmt::Debug for Registers {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "\ngeneral registers:")?;
-        for (i, r) in self.general_purpose.0.iter().enumerate() {
+        for (i, r) in self.general_purpose.iter().enumerate() {
             let name = register::GeneralPurpose::name_from_index(i as _);
             writeln!(f, "{name: <9} = {r:#x}")?;
         }
 
         writeln!(f, "\nspecial registers:")?;
-        for (i, r) in self.special.0.iter().enumerate() {
+        for (i, r) in self.special.iter().enumerate() {
             let name = register::Special::name_from_index(i as _);
             writeln!(f, "{name: <9} = {r:#x}")?;
         }
 
         writeln!(f, "\ncoprocessor registers:")?;
-        for (i, r) in self.coprocessor.0.iter().enumerate() {
+        for (i, r) in self.coprocessor.iter().enumerate() {
             let name = register::Coprocessor::name_from_index(i as _);
             writeln!(f, "{name: <9} = {r:#x}")?;
         }
@@ -63,16 +100,28 @@ impl fmt::Debug for Registers {
 pub struct Environment<'ctx, Mem: Memory> {
     labels: Vec<Label<'ctx>>,
     memory: Mem,
-    pub registers: Registers,
+    pub(crate) registers: Registers,
+    debugger: Option<gdb::Debugger<'ctx, Mem>>,
 }
 
 impl<'ctx, Mem: Memory> Environment<'ctx, Mem> {
-    pub fn new(memory: Mem, labels: Vec<Label<'ctx>>) -> Pin<Box<Self>> {
-        Box::pin(Self {
+    pub fn new(
+        memory: Mem,
+        labels: Vec<Label<'ctx>>,
+        gdb_stream: Option<TcpStream>,
+    ) -> Pin<Box<Self>> {
+        let mut env = Self {
             registers: Registers::default(),
+            debugger: None,
             labels,
             memory,
-        })
+        };
+
+        if let Some(stream) = gdb_stream {
+            env.debugger = Some(gdb::Debugger::new(&mut env, stream));
+        }
+
+        Box::pin(env)
     }
 
     pub fn init(
@@ -93,21 +142,19 @@ impl<'ctx, Mem: Memory> Environment<'ctx, Mem> {
         let general_purpose_regs = module.add_global(gprs_ty, None, "general_purpose_regs");
         execution_engine.add_global_mapping(
             &general_purpose_regs,
-            self.registers.general_purpose.0.as_ptr() as _,
+            self.registers.general_purpose.as_ptr() as _,
         );
 
         // Add a mapping to the special registers
         let special_regs_ty = i64_type.array_type(register::Special::count() as _);
         let special_regs = module.add_global(special_regs_ty, None, "special_regs");
-        execution_engine.add_global_mapping(&special_regs, self.registers.special.0.as_ptr() as _);
+        execution_engine.add_global_mapping(&special_regs, self.registers.special.as_ptr() as _);
 
         // Add a mapping to the cp0 registers
         let cp0_regs_ty = i64_type.array_type(register::Coprocessor::count() as _);
         let coprocessor_regs = module.add_global(cp0_regs_ty, None, "cp0_regs");
-        execution_engine.add_global_mapping(
-            &coprocessor_regs,
-            self.registers.coprocessor.0.as_ptr() as _,
-        );
+        execution_engine
+            .add_global_mapping(&coprocessor_regs, self.registers.coprocessor.as_ptr() as _);
 
         let add_fn = |f: RuntimeFunction, ptr: *const u8| {
             f.init(&context, module, execution_engine, ptr);
@@ -116,6 +163,7 @@ impl<'ctx, Mem: Memory> Environment<'ctx, Mem> {
         // Add mappings to the runtime functions
         add_fn(RuntimeFunction::GetBlockId, Self::block_id as _);
         add_fn(RuntimeFunction::PrintString, Self::print_string as _);
+        add_fn(RuntimeFunction::OnInstruction, Self::on_instruction as _);
         add_fn(RuntimeFunction::ReadI8, Self::read_u8 as _);
         add_fn(RuntimeFunction::ReadI16, Self::read_u16 as _);
         add_fn(RuntimeFunction::ReadI32, Self::read_u32 as _);
@@ -140,6 +188,18 @@ impl<'ctx, Mem: Memory> Environment<'ctx, Mem> {
     /*
         Runtime functions
     */
+
+    unsafe extern "C" fn on_instruction(&mut self) {
+        if self.debugger.is_some() {
+            let pc = self.registers.special[register::Special::Pc as usize];
+            self.debugger.as_mut().unwrap().on_instruction(pc);
+            self.update_debugger();
+            while self.debugger.as_ref().unwrap().is_paused() {
+                // Block until the debugger tells us to continue
+                self.update_debugger();
+            }
+        }
+    }
 
     unsafe extern "C" fn print_string(&mut self, string_ptr: *const u8, len: u64) {
         let slice = std::slice::from_raw_parts(string_ptr, len as _);

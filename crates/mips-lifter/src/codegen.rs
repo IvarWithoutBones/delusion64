@@ -155,7 +155,7 @@ impl<'ctx> CodeGen<'ctx> {
             self.builder.build_in_bounds_gep(
                 i64_type,
                 registers_ptr,
-                &[i64_type.const_int(reg.to_u8() as _, false)],
+                &[i64_type.const_int(reg.to_repr() as _, false)],
                 &format!("{}_ptr", reg.name()),
             )
         }
@@ -193,7 +193,7 @@ impl<'ctx> CodeGen<'ctx> {
     where
         T: Into<u64>,
     {
-        let reg = register::GeneralPurpose::from_u8(index.into() as _).unwrap();
+        let reg = register::GeneralPurpose::from_repr(index.into() as _).unwrap();
         if reg == register::GeneralPurpose::Zero {
             // Register zero is always zero
             self.context.i64_type().const_zero().into()
@@ -209,7 +209,7 @@ impl<'ctx> CodeGen<'ctx> {
     where
         T: Into<u64>,
     {
-        let reg = register::GeneralPurpose::from_u8(index.into() as _).unwrap();
+        let reg = register::GeneralPurpose::from_repr(index.into() as _).unwrap();
         if reg != register::GeneralPurpose::Zero {
             // Register zero is read-only
             let register = self.register_pointer(reg);
@@ -221,7 +221,7 @@ impl<'ctx> CodeGen<'ctx> {
     where
         T: Into<u64>,
     {
-        let reg = register::Coprocessor::from_u8(index.into() as _).unwrap();
+        let reg = register::Coprocessor::from_repr(index.into() as _).unwrap();
         let i64_type = self.context.i64_type();
         let register = self.register_pointer(reg);
         self.builder
@@ -232,7 +232,7 @@ impl<'ctx> CodeGen<'ctx> {
     where
         T: Into<u64>,
     {
-        let reg = register::Coprocessor::from_u8(index.into() as _).unwrap();
+        let reg = register::Coprocessor::from_repr(index.into() as _).unwrap();
         let reg_ptr = self.register_pointer(reg);
         self.builder.build_store(reg_ptr, value);
     }

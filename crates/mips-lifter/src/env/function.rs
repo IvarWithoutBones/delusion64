@@ -7,6 +7,7 @@ use inkwell::{
 pub enum RuntimeFunction {
     GetBlockId,
     PrintString,
+    OnInstruction,
 
     ReadI8,
     ReadI16,
@@ -24,6 +25,7 @@ impl RuntimeFunction {
         match self {
             Self::PrintString => "print_string",
             Self::GetBlockId => "get_block_id",
+            Self::OnInstruction => "on_instruction",
 
             Self::ReadI8 => "read_i8",
             Self::ReadI16 => "read_i16",
@@ -41,6 +43,7 @@ impl RuntimeFunction {
         match self {
             Self::GetBlockId => 1,
             Self::PrintString => 2,
+            Self::OnInstruction => 0,
 
             Self::ReadI8 | Self::ReadI16 | Self::ReadI32 | Self::ReadI64 => 1,
             Self::WriteI8 | Self::WriteI16 | Self::WriteI32 | Self::WriteI64 => 2,
@@ -63,7 +66,7 @@ impl RuntimeFunction {
                $name:ident: $arg_ty:expr
             ),* $(,)?]) => {
                 $ret_ty.fn_type(&[
-                    ptr_type.into(), // Environment pointer
+                    ptr_type.into(), // Environment pointer (&mut self)
                     $($arg_ty.into()),*
                 ], false)
             };
@@ -75,6 +78,8 @@ impl RuntimeFunction {
             Self::GetBlockId => sig!(i64_type, [addr: i64_type]),
             // `Environment::print_string()`
             Self::PrintString => sig!(void_type, [string_ptr: ptr_type, len: i64_type]),
+            // `Environment::on_instruction()`
+            Self::OnInstruction => sig!(void_type, []),
 
             // `Environment::read_u8()`
             Self::ReadI8 => sig!(i8_type, [addr: i64_type]),
