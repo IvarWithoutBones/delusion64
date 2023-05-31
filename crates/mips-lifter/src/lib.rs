@@ -1,6 +1,6 @@
 use crate::{codegen::CodeGen, recompiler::recompile_instruction};
 use inkwell::{context::Context, execution_engine::JitFunction, OptimizationLevel};
-use mips_decomp::{MaybeInstruction, INSTRUCTION_SIZE};
+use mips_decomp::{register, MaybeInstruction, INSTRUCTION_SIZE};
 
 pub mod codegen;
 pub mod env;
@@ -51,8 +51,8 @@ pub fn lift<Mem: env::Memory>(mem: Mem, bin: &[u8], ir_path: Option<&str>, entry
     codegen.builder.position_at_end(entry_block);
 
     // Set the stack pointer
-    codegen.store_gpr(
-        29u32, // Stack pointer
+    codegen.write_general_reg(
+        register::GeneralPurpose::Sp,
         codegen
             .context
             .i64_type()

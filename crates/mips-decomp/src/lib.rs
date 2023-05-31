@@ -2,7 +2,8 @@ use crate::instruction::ParsedInstruction;
 
 pub mod format;
 pub mod instruction;
-pub mod pattern;
+pub mod register;
+mod pattern;
 
 pub const INSTRUCTION_SIZE: usize = 4;
 pub const REGISTER_COUNT: usize = 32;

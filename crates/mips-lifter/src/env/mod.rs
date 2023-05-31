@@ -1,9 +1,10 @@
 use self::function::RuntimeFunction;
-use crate::label::Label;
-use inkwell::{
-    execution_engine::ExecutionEngine, module::Module, values::GlobalValue, AddressSpace,
+use crate::{codegen, label::Label};
+use inkwell::{execution_engine::ExecutionEngine, module::Module, AddressSpace};
+use mips_decomp::register::{
+    self, CoprocessorRegisters, GeneralPurposeRegisters, SpecialRegisters,
 };
-use std::pin::Pin;
+use std::{fmt, pin::Pin};
 
 pub mod function;
 
@@ -19,22 +20,57 @@ pub trait Memory {
     fn write_u64(&mut self, addr: u64, value: u64);
 }
 
+pub struct Registers {
+    general_purpose: Pin<Box<GeneralPurposeRegisters>>,
+    special: Pin<Box<SpecialRegisters>>,
+    coprocessor: Pin<Box<CoprocessorRegisters>>,
+}
+
+impl Default for Registers {
+    fn default() -> Self {
+        Self {
+            general_purpose: Box::pin(GeneralPurposeRegisters::default()),
+            special: Box::pin(SpecialRegisters::default()),
+            coprocessor: Box::pin(CoprocessorRegisters::default()),
+        }
+    }
+}
+
+impl fmt::Debug for Registers {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "\ngeneral registers:")?;
+        for (i, r) in self.general_purpose.0.iter().enumerate() {
+            let name = register::GeneralPurpose::name_from_index(i as _);
+            writeln!(f, "{name: <9} = {r:#x}")?;
+        }
+
+        writeln!(f, "\nspecial registers:")?;
+        for (i, r) in self.special.0.iter().enumerate() {
+            let name = register::Special::name_from_index(i as _);
+            writeln!(f, "{name: <9} = {r:#x}")?;
+        }
+
+        writeln!(f, "\ncoprocessor registers:")?;
+        for (i, r) in self.coprocessor.0.iter().enumerate() {
+            let name = register::Coprocessor::name_from_index(i as _);
+            writeln!(f, "{name: <9} = {r:#x}")?;
+        }
+
+        Ok(())
+    }
+}
+
 pub struct Environment<'ctx, Mem: Memory> {
     labels: Vec<Label<'ctx>>,
     memory: Mem,
-
-    general_purpose_registers: Pin<Box<[u64; 32]>>,
-    cp0_registers: Pin<Box<[u64; 32]>>,
-    hi_lo_registers: Pin<Box<[u64; 2]>>,
+    pub registers: Registers,
 }
 
 impl<'ctx, Mem: Memory> Environment<'ctx, Mem> {
     pub fn new(memory: Mem, labels: Vec<Label<'ctx>>) -> Pin<Box<Self>> {
         Box::pin(Self {
+            registers: Registers::default(),
             labels,
-            general_purpose_registers: Box::pin([0; 32]),
-            cp0_registers: Box::pin([0; 32]),
-            hi_lo_registers: Box::pin([0; 2]),
             memory,
         })
     }
@@ -43,32 +79,35 @@ impl<'ctx, Mem: Memory> Environment<'ctx, Mem> {
         &self,
         module: &Module<'ctx>,
         execution_engine: &ExecutionEngine<'ctx>,
-    ) -> (
-        GlobalValue<'ctx>,
-        GlobalValue<'ctx>,
-        GlobalValue<'ctx>,
-        GlobalValue<'ctx>,
-    ) {
+    ) -> codegen::Globals<'ctx> {
         let context = module.get_context();
         let i64_type = context.i64_type();
-        let regs_array = i64_type.array_type(32);
 
         // Add a mapping to the environment struct
         let ptr_type = context.i64_type().ptr_type(AddressSpace::default());
-        let env_struct = module.add_global(ptr_type, None, "env");
-        execution_engine.add_global_mapping(&env_struct, self as *const _ as _);
+        let env_ptr = module.add_global(ptr_type, None, "env");
+        execution_engine.add_global_mapping(&env_ptr, self as *const _ as _);
 
         // Add a mapping to the general purpose registers
-        let gprs = module.add_global(regs_array, None, "gprs");
-        execution_engine.add_global_mapping(&gprs, self.general_purpose_registers.as_ptr() as _);
+        let gprs_ty = i64_type.array_type(register::GeneralPurpose::count() as _);
+        let general_purpose_regs = module.add_global(gprs_ty, None, "general_purpose_regs");
+        execution_engine.add_global_mapping(
+            &general_purpose_regs,
+            self.registers.general_purpose.0.as_ptr() as _,
+        );
 
-        // Add a mapping to the hi/lo registers
-        let hi_lo = module.add_global(i64_type.array_type(2), None, "hi_lo");
-        execution_engine.add_global_mapping(&hi_lo, self.hi_lo_registers.as_ptr() as _);
+        // Add a mapping to the special registers
+        let special_regs_ty = i64_type.array_type(register::Special::count() as _);
+        let special_regs = module.add_global(special_regs_ty, None, "special_regs");
+        execution_engine.add_global_mapping(&special_regs, self.registers.special.0.as_ptr() as _);
 
         // Add a mapping to the cp0 registers
-        let cp0_regs = module.add_global(regs_array, None, "cp0_regs");
-        execution_engine.add_global_mapping(&cp0_regs, self.cp0_registers.as_ptr() as _);
+        let cp0_regs_ty = i64_type.array_type(register::Coprocessor::count() as _);
+        let coprocessor_regs = module.add_global(cp0_regs_ty, None, "cp0_regs");
+        execution_engine.add_global_mapping(
+            &coprocessor_regs,
+            self.registers.coprocessor.0.as_ptr() as _,
+        );
 
         let add_fn = |f: RuntimeFunction, ptr: *const u8| {
             f.init(&context, module, execution_engine, ptr);
@@ -86,26 +125,16 @@ impl<'ctx, Mem: Memory> Environment<'ctx, Mem> {
         add_fn(RuntimeFunction::WriteI32, Self::write_u32 as _);
         add_fn(RuntimeFunction::WriteI64, Self::write_u64 as _);
 
-        (env_struct, gprs, hi_lo, cp0_regs)
+        codegen::Globals {
+            env_ptr,
+            general_purpose_regs,
+            special_regs,
+            coprocessor_regs,
+        }
     }
 
     pub fn print_registers(&self) {
-        println!("\ngeneral registers:");
-        for (i, r) in self.general_purpose_registers.iter().enumerate() {
-            let name = mips_decomp::format::general_register_name(i as _);
-            println!("{name: <8} = {r:#x}");
-        }
-
-        println!(
-            "\nspecial registers:\nhi       = {:#x}\nlo       = {:#x}",
-            self.hi_lo_registers[0], self.hi_lo_registers[1]
-        );
-
-        println!("\ncp0 registers:");
-        for (i, r) in self.cp0_registers.iter().enumerate() {
-            let name = mips_decomp::format::cp0_register_name(i as _);
-            println!("{name: <8} = {r:#x}");
-        }
+        println!("{:#?}", self.registers);
     }
 
     /*

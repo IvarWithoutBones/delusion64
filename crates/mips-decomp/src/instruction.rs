@@ -1,6 +1,6 @@
 use crate::{
-    format::{cp0_register_name, general_register_name},
     pattern::{InstructionPattern, Operand},
+    register,
 };
 use std::fmt;
 
@@ -317,9 +317,9 @@ impl Instruction {
 
             if op.is_register() {
                 if self.mnenomic.uses_cp0_destination() && op == &Operand::Destination {
-                    result.push_str(cp0_register_name(num as _));
+                    result.push_str(register::Coprocessor::name_from_index(num as _));
                 } else {
-                    result.push_str(general_register_name(num as _));
+                    result.push_str(register::GeneralPurpose::name_from_index(num as _));
                 }
             } else {
                 result.push_str(&sign.format(num));
