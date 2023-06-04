@@ -45,7 +45,7 @@ fn main() {
     println!("{cart:#?}");
 
     let mut emulator = Emulator::new();
-    emulator.memory[0x8000..cart.ipl3_boot_code.len() + 0x8000]
+    emulator.rdram[0x8000..cart.ipl3_boot_code.len() + 0x8000]
         .copy_from_slice(&*cart.ipl3_boot_code);
 
     let maybe_gdb_stream = cli
