@@ -1,4 +1,4 @@
-use crate::{codegen::CodeGen, env::function::RuntimeFunction, env_call, label::Labels};
+use crate::{codegen::CodeGen, env_call, label::Labels, runtime::RuntimeFunction};
 use inkwell::IntPredicate;
 use mips_decomp::{
     instruction::{Mnenomic, ParsedInstruction},

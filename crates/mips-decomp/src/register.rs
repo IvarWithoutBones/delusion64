@@ -31,6 +31,46 @@ macro_rules! impl_reg {
             }
         }
 
+        impl TryFrom<u8> for $enum {
+            type Error = ();
+
+            fn try_from(v: u8) -> Result<Self, Self::Error> {
+                Self::from_repr(v as _).ok_or(())
+            }
+        }
+
+        impl TryFrom<u16> for $enum {
+            type Error = ();
+
+            fn try_from(v: u16) -> Result<Self, Self::Error> {
+                Self::from_repr(v as _).ok_or(())
+            }
+        }
+
+        impl TryFrom<u32> for $enum {
+            type Error = ();
+
+            fn try_from(v: u32) -> Result<Self, Self::Error> {
+                Self::from_repr(v as _).ok_or(())
+            }
+        }
+
+        impl TryFrom<u64> for $enum {
+            type Error = ();
+
+            fn try_from(v: u64) -> Result<Self, Self::Error> {
+                Self::from_repr(v as _).ok_or(())
+            }
+        }
+
+        impl TryFrom<usize> for $enum {
+            type Error = ();
+
+            fn try_from(v: usize) -> Result<Self, Self::Error> {
+                Self::from_repr(v as _).ok_or(())
+            }
+        }
+
         impl From<$enum> for u8 {
             fn from(v: $enum) -> Self {
                 v.to_repr()
@@ -54,9 +94,16 @@ macro_rules! impl_reg {
                 v.to_repr().into()
             }
         }
+
+        impl From<$enum> for usize {
+            fn from(v: $enum) -> Self {
+                v.to_repr().into()
+            }
+        }
     };
 }
 
+/// A general purpose MIPS 3 register (`gpr`).
 #[derive(EnumCount, FromRepr, EnumVariantNames, Debug, PartialEq, Eq, Clone, Copy)]
 #[strum(serialize_all = "snake_case")]
 #[repr(u8)]
@@ -97,6 +144,7 @@ pub enum GeneralPurpose {
 
 impl_reg!(GeneralPurpose);
 
+/// A miscellaneous MIPS 3 register.
 #[derive(EnumCount, FromRepr, EnumVariantNames, Debug, PartialEq, Eq, Clone, Copy)]
 #[strum(serialize_all = "snake_case")]
 #[repr(u8)]
@@ -109,8 +157,9 @@ pub enum Special {
 
 impl_reg!(Special);
 
+/// A MIPS 3 coprocessor 0 register.
 #[derive(EnumCount, FromRepr, EnumVariantNames, Debug, PartialEq, Eq, Clone, Copy)]
-pub enum Coprocessor {
+pub enum Cp0 {
     /// Programmable pointer into TLB array
     Index,
     /// Pseudorandom pointer into TLB array (read only)
@@ -183,13 +232,14 @@ pub enum Coprocessor {
     Reserved,
 }
 
-impl_reg!(Coprocessor);
+impl_reg!(Cp0);
 
+/// A MIPS 3 register.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Register {
     GeneralPurpose(GeneralPurpose),
     Special(Special),
-    Coprocessor(Coprocessor),
+    Cp0(Cp0),
 }
 
 impl Register {
@@ -197,7 +247,7 @@ impl Register {
         match self {
             Self::GeneralPurpose(v) => v.name(),
             Self::Special(v) => v.name(),
-            Self::Coprocessor(v) => v.name(),
+            Self::Cp0(v) => v.name(),
         }
     }
 
@@ -205,7 +255,7 @@ impl Register {
         match self {
             Self::GeneralPurpose(v) => v.to_repr(),
             Self::Special(v) => v.to_repr(),
-            Self::Coprocessor(v) => v.to_repr(),
+            Self::Cp0(v) => v.to_repr(),
         }
     }
 }
@@ -222,8 +272,8 @@ impl From<Special> for Register {
     }
 }
 
-impl From<Coprocessor> for Register {
-    fn from(v: Coprocessor) -> Self {
-        Self::Coprocessor(v)
+impl From<Cp0> for Register {
+    fn from(v: Cp0) -> Self {
+        Self::Cp0(v)
     }
 }

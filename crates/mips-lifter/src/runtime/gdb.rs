@@ -173,12 +173,12 @@ where
         addr: <Self::Arch as gdbstub::arch::Arch>::Usize,
         _kind: <Self::Arch as gdbstub::arch::Arch>::BreakpointKind,
     ) -> TargetResult<bool, Self> {
-        self.debugger
+        Ok(self
+            .debugger
             .as_mut()
             .unwrap()
             .breakpoints
-            .insert(addr as _);
-        Ok(true)
+            .insert(addr as _))
     }
 
     fn remove_sw_breakpoint(
@@ -229,13 +229,12 @@ where
         &mut self,
         regs: &mut <Self::Arch as gdbstub::arch::Arch>::Registers,
     ) -> TargetResult<(), Self> {
-        regs.pc = (self.registers.special[register::Special::Pc as usize] + PC_OFFSET) as _;
-        regs.hi = self.registers.special[register::Special::Hi as usize] as _;
-        regs.lo = self.registers.special[register::Special::Lo as usize] as _;
-        regs.cp0.cause = self.registers.coprocessor[register::Coprocessor::Cache as usize] as _;
-        regs.cp0.status = self.registers.coprocessor[register::Coprocessor::Status as usize] as _;
-        regs.cp0.badvaddr =
-            self.registers.coprocessor[register::Coprocessor::BadVAddr as usize] as _;
+        regs.pc = (self.registers[register::Special::Pc] + PC_OFFSET) as _;
+        regs.hi = self.registers[register::Special::Hi] as _;
+        regs.lo = self.registers[register::Special::Lo] as _;
+        regs.cp0.cause = self.registers[register::Cp0::Cache] as _;
+        regs.cp0.status = self.registers[register::Cp0::Status] as _;
+        regs.cp0.badvaddr = self.registers[register::Cp0::BadVAddr] as _;
 
         for (i, r) in regs.r.iter_mut().enumerate() {
             *r = self.registers.general_purpose[i] as _;
@@ -253,12 +252,11 @@ where
             "gdb: attempted to change PC"
         );
 
-        self.registers.special[register::Special::Hi as usize] = regs.hi as _;
-        self.registers.special[register::Special::Lo as usize] = regs.lo as _;
-        self.registers.coprocessor[register::Coprocessor::Cause as usize] = regs.cp0.cause as _;
-        self.registers.coprocessor[register::Coprocessor::Status as usize] = regs.cp0.status as _;
-        self.registers.coprocessor[register::Coprocessor::BadVAddr as usize] =
-            regs.cp0.badvaddr as _;
+        self.registers[register::Special::Hi] = regs.hi as _;
+        self.registers[register::Special::Lo] = regs.lo as _;
+        self.registers[register::Cp0::Cause] = regs.cp0.cause as _;
+        self.registers[register::Cp0::Status] = regs.cp0.status as _;
+        self.registers[register::Cp0::BadVAddr] = regs.cp0.badvaddr as _;
 
         for (i, r) in regs.r.iter().enumerate() {
             self.registers.general_purpose[i] = *r as _;

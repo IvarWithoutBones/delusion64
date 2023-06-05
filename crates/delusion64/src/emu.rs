@@ -1,5 +1,3 @@
-use std::ops::Range;
-
 struct ConstRange<const START: u64, const END: u64>;
 
 impl<const START: u64, const END: u64> ConstRange<START, END> {
@@ -24,8 +22,9 @@ const RDRAM_MEM: ConstRange<0x00000000, 0x03F00000> = ConstRange::new();
 const RSP_DMEM: ConstRange<0x04000000, 0x04001000> = ConstRange::new();
 const RSP_IMEM: ConstRange<0x04001000, 0x04002000> = ConstRange::new();
 
-/// Allocates a boxed slice of a given length on the heap, initialized to 0.
+/// Allocates a boxed slice of a given length on the heap.
 fn boxed_slice<const LEN: usize>() -> Box<[u8; LEN]> {
+    // Use `vec!` to avoid stack allocation, it may overflow.
     vec![0; LEN].into_boxed_slice().try_into().unwrap()
 }
 
@@ -45,26 +44,9 @@ impl Emulator {
     }
 }
 
-impl mips_lifter::env::Memory for Emulator {
+impl mips_lifter::runtime::Memory for Emulator {
     #[inline]
     fn read_u8(&self, addr: u64) -> u8 {
-        // TODO: virtual memory mapping, see: http://en64.shoutwiki.com/wiki/N64_TLB
-        {
-            /// Extract a range of bits from the given number.
-            const fn bit_range(num: u64, range: Range<u64>) -> u64 {
-                assert!(range.start <= u64::BITS as _);
-                assert!(range.end <= u64::BITS as _);
-                let mask = 2_usize.pow((range.end - range.start) as _) - 1;
-                (num >> range.start) & mask as u64
-            }
-
-            let offset = bit_range(addr, 0..12);
-            let vpn = bit_range(addr, 12..29);
-            let access_type = bit_range(addr, 29..31);
-            let asid = bit_range(addr, 32..39);
-            println!("read_u8: addr={addr:#x} offset={offset:#x} vpn={vpn:#x} access_type={access_type:#x} asid={asid:#x}");
-        }
-
         match addr {
             _ if RDRAM_MEM.contains(addr) => self.rdram[RDRAM_MEM.index(addr)],
             _ if RSP_DMEM.contains(addr) => self.rsp_dmem[RSP_DMEM.index(addr)],

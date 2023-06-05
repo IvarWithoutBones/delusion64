@@ -1,9 +1,13 @@
+//! Functions that are called by the generated code, calling into the `Environment` struct.
+
 use inkwell::{
     context::ContextRef, execution_engine::ExecutionEngine, module::Module, types::FunctionType,
     AddressSpace,
 };
+use strum::{EnumIter, EnumVariantNames, VariantNames};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(EnumVariantNames, EnumIter, Debug, Clone, Copy, PartialEq, Eq)]
+#[strum(serialize_all = "snake_case")]
 pub enum RuntimeFunction {
     GetBlockId,
     PrintString,
@@ -22,32 +26,7 @@ pub enum RuntimeFunction {
 
 impl RuntimeFunction {
     pub const fn name(&self) -> &'static str {
-        match self {
-            Self::PrintString => "print_string",
-            Self::GetBlockId => "get_block_id",
-            Self::OnInstruction => "on_instruction",
-
-            Self::ReadI8 => "read_i8",
-            Self::ReadI16 => "read_i16",
-            Self::ReadI32 => "read_i32",
-            Self::ReadI64 => "read_i64",
-
-            Self::WriteI8 => "write_i8",
-            Self::WriteI16 => "write_i16",
-            Self::WriteI32 => "write_i32",
-            Self::WriteI64 => "write_i64",
-        }
-    }
-
-    pub const fn argument_count(&self) -> usize {
-        match self {
-            Self::GetBlockId => 1,
-            Self::PrintString => 2,
-            Self::OnInstruction => 0,
-
-            Self::ReadI8 | Self::ReadI16 | Self::ReadI32 | Self::ReadI64 => 1,
-            Self::WriteI8 | Self::WriteI16 | Self::WriteI32 | Self::WriteI64 => 2,
-        }
+        Self::VARIANTS[*self as usize]
     }
 
     #[inline]
@@ -72,7 +51,7 @@ impl RuntimeFunction {
             };
         }
 
-        // NOTE: Must match the specified functions signature in `env/mod.rs`!
+        // NOTE: Must match the specified functions signature in `runtime/mod.rs`!
         match self {
             // `Environment::block_id()`
             Self::GetBlockId => sig!(i64_type, [addr: i64_type]),
@@ -100,8 +79,9 @@ impl RuntimeFunction {
         }
     }
 
+    /// Maps the function into the given `ExecutionEngine`, at the given pointer.
     #[inline]
-    pub fn init<'ctx>(
+    pub fn map_into<'ctx>(
         &self,
         context: &ContextRef<'ctx>,
         module: &Module<'ctx>,

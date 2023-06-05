@@ -1,17 +1,16 @@
-use std::net::TcpStream;
-
-use crate::{codegen::CodeGen, env::function::RuntimeFunction, recompiler::recompile_instruction};
+use crate::{codegen::CodeGen, recompiler::recompile_instruction, runtime::RuntimeFunction};
 use inkwell::{context::Context, execution_engine::JitFunction, OptimizationLevel};
 use mips_decomp::{register, MaybeInstruction, INSTRUCTION_SIZE};
+use std::net::TcpStream;
 
 pub mod codegen;
-pub mod env;
 pub mod label;
 pub mod recompiler;
+pub mod runtime;
 
 pub fn lift<Mem>(mem: Mem, bin: &[u8], ir_path: Option<&str>, gdb_stream: Option<TcpStream>)
 where
-    Mem: env::Memory,
+    Mem: runtime::Memory,
 {
     let entry_point = 0;
     let decomp = mips_decomp::Decompiler::from(bin);
@@ -39,7 +38,7 @@ where
 
     let env = {
         let labels = labels.values().map(|l| l.to_owned()).collect::<Vec<_>>();
-        env::Environment::new(mem, labels, gdb_stream)
+        runtime::Environment::new(mem, labels, gdb_stream)
     };
     let codegen = CodeGen::new(context, module, execution_engine, &env);
 

@@ -362,6 +362,7 @@ dependencies = [
  "gdbstub_arch",
  "inkwell",
  "mips-decomp",
+ "strum",
 ]
 
 [[package]]

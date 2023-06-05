@@ -1,4 +1,4 @@
-use crate::env::{function::RuntimeFunction, Environment, Memory};
+use crate::runtime::{Environment, Memory, RuntimeFunction};
 use inkwell::{
     basic_block::BasicBlock,
     builder::Builder,
@@ -28,7 +28,7 @@ pub struct Globals<'ctx> {
     pub env_ptr: GlobalValue<'ctx>,
     pub general_purpose_regs: GlobalValue<'ctx>,
     pub special_regs: GlobalValue<'ctx>,
-    pub coprocessor_regs: GlobalValue<'ctx>,
+    pub cp0_regs: GlobalValue<'ctx>,
 }
 
 pub struct CodeGen<'ctx> {
@@ -145,16 +145,16 @@ impl<'ctx> CodeGen<'ctx> {
         let reg = reg.into();
         let i64_type = self.context.i64_type();
 
-        let registers_ptr = match reg {
+        let base_ptr = match reg {
             Register::GeneralPurpose(_) => self.globals.general_purpose_regs.as_pointer_value(),
             Register::Special(_) => self.globals.special_regs.as_pointer_value(),
-            Register::Coprocessor(_) => self.globals.coprocessor_regs.as_pointer_value(),
+            Register::Cp0(_) => self.globals.cp0_regs.as_pointer_value(),
         };
 
         unsafe {
             self.builder.build_in_bounds_gep(
                 i64_type,
-                registers_ptr,
+                base_ptr,
                 &[i64_type.const_int(reg.to_repr() as _, false)],
                 &format!("{}_ptr", reg.name()),
             )
@@ -221,7 +221,7 @@ impl<'ctx> CodeGen<'ctx> {
     where
         T: Into<u64>,
     {
-        let reg = register::Coprocessor::from_repr(index.into() as _).unwrap();
+        let reg = register::Cp0::from_repr(index.into() as _).unwrap();
         let i64_type = self.context.i64_type();
         let register = self.register_pointer(reg);
         self.builder
@@ -232,7 +232,7 @@ impl<'ctx> CodeGen<'ctx> {
     where
         T: Into<u64>,
     {
-        let reg = register::Coprocessor::from_repr(index.into() as _).unwrap();
+        let reg = register::Cp0::from_repr(index.into() as _).unwrap();
         let reg_ptr = self.register_pointer(reg);
         self.builder.build_store(reg_ptr, value);
     }
