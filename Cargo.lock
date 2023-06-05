@@ -363,6 +363,7 @@ dependencies = [
  "inkwell",
  "mips-decomp",
  "strum",
+ "tartan-bitfield",
 ]
 
 [[package]]
@@ -552,6 +553,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "tartan-bitfield"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bfa876904e2a36ff0362a6fc808b105300aa7bad584edab5c5111f1e198b726c"
+dependencies = [
+ "paste",
 ]
 
 [[package]]

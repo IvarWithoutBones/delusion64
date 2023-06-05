@@ -1,12 +1,14 @@
 //! The runtime environment for generated code.
 
+use self::memory::TranslationLookasideBuffer;
 use crate::{codegen, label::Label};
 use inkwell::{execution_engine::ExecutionEngine, module::Module, AddressSpace};
 use mips_decomp::register;
 use std::{fmt, net::TcpStream, pin::Pin};
 use strum::IntoEnumIterator;
 
-pub use self::{function::RuntimeFunction, memory::Memory};
+pub(crate) use self::function::RuntimeFunction;
+pub use self::memory::Memory;
 
 mod function;
 mod gdb;
@@ -22,10 +24,11 @@ pub struct Environment<'ctx, Mem>
 where
     Mem: Memory,
 {
-    labels: Vec<Label<'ctx>>,
     memory: Mem,
+    tlb: TranslationLookasideBuffer,
     pub(crate) registers: Registers,
     debugger: Option<gdb::Debugger<'ctx, Mem>>,
+    labels: Vec<Label<'ctx>>,
 }
 
 impl<'ctx, Mem> Environment<'ctx, Mem>
@@ -39,6 +42,7 @@ where
     ) -> Pin<Box<Self>> {
         let mut env = Self {
             registers: Registers::default(),
+            tlb: TranslationLookasideBuffer::default(),
             debugger: None,
             labels,
             memory,
@@ -119,7 +123,7 @@ where
 
     unsafe extern "C" fn on_instruction(&mut self) {
         if self.debugger.is_some() {
-            let pc = self.registers.special[register::Special::Pc as usize];
+            let pc = self.registers[register::Special::Pc];
             self.debugger.as_mut().unwrap().on_instruction(pc);
             self.update_debugger();
             while self.debugger.as_ref().unwrap().is_paused() {
@@ -146,36 +150,52 @@ where
         }
     }
 
-    unsafe extern "C" fn read_u8(&mut self, addr: u64) -> u8 {
-        self.memory.read_u8(addr)
+    unsafe extern "C" fn read_u8(&mut self, vaddr: u64) -> u8 {
+        let entry_hi = self.registers[register::Cp0::EntryHi];
+        let paddr = self.tlb.translate(vaddr, entry_hi).unwrap();
+        self.memory.read_u8(paddr)
     }
 
-    unsafe extern "C" fn read_u16(&mut self, addr: u64) -> u16 {
-        self.memory.read_u16(addr)
+    unsafe extern "C" fn read_u16(&mut self, vaddr: u64) -> u16 {
+        let entry_hi = self.registers[register::Cp0::EntryHi];
+        let paddr = self.tlb.translate(vaddr, entry_hi).unwrap();
+        self.memory.read_u16(paddr)
     }
 
-    unsafe extern "C" fn read_u32(&mut self, addr: u64) -> u32 {
-        self.memory.read_u32(addr)
+    unsafe extern "C" fn read_u32(&mut self, vaddr: u64) -> u32 {
+        let entry_hi = self.registers[register::Cp0::EntryHi];
+        let paddr = self.tlb.translate(vaddr, entry_hi).unwrap();
+        self.memory.read_u32(paddr)
     }
 
-    unsafe extern "C" fn read_u64(&mut self, addr: u64) -> u64 {
-        self.memory.read_u64(addr)
+    unsafe extern "C" fn read_u64(&mut self, vaddr: u64) -> u64 {
+        let entry_hi = self.registers[register::Cp0::EntryHi];
+        let paddr = self.tlb.translate(vaddr, entry_hi).unwrap();
+        self.memory.read_u64(paddr)
     }
 
-    unsafe extern "C" fn write_u8(&mut self, addr: u64, value: u8) {
-        self.memory.write_u8(addr, value)
+    unsafe extern "C" fn write_u8(&mut self, vaddr: u64, value: u8) {
+        let entry_hi = self.registers[register::Cp0::EntryHi];
+        let paddr = self.tlb.translate(vaddr, entry_hi).unwrap();
+        self.memory.write_u8(paddr, value)
     }
 
-    unsafe extern "C" fn write_u16(&mut self, addr: u64, value: u16) {
-        self.memory.write_u16(addr, value)
+    unsafe extern "C" fn write_u16(&mut self, vaddr: u64, value: u16) {
+        let entry_hi = self.registers[register::Cp0::EntryHi];
+        let paddr = self.tlb.translate(vaddr, entry_hi).unwrap();
+        self.memory.write_u16(paddr, value)
     }
 
-    unsafe extern "C" fn write_u32(&mut self, addr: u64, value: u32) {
-        self.memory.write_u32(addr, value)
+    unsafe extern "C" fn write_u32(&mut self, vaddr: u64, value: u32) {
+        let entry_hi = self.registers[register::Cp0::EntryHi];
+        let paddr = self.tlb.translate(vaddr, entry_hi).unwrap();
+        self.memory.write_u32(paddr, value)
     }
 
-    unsafe extern "C" fn write_u64(&mut self, addr: u64, value: u64) {
-        self.memory.write_u64(addr, value)
+    unsafe extern "C" fn write_u64(&mut self, vaddr: u64, value: u64) {
+        let entry_hi = self.registers[register::Cp0::EntryHi];
+        let paddr = self.tlb.translate(vaddr, entry_hi).unwrap();
+        self.memory.write_u64(paddr, value)
     }
 }
 

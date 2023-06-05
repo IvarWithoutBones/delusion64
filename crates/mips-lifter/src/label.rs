@@ -170,6 +170,7 @@ impl<'ctx> LabelPass<'ctx> {
     }
 
     /// Dump the labels and the generated LLVM IR to stderr.
+    #[allow(dead_code)]
     pub fn dump(&self) {
         println!("\nlabels:");
         for v in self.labels.values() {

@@ -13,3 +13,4 @@ gdbstub = "0.6.6"
 gdbstub_arch = "0.2.4"
 mips-decomp = { path = "../mips-decomp" }
 strum = { version = "0.24.1", features = ["derive"] }
+tartan-bitfield = "1.2.0"

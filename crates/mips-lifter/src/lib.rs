@@ -3,9 +3,9 @@ use inkwell::{context::Context, execution_engine::JitFunction, OptimizationLevel
 use mips_decomp::{register, MaybeInstruction, INSTRUCTION_SIZE};
 use std::net::TcpStream;
 
-pub mod codegen;
-pub mod label;
-pub mod recompiler;
+mod codegen;
+mod label;
+mod recompiler;
 pub mod runtime;
 
 pub fn lift<Mem>(mem: Mem, bin: &[u8], ir_path: Option<&str>, gdb_stream: Option<TcpStream>)
@@ -45,7 +45,7 @@ where
     // Generate the main functions entry block
     codegen.builder.position_at_end(entry_block);
 
-    // Set the stack pointer
+    // Set the initial stack pointer
     codegen.write_general_reg(
         register::GeneralPurpose::Sp,
         codegen
