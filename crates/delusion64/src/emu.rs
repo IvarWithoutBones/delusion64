@@ -1,31 +1,31 @@
 use std::ops::Range;
 
-const RDRAM_MEM: Range<u64> = 0x00000000..0x03F00000;
-const RDRAM_REGISTERS: Range<u64> = 0x03F00000..0x03F80000;
-const RDRAM_REGISTERS_WRITE_ONLY: Range<u64> = 0x03F80000..0x04000000;
+pub const RDRAM_MEM: Range<u64> = 0x00000000..0x03F00000;
+pub const RDRAM_REGISTERS: Range<u64> = 0x03F00000..0x03F80000;
+pub const RDRAM_REGISTERS_WRITE_ONLY: Range<u64> = 0x03F80000..0x04000000;
 
-const RSP_DMEM: Range<u64> = 0x04000000..0x04001000;
-const RSP_IMEM: Range<u64> = 0x04001000..0x04002000;
-const RSP_DRAM_IRAM_MIRRORS: Range<u64> = 0x04002000..0x04040000;
-const RSP_REGISTERS: Range<u64> = 0x04040000..0x040C0000;
-const RSP_COMMAND_REGISTERS: Range<u64> = 0x04100000..0x041FFFFF;
-const RSP_SPAN_REGISTERS: Range<u64> = 0x04200000..0x04300000;
+pub const RSP_DMEM: Range<u64> = 0x04000000..0x04001000;
+pub const RSP_IMEM: Range<u64> = 0x04001000..0x04002000;
+pub const RSP_DRAM_IRAM_MIRRORS: Range<u64> = 0x04002000..0x04040000;
+pub const RSP_REGISTERS: Range<u64> = 0x04040000..0x040C0000;
+pub const RSP_COMMAND_REGISTERS: Range<u64> = 0x04100000..0x041FFFFF;
+pub const RSP_SPAN_REGISTERS: Range<u64> = 0x04200000..0x04300000;
 
-const MIPS_INTERFACE: Range<u64> = 0x04300000..0x04400000;
-const VIDEO_INTERFACE: Range<u64> = 0x04400000..0x04500000;
-const AUDIO_INTERFACE: Range<u64> = 0x04500000..0x04600000;
-const PERIPHERAL_INTERFACE: Range<u64> = 0x04600000..0x04700000;
-const RDRAM_INTERFACE: Range<u64> = 0x04700000..0x04800000;
-const SERIAL_INTERFACE: Range<u64> = 0x04800000..0x048FFFFF;
+pub const MIPS_INTERFACE: Range<u64> = 0x04300000..0x04400000;
+pub const VIDEO_INTERFACE: Range<u64> = 0x04400000..0x04500000;
+pub const AUDIO_INTERFACE: Range<u64> = 0x04500000..0x04600000;
+pub const PERIPHERAL_INTERFACE: Range<u64> = 0x04600000..0x04700000;
+pub const RDRAM_INTERFACE: Range<u64> = 0x04700000..0x04800000;
+pub const SERIAL_INTERFACE: Range<u64> = 0x04800000..0x048FFFFF;
 
-const DISK_DRIVE_REGISTERS: Range<u64> = 0x05000000..0x06000000;
-const DISK_DRIVE_IPL4_ROM: Range<u64> = 0x06000000..0x08000000;
+pub const DISK_DRIVE_REGISTERS: Range<u64> = 0x05000000..0x06000000;
+pub const DISK_DRIVE_IPL4_ROM: Range<u64> = 0x06000000..0x08000000;
 
-const CARTRIDGE_SRAM: Range<u64> = 0x08000000..0x10000000;
-const CARTRIDGE_ROM: Range<u64> = 0x10000000..0x1FC00000;
+pub const CARTRIDGE_SRAM: Range<u64> = 0x08000000..0x10000000;
+pub const CARTRIDGE_ROM: Range<u64> = 0x10000000..0x1FC00000;
 
-const PIF_ROM: Range<u64> = 0x1FC00000..0x1FC007C0;
-const PIF_RAM: Range<u64> = 0x1FC007C0..0x1FC00800;
+pub const PIF_ROM: Range<u64> = 0x1FC00000..0x1FC007C0;
+pub const PIF_RAM: Range<u64> = 0x1FC007C0..0x1FC00800;
 
 const fn range_len(range: Range<u64>) -> usize {
     (range.end - range.start) as usize
@@ -45,11 +45,13 @@ pub struct Emulator {
     pub rdram: Box<[u8; range_len(RDRAM_MEM)]>,
     pub rsp_dmem: Box<[u8; range_len(RSP_DMEM)]>,
     pub rsp_imem: Box<[u8; range_len(RSP_IMEM)]>,
+    pub cartridge_rom: Box<[u8]>,
 }
 
 impl Emulator {
-    pub fn new() -> Self {
+    pub fn new(cartridge_rom: Box<[u8]>) -> Self {
         Self {
+            cartridge_rom,
             rdram: boxed_slice(),
             rsp_dmem: boxed_slice(),
             rsp_imem: boxed_slice(),
@@ -139,8 +141,7 @@ impl mips_lifter::runtime::Memory for Emulator {
             }
 
             _ if CARTRIDGE_ROM.contains(&addr) => {
-                println!("stub: cartridge ROM read at {addr:#x}");
-                0
+                self.cartridge_rom[subtract_range(CARTRIDGE_ROM, addr)]
             }
 
             _ if PIF_ROM.contains(&addr) => {
@@ -217,7 +218,7 @@ impl mips_lifter::runtime::Memory for Emulator {
             }
 
             _ if DISK_DRIVE_IPL4_ROM.contains(&addr) => {
-                println!("stub: DD IPL4 ROM write at {addr:#x} = {value:#x}");
+                panic!("DD IPL4 ROM write at {addr:#x} = {value:#x}");
             }
 
             _ if CARTRIDGE_SRAM.contains(&addr) => {

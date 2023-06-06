@@ -125,9 +125,9 @@ impl<'a> Decompiler<'a> {
 
     pub fn blocks(&self) -> impl Iterator<Item = Block> + '_ {
         let mut pos = 0;
-        let mut found_end = false;
+        let mut found_eof = false;
         std::iter::from_fn(move || {
-            if found_end {
+            if found_eof {
                 return None;
             }
 
@@ -135,24 +135,31 @@ impl<'a> Decompiler<'a> {
             loop {
                 if let Some(raw) = self.read_u32(pos) {
                     pos += INSTRUCTION_SIZE;
-                    let (instr, ends_block) = {
+                    let (instr, ends_block, is_valid) = {
                         let instr: MaybeInstruction = raw.into();
                         let ends_block = instr.ends_block();
-                        (instr, ends_block)
+                        let is_valid = instr.is_valid();
+                        (instr, ends_block, is_valid)
                     };
 
+                    if !is_valid {
+                        break;
+                    }
+
                     block.push(instr);
+
                     if ends_block {
                         break;
                     }
                 } else {
-                    found_end = true;
+                    found_eof = true;
                     break;
                 }
             }
 
             Some(block)
         })
+        .filter(|block| !block.is_empty())
     }
 
     pub fn pretty_print(&self, blocks: &BlockList) {
@@ -225,8 +232,8 @@ pub fn reorder_delay_slots(blocks: BlockList) -> BlockList {
         if instr.has_delay_slot() {
             // Swap the last instruction with the first instruction of the next block.
             let next_instr = result[block_idx + 1].first().unwrap();
-            if !next_instr.is_valid() {
-                // Can't swap invalid instructions.
+            if next_instr.ends_block() {
+                // Can't swap if the next instruction ends the block. This is UB in MIPS.
                 continue;
             }
 

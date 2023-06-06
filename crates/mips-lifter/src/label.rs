@@ -32,11 +32,18 @@ pub struct LabelPass<'ctx> {
     module: Module<'ctx>,
     labels: Labels<'ctx>,
     raw_blocks: &'ctx BlockList,
+    offset: u64,
 }
 
 impl<'ctx> LabelPass<'ctx> {
-    pub fn new(context: &'ctx Context, module: Module<'ctx>, raw_blocks: &'ctx BlockList) -> Self {
+    pub fn new(
+        context: &'ctx Context,
+        module: Module<'ctx>,
+        raw_blocks: &'ctx BlockList,
+        offset: u64,
+    ) -> Self {
         Self {
+            offset,
             context,
             module,
             raw_blocks,
@@ -49,7 +56,7 @@ impl<'ctx> LabelPass<'ctx> {
         let current_func = self.module.get_last_function().unwrap();
 
         let mut id = 0;
-        let mut pos = 0;
+        let mut pos = self.offset;
         for raw_block in self.raw_blocks.iter() {
             self.labels.entry(pos).or_insert_with(|| {
                 let name = Label::name(pos);
@@ -77,10 +84,13 @@ impl<'ctx> LabelPass<'ctx> {
                                 .raw_blocks
                                 .iter()
                                 .flatten()
-                                .skip(target as usize / INSTRUCTION_SIZE)
+                                .skip(
+                                    (target.saturating_sub(self.offset)) as usize
+                                        / INSTRUCTION_SIZE,
+                                )
                                 .take_while(|instr| {
                                     // Take the very last instruction as well.
-                                    if instr.ends_block() {
+                                    if instr.ends_block() && !found {
                                         found = true;
                                         true
                                     } else {
@@ -92,11 +102,11 @@ impl<'ctx> LabelPass<'ctx> {
 
                             id += 1;
                             Label {
-                                start_address: target as _,
+                                start_address: target,
                                 fall_through: None,
                                 instructions,
                                 basic_block,
-                                id: id as _,
+                                id,
                             }
                         });
 
@@ -124,7 +134,7 @@ impl<'ctx> LabelPass<'ctx> {
                                 .raw_blocks
                                 .iter()
                                 .flatten()
-                                .skip(start_address as usize / INSTRUCTION_SIZE)
+                                .skip(((start_address - self.offset) as usize) / INSTRUCTION_SIZE)
                                 .take_while(|instr| !instr.ends_block())
                                 .cloned()
                                 .collect();

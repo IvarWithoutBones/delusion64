@@ -8,11 +8,15 @@ mod label;
 mod recompiler;
 pub mod runtime;
 
-pub fn lift<Mem>(mem: Mem, bin: &[u8], ir_path: Option<&str>, gdb_stream: Option<TcpStream>)
-where
+pub fn lift<Mem>(
+    bin: &[u8],
+    entry_point: u64,
+    mem: Mem,
+    ir_path: Option<&str>,
+    gdb_stream: Option<TcpStream>,
+) where
     Mem: runtime::Memory,
 {
-    let entry_point = 0;
     let decomp = mips_decomp::Decompiler::from(bin);
     let blocks = mips_decomp::reorder_delay_slots(decomp.blocks().collect());
     #[cfg(feature = "debug-print")]
@@ -32,9 +36,15 @@ where
     let exit_block = context.append_basic_block(main, "exit");
 
     // Generate labels for all blocks, and insert them into the function.
-    let mut label_pass = label::LabelPass::new(&context, module, &blocks);
+    let mut label_pass = label::LabelPass::new(&context, module, &blocks, entry_point);
     label_pass.run();
+
+    // 10000c64
+    // label_pass.dump();
+    // return;
+
     let (context, module, labels) = label_pass.consume();
+
 
     let env = {
         let labels = labels.values().map(|l| l.to_owned()).collect::<Vec<_>>();

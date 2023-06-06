@@ -207,7 +207,9 @@ impl Mnenomic {
                 | Mnenomic::Tge
                 | Mnenomic::Tgei
                 | Mnenomic::Tgeiu
-                | Mnenomic::Tgeu)
+                | Mnenomic::Tgeu
+                | Mnenomic::Scd
+                | Mnenomic::Sc)
     }
 
     pub const fn discards_delay_slot(&self) -> bool {

@@ -44,17 +44,16 @@ fn main() {
     });
     println!("{cart:#?}");
 
-    let mut emulator = Emulator::new();
-    emulator.rdram[0x8000..cart.ipl3_boot_code.len() + 0x8000]
-        .copy_from_slice(&*cart.ipl3_boot_code);
-
     let maybe_gdb_stream = cli
         .gdb
         .map(|port| wait_for_gdb_connection(port).expect("failed to wait for GDB connection"));
 
+    let emulator = Emulator::new(cart.ipl3_boot_code.clone());
+
     mips_lifter::lift(
+        cart.ipl3_boot_code.as_slice(),
+        emu::CARTRIDGE_ROM.start,
         emulator,
-        &cart.ipl3_boot_code.as_slice()[..0xb2c],
         cli.llvm_ir_output.as_deref(),
         maybe_gdb_stream,
     );

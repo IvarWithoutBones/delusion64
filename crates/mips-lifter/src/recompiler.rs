@@ -18,6 +18,36 @@ pub fn recompile_instruction(
     let i64_type = codegen.context.i64_type();
 
     match mnemonic {
+        Mnenomic::Tgei => {
+            // If signed rs is greater than or equal to sign-extended immediate, cause a trap exception
+            // TODO: Implement this once exception handling is present
+        }
+
+        Mnenomic::Syscall => {
+            // Causes system call exception
+            // TODO: implement this once exception handling is present
+        }
+
+        Mnenomic::Break => {
+            // Causes breakpoint exception
+            // TODO: Implement this once exception handling is present
+        }
+
+        Mnenomic::Copz => {
+            // Perform coprocessor operation
+            // TODO: Implement this
+        }
+
+        Mnenomic::Bczfl => {
+            // If CPz's CpCond is false, branch to address (delay slot + offset), otherwise discard delay slot instruction
+            // TODO: Implement this
+        }
+
+        Mnenomic::Lwl => {
+            // Loads a portion of a word beginning at memory address (base + offset), stores 1-4 bytes in high-order portion of rt
+            // TODO: Implement this
+        }
+
         Mnenomic::Mtc0 => {
             // Copy contents of GPR rt, to CP0's coprocessor register rd
             let target = codegen.read_general_reg(instr.rt());
@@ -30,22 +60,19 @@ pub fn recompile_instruction(
             codegen.write_general_reg(instr.rt(), destination);
         }
 
+        Mnenomic::Mfcz => {
+            // Copy contents of CPz's coprocessor register rd, to GPR rt
+            // TODO: dont assume cp0
+            let value = codegen.read_cp0_reg(instr.rd());
+            codegen.write_general_reg(instr.rt(), value);
+        }
+
         Mnenomic::Lwcz => {
             // Copies word stored at memory address (base + offset), to CPz register rt
-            assert_ne!(instr.coprocessor(), 1); // TODO: remove once the FPU is implemented
+            // TODO: dont assume cp0
             let address = codegen.base_plus_offset(instr, "lwcz_addr");
             let value = codegen.read_memory(i32_type, address);
             codegen.write_cp0_reg(instr.rt(), value);
-        }
-
-        Mnenomic::Copz => {
-            // Perform coprocessor operation
-            // TODO: Implement this
-        }
-
-        Mnenomic::Break => {
-            // Causes breakpoint exception
-            // TODO: Implement this
         }
 
         Mnenomic::Jal => {
@@ -70,6 +97,78 @@ pub fn recompile_instruction(
             let target_block = labels.get(&(target as _)).unwrap().basic_block;
             println!("jumping from {address:#x} to {target:#x}");
             codegen.builder.build_unconditional_branch(target_block);
+        }
+
+        Mnenomic::Sc => {
+            // If LL bit is set, stores contents of rt, to memory address (base + offset)
+            let ll_bit = codegen.read_special_reg(register::Special::LoadLink);
+            let cond = codegen.builder.build_int_compare(
+                IntPredicate::EQ,
+                ll_bit.into_int_value(),
+                i64_type.const_int(1, false),
+                "sc_cond",
+            );
+
+            let curr_block = codegen.builder.get_insert_block().unwrap();
+            let func = curr_block.get_parent().unwrap();
+
+            let then_block = codegen.context.append_basic_block(func, "sc_then");
+            let continue_block = labels
+                .get(&(address as _))
+                .map_or_else(|| codegen.label_not_found, |x| x.basic_block);
+
+            codegen.builder.position_at_end(then_block);
+            let addr = codegen.base_plus_offset(instr, "sc_addr");
+            let value = codegen.read_general_reg(instr.rt());
+            codegen.write_memory(addr, value);
+            codegen.builder.build_unconditional_branch(continue_block);
+
+            codegen.builder.position_at_end(curr_block);
+            codegen
+                .builder
+                .build_conditional_branch(cond, then_block, continue_block);
+        }
+
+        Mnenomic::Scd => {
+            // If LL bit is set, stores contents of rt, to memory address (base + offset)
+            let ll_bit = codegen.read_special_reg(register::Special::LoadLink);
+
+            let cond = codegen.builder.build_int_compare(
+                IntPredicate::EQ,
+                ll_bit.into_int_value(),
+                i64_type.const_int(1, false),
+                "scd_cond",
+            );
+
+            let curr_block = codegen.builder.get_insert_block().unwrap();
+            let func = curr_block.get_parent().unwrap();
+
+            let then_block = codegen.context.append_basic_block(func, "scd_then");
+            let continue_block = labels
+                .get(&(address as _))
+                .map_or_else(|| codegen.label_not_found, |x| x.basic_block);
+
+            codegen.builder.position_at_end(then_block);
+            let addr = codegen.base_plus_offset(instr, "scd_addr");
+            let value = codegen.read_general_reg(instr.rt());
+            codegen.write_memory(addr, value);
+            codegen.builder.build_unconditional_branch(continue_block);
+
+            codegen.builder.position_at_end(curr_block);
+            codegen
+                .builder
+                .build_conditional_branch(cond, then_block, continue_block);
+        }
+
+        Mnenomic::Ll => {
+            // Loads word stored at memory address (base + offset), stores sign-extended word in rt, and sets the LL bit to 1
+            let addr = codegen.base_plus_offset(instr, "ll_addr");
+            let value = codegen.read_memory(i32_type, addr).into_int_value();
+            let sign_extended = codegen.sign_extend_to_i64(value);
+            codegen.write_general_reg(instr.rt(), sign_extended.into());
+
+            let one = i64_type.const_int(1, false).into();
+            codegen.write_special_reg(register::Special::LoadLink, one);
         }
 
         Mnenomic::And => {
@@ -106,12 +205,15 @@ pub fn recompile_instruction(
             codegen.write_general_reg(instr.rd(), result.into());
         }
 
-        Mnenomic::Or => {
-            // OR rs and rt, store result in rd
+        Mnenomic::Daddi => {
+            // Add sign-extended 16bit immediate and rs, store result in rt
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
-            let target = codegen.read_general_reg(instr.rt()).into_int_value();
-            let result = codegen.builder.build_or(source, target, "or_res");
-            codegen.write_general_reg(instr.rd(), result.into());
+            let immediate =
+                codegen.sign_extend_to_i64(i16_type.const_int(instr.immediate() as _, false));
+            let result = codegen
+                .builder
+                .build_int_add(source, immediate, "daddi_res");
+            codegen.write_general_reg(instr.rt(), result.into());
         }
 
         Mnenomic::Daddu => {
@@ -122,6 +224,13 @@ pub fn recompile_instruction(
             codegen.write_general_reg(instr.rd(), result.into());
         }
 
+        Mnenomic::Or => {
+            // OR rs and rt, store result in rd
+            let source = codegen.read_general_reg(instr.rs()).into_int_value();
+            let target = codegen.read_general_reg(instr.rt()).into_int_value();
+            let result = codegen.builder.build_or(source, target, "or_res");
+            codegen.write_general_reg(instr.rd(), result.into());
+        }
         Mnenomic::Dsll => {
             // Shift rt left by sa bits, store result in rd (64-bits)
             let shift = i64_type.const_int(instr.sa() as _, false);
@@ -226,6 +335,16 @@ pub fn recompile_instruction(
             let result = codegen
                 .builder
                 .build_right_shift(target, shift, true, "srlv_shift");
+            codegen.write_general_reg(instr.rd(), result.into());
+        }
+
+        Mnenomic::Sra => {
+            // Shift rt right by sa bits, store sign-extended result in rd
+            let target = codegen.read_general_reg(instr.rt()).into_int_value();
+            let shift = i64_type.const_int(instr.sa() as _, false);
+            let result = codegen
+                .builder
+                .build_right_shift(target, shift, true, "sra_shift");
             codegen.write_general_reg(instr.rd(), result.into());
         }
 
@@ -519,6 +638,16 @@ pub fn recompile_instruction(
             codegen.write_general_reg(instr.rt(), value.into());
         }
 
+        Mnenomic::Lh => {
+            // Loads halfword stored at memory address (base + offset), stores sign-extended halfword in rt
+            let address = codegen.base_plus_offset(instr, "lh_addr");
+            let value = {
+                let value = codegen.read_memory(i16_type, address);
+                codegen.sign_extend_to_i64(value.into_int_value())
+            };
+            codegen.write_general_reg(instr.rt(), value.into());
+        }
+
         Mnenomic::Lui => {
             // 16-bit immediate is shifted left 16 bits using trailing zeros, result placed in rt
             let immediate =
@@ -672,12 +801,10 @@ pub fn recompile_instruction(
 
             let then_block = labels
                 .get(&(instr.try_resolve_static_jump(address as _).unwrap() as _))
-                .unwrap()
-                .basic_block;
+                .map_or_else(|| codegen.label_not_found, |x| x.basic_block);
             let else_block = labels
                 .get(&(address + INSTRUCTION_SIZE as u64))
-                .unwrap()
-                .basic_block;
+                .map_or_else(|| codegen.label_not_found, |x| x.basic_block);
 
             codegen
                 .builder
@@ -696,12 +823,10 @@ pub fn recompile_instruction(
 
             let then_block = labels
                 .get(&(instr.try_resolve_static_jump(address as _).unwrap() as _))
-                .unwrap()
-                .basic_block;
+                .map_or_else(|| codegen.label_not_found, |x| x.basic_block);
             let else_block = labels
                 .get(&(address + INSTRUCTION_SIZE as u64))
-                .unwrap()
-                .basic_block;
+                .map_or_else(|| codegen.label_not_found, |x| x.basic_block);
 
             codegen
                 .builder
@@ -720,12 +845,10 @@ pub fn recompile_instruction(
 
             let then_block = labels
                 .get(&(instr.try_resolve_static_jump(address as _).unwrap() as _))
-                .unwrap()
-                .basic_block;
+                .map_or_else(|| codegen.label_not_found, |x| x.basic_block);
             let else_block = labels
                 .get(&(address + INSTRUCTION_SIZE as u64))
-                .unwrap()
-                .basic_block;
+                .map_or_else(|| codegen.label_not_found, |x| x.basic_block);
 
             codegen
                 .builder
@@ -744,12 +867,10 @@ pub fn recompile_instruction(
 
             let then_block = labels
                 .get(&(instr.try_resolve_static_jump(address as _).unwrap() as _))
-                .unwrap()
-                .basic_block;
+                .map_or_else(|| codegen.label_not_found, |x| x.basic_block);
             let else_block = labels
                 .get(&(address + (2 * INSTRUCTION_SIZE) as u64))
-                .unwrap()
-                .basic_block;
+                .map_or_else(|| codegen.label_not_found, |x| x.basic_block);
 
             codegen
                 .builder
@@ -767,12 +888,12 @@ pub fn recompile_instruction(
                     .builder
                     .build_int_compare(IntPredicate::SGE, source, zero, "bgezal_cmp");
 
-            let else_block = labels.get(&(next_addr)).unwrap().basic_block;
-
+            let else_block = labels
+                .get(&(next_addr))
+                .map_or_else(|| codegen.label_not_found, |x| x.basic_block);
             let then_real_block = labels
                 .get(&(instr.try_resolve_static_jump(address as _).unwrap() as _))
-                .unwrap()
-                .basic_block;
+                .map_or_else(|| codegen.label_not_found, |x| x.basic_block);
 
             // Create a new block that sets r31 and branches to the real block
             let curr_block = codegen.builder.get_insert_block().unwrap();
@@ -786,11 +907,48 @@ pub fn recompile_instruction(
                 i64_type.const_int(next_addr as _, false).into(),
             );
             codegen.builder.build_unconditional_branch(then_real_block);
-            codegen.builder.position_at_end(curr_block);
 
+            codegen.builder.position_at_end(curr_block);
             codegen
                 .builder
-                .build_conditional_branch(cmp, then_real_block, else_block);
+                .build_conditional_branch(cmp, then_block, else_block);
+        }
+
+        Mnenomic::Bltzal => {
+            // If rs is less than zero, branch to address (delay slot + offset) and store next address to r31 (ra)
+            let source = codegen.read_general_reg(instr.rs()).into_int_value();
+            let zero = i64_type.const_int(0, false);
+            let next_addr = address + INSTRUCTION_SIZE as u64;
+
+            let cmp =
+                codegen
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, source, zero, "bltzal_cmp");
+
+            let then_real_block = labels
+                .get(&(instr.try_resolve_static_jump(address as _).unwrap() as _))
+                .map_or_else(|| codegen.label_not_found, |x| x.basic_block);
+            let else_block = labels
+                .get(&next_addr)
+                .map_or_else(|| codegen.label_not_found, |x| x.basic_block);
+
+            // Create a new block that sets r31 and branches to the real block
+            let curr_block = codegen.builder.get_insert_block().unwrap();
+            let then_block = codegen
+                .context
+                .append_basic_block(curr_block.get_parent().unwrap(), "bltzal_then");
+
+            codegen.builder.position_at_end(then_block);
+            codegen.write_general_reg(
+                register::GeneralPurpose::Ra,
+                i64_type.const_int(next_addr, false).into(),
+            );
+            codegen.builder.build_unconditional_branch(then_real_block);
+
+            codegen.builder.position_at_end(curr_block);
+            codegen
+                .builder
+                .build_conditional_branch(cmp, then_block, else_block);
         }
 
         Mnenomic::Bnel => {
@@ -805,12 +963,32 @@ pub fn recompile_instruction(
 
             let then_block = labels
                 .get(&(instr.try_resolve_static_jump(address as _).unwrap() as _))
-                .unwrap()
-                .basic_block;
+                .map_or_else(|| codegen.label_not_found, |x| x.basic_block);
             let else_block = labels
                 .get(&(address + (2 * INSTRUCTION_SIZE) as u64))
-                .unwrap()
-                .basic_block;
+                .map_or_else(|| codegen.label_not_found, |x| x.basic_block);
+
+            codegen
+                .builder
+                .build_conditional_branch(cmp, then_block, else_block);
+        }
+
+        Mnenomic::Blez => {
+            // If rs is less than or equal to zero, branch to address (delay slot + offset)
+            let source = codegen.read_general_reg(instr.rs()).into_int_value();
+            let zero = i64_type.const_int(0, false);
+
+            let cmp =
+                codegen
+                    .builder
+                    .build_int_compare(IntPredicate::SLE, source, zero, "blez_cmp");
+
+            let then_block = labels
+                .get(&(instr.try_resolve_static_jump(address as _).unwrap() as _))
+                .map_or_else(|| codegen.label_not_found, |x| x.basic_block);
+            let else_block = labels
+                .get(&(address + INSTRUCTION_SIZE as u64))
+                .map_or_else(|| codegen.label_not_found, |x| x.basic_block);
 
             codegen
                 .builder
@@ -829,12 +1007,10 @@ pub fn recompile_instruction(
 
             let then_block = labels
                 .get(&(instr.try_resolve_static_jump(address as _).unwrap() as _))
-                .unwrap()
-                .basic_block;
+                .map_or_else(|| codegen.label_not_found, |x| x.basic_block);
             let else_block = labels
                 .get(&(address + (2 * INSTRUCTION_SIZE) as u64))
-                .unwrap()
-                .basic_block;
+                .map_or_else(|| codegen.label_not_found, |x| x.basic_block);
 
             codegen
                 .builder
@@ -853,12 +1029,10 @@ pub fn recompile_instruction(
 
             let then_block = labels
                 .get(&(instr.try_resolve_static_jump(address as _).unwrap() as _))
-                .unwrap()
-                .basic_block;
+                .map_or_else(|| codegen.label_not_found, |x| x.basic_block);
             let else_block = labels
                 .get(&(address + (2 * INSTRUCTION_SIZE) as u64))
-                .unwrap()
-                .basic_block;
+                .map_or_else(|| codegen.label_not_found, |x| x.basic_block);
 
             codegen
                 .builder
@@ -877,12 +1051,10 @@ pub fn recompile_instruction(
 
             let then_block = labels
                 .get(&(instr.try_resolve_static_jump(address as _).unwrap() as _))
-                .unwrap()
-                .basic_block;
+                .map_or_else(|| codegen.label_not_found, |x| x.basic_block);
             let else_block = labels
                 .get(&(address + INSTRUCTION_SIZE as u64))
-                .unwrap()
-                .basic_block;
+                .map_or_else(|| codegen.label_not_found, |x| x.basic_block);
 
             codegen
                 .builder
