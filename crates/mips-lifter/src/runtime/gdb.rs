@@ -16,9 +16,6 @@ use std::{collections::HashSet, net::TcpStream};
 
 type Connection = Box<dyn ConnectionExt<Error = std::io::Error>>;
 
-// Arbitrary offset as GDB dislikes debugging around 0, can be removed when a proper memory map is present
-const PC_OFFSET: u64 = 0x8000;
-
 #[derive(Default)]
 enum State {
     Running,
@@ -58,7 +55,7 @@ where
     }
 
     pub fn on_instruction(&mut self, pc: u64) {
-        if self.breakpoints.contains(&(pc + PC_OFFSET)) {
+        if self.breakpoints.contains(&pc) {
             self.stop_reason = Some(SingleThreadStopReason::SwBreak(()));
             self.state = State::Paused;
         }
@@ -229,7 +226,7 @@ where
         &mut self,
         regs: &mut <Self::Arch as gdbstub::arch::Arch>::Registers,
     ) -> TargetResult<(), Self> {
-        regs.pc = (self.registers[register::Special::Pc] + PC_OFFSET) as _;
+        regs.pc = self.registers[register::Special::Pc] as _;
         regs.hi = self.registers[register::Special::Hi] as _;
         regs.lo = self.registers[register::Special::Lo] as _;
         regs.cp0.cause = self.registers[register::Cp0::Cache] as _;

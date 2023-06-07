@@ -9,8 +9,5 @@
 /.direnv
 /.envrc
 
-# GDB
-/.gdbinit
-
 # Emulator
 *.z64
