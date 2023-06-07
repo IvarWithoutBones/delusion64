@@ -60,6 +60,7 @@ impl<'ctx> LabelPass<'ctx> {
         for raw_block in self.raw_blocks.iter() {
             self.labels.entry(pos).or_insert_with(|| {
                 let name = Label::name(pos);
+                println!("creating label {name}");
                 let basic_block = self.context.append_basic_block(current_func, &name);
                 id += 1;
                 Label {
@@ -78,6 +79,7 @@ impl<'ctx> LabelPass<'ctx> {
                         self.labels.entry(target as _).or_insert_with(|| {
                             let name = Label::name(target as _);
                             let basic_block = self.context.append_basic_block(current_func, &name);
+                            println!("creating label {name}");
 
                             let mut found = false;
                             let instructions = self
@@ -128,6 +130,7 @@ impl<'ctx> LabelPass<'ctx> {
                         let start_address = pos + (INSTRUCTION_SIZE * 2) as u64;
                         self.labels.entry(start_address).or_insert_with(|| {
                             let name = Label::name(start_address);
+                            println!("creating label {name}");
                             let basic_block = self.context.append_basic_block(current_func, &name);
 
                             let instructions = self

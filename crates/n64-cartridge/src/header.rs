@@ -33,6 +33,7 @@ pub enum CategoryCode {
     ExpandableGamePak = b'C',
     ExpandableDiskDrive = b'E',
     Aleck64GamePak = b'Z',
+    Unknown = 0, // Used by some homebrew ROMs
 }
 
 #[derive(BinRead, Debug)]
@@ -59,12 +60,13 @@ pub enum DestinationCode {
     Europe1 = b'X',
     Europe2 = b'Y',
     Europe3 = b'Z',
+    Unknown = 0, // Used by some homebrew ROMs
 }
 
 #[derive(BinRead, Debug)]
 pub struct GameCode {
     pub category: CategoryCode,
-    #[br(map = |x: [u8; 2]| [x[0] as char, x[1] as char])]
+    #[br(map = |x: [u8; 2]| x.map(|b| b as char))]
     pub unique: [char; 2],
     pub destination: DestinationCode,
 }

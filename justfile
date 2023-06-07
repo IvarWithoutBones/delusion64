@@ -1,6 +1,7 @@
 alias ir := llvm-ir
 alias bin := compile-ll
 alias dis := disassemble
+alias swap := endian-swap
 
 # Ensures the terminal is in a sane state upon exit (it might not be when GDB crashes).
 gdb:
@@ -48,3 +49,7 @@ compile-ll input-ll output-bin:
         "$TMPFILE" "{{output-bin}}"
 
     just disassemble "$TMPFILE"
+
+# Endian swaps a binary file, useful for older homebrew ROMs.
+endian-swap input-bin output-bin num-bytes="4":
+    objcopy --target binary --reverse-bytes={{num-bytes}} "{{input-bin}}" "{{output-bin}}"

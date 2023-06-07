@@ -48,10 +48,14 @@ fn main() {
         .gdb
         .map(|port| wait_for_gdb_connection(port).expect("failed to wait for GDB connection"));
 
-    let emulator = Emulator::new(cart.ipl3_boot_code.clone());
+    let mut rom = cart.ipl3_boot_code.to_vec();
+    rom.extend_from_slice(&cart.data);
+    let rom = rom.into_boxed_slice();
+    let emulator = Emulator::new(rom.clone());
 
     mips_lifter::lift(
-        cart.ipl3_boot_code.as_slice(),
+        &rom[..0x70000],
+        // &rom[..0x90000],
         emu::CARTRIDGE_ROM.start,
         emulator,
         cli.llvm_ir_output.as_deref(),

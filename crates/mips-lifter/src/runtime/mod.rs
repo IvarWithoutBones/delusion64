@@ -55,7 +55,7 @@ where
         Box::pin(env)
     }
 
-    pub fn init(
+    pub fn map_into(
         &self,
         module: &Module<'ctx>,
         execution_engine: &ExecutionEngine<'ctx>,

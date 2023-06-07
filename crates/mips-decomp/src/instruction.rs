@@ -208,8 +208,9 @@ impl Mnenomic {
                 | Mnenomic::Tgei
                 | Mnenomic::Tgeiu
                 | Mnenomic::Tgeu
-                | Mnenomic::Scd
-                | Mnenomic::Sc)
+                // Ends the block because it uses conditionals
+                | Mnenomic::Sc
+                | Mnenomic::Scd)
     }
 
     pub const fn discards_delay_slot(&self) -> bool {
@@ -254,8 +255,8 @@ impl Signedness {
         match self {
             Signedness::Signed32 => format!("{}", num as i32),
             Signedness::Signed16 => format!("{}", num as i16),
-            Signedness::Unsigned32 => format!("{}", num),
-            Signedness::Unsigned16 => format!("{}", num as u16),
+            Signedness::Unsigned32 => format!("{:#x}", num),
+            Signedness::Unsigned16 => format!("{:#x}", num as u16),
         }
     }
 }
@@ -295,7 +296,8 @@ impl Instruction {
             [.., (Operand::Immediate, Signedness::Unsigned32)] => {
                 // Jump instructions
                 let target = (self.pattern.get(Operand::Immediate, raw)? << 2) as u64;
-                Some((pc & 0xFFFFFFFFF0000000) | target)
+                let pc_high = pc & 0xf000_0000;
+                Some(pc_high | target)
             }
 
             _ => todo!(

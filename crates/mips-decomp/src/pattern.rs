@@ -36,7 +36,7 @@ const fn parse_binary_string(input: &[u8], start: usize, len: usize) -> usize {
     result
 }
 
-const fn bit_range(num: u32, range: &Range<u32>) -> u32 {
+pub const fn bit_range(num: u32, range: &Range<u32>) -> u32 {
     assert!(range.start <= u32::BITS);
     assert!(range.end <= u32::BITS);
     let mask = 2_usize.pow(range.end - range.start) - 1;
