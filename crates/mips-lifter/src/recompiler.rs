@@ -247,68 +247,64 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
 
         Mnenomic::Jal => {
             // Jump to target address, stores return address in r31 (ra)
-            let target = instr.try_resolve_static_jump(pc as _).unwrap();
-            let target_block = codegen.get_basic_block(target);
-
             let return_address = codegen.build_i64(next_pc).into_int_value();
             codegen.write_general_reg(register::GeneralPurpose::Ra, return_address.into());
 
-            codegen.builder.build_unconditional_branch(target_block);
+            let target = instr.try_resolve_static_jump(pc as _).unwrap();
+            codegen.call_label(codegen.get_label(target));
         }
 
         Mnenomic::J => {
             // Jump to target address
             let target_pc = instr.try_resolve_static_jump(pc as _).unwrap();
-            let target_block = codegen.get_basic_block(target_pc);
-            codegen.builder.build_unconditional_branch(target_block);
+            codegen.call_label(codegen.get_label(target_pc));
         }
 
-        Mnenomic::Sc => {
-            // If LL bit is set, stores contents of rt, to memory address (base + offset)
-            let ll_bit = codegen.read_special_reg(register::Special::LoadLink);
-            let cond = codegen.builder.build_int_compare(
-                IntPredicate::EQ,
-                ll_bit.into_int_value(),
-                i64_type.const_int(1, false),
-                "sc_cond",
-            );
-
-            let next_block = codegen.get_basic_block(next_pc);
-            let name = format!("label_{pc:6x}_write");
-            let then_block = codegen.build_fall_through_block(&name, next_block, || {
-                let addr = codegen.base_plus_offset(instr, "sc_addr");
-                let value = codegen.read_general_reg(instr.rt());
-                codegen.write_memory(addr, value);
-            });
-
-            codegen
-                .builder
-                .build_conditional_branch(cond, then_block, next_block);
-        }
-
-        Mnenomic::Scd => {
-            // If LL bit is set, stores contents of rt, to memory address (base + offset)
-            let ll_bit = codegen.read_special_reg(register::Special::LoadLink);
-            let cond = codegen.builder.build_int_compare(
-                IntPredicate::EQ,
-                ll_bit.into_int_value(),
-                i64_type.const_int(1, false),
-                "scd_cond",
-            );
-
-            let next_block = codegen.get_basic_block(next_pc);
-            let name = format!("label_{pc:6x}_write");
-            let then_block = codegen.build_fall_through_block(&name, next_block, || {
-                let addr = codegen.base_plus_offset(instr, "scd_addr");
-                let value = codegen.read_general_reg(instr.rt());
-                codegen.write_memory(addr, value);
-            });
-
-            codegen
-                .builder
-                .build_conditional_branch(cond, then_block, next_block);
-        }
-
+        // Mnenomic::Sc => {
+        //     // If LL bit is set, stores contents of rt, to memory address (base + offset)
+        //     let ll_bit = codegen.read_special_reg(register::Special::LoadLink);
+        //     let cond = codegen.builder.build_int_compare(
+        //         IntPredicate::EQ,
+        //         ll_bit.into_int_value(),
+        //         i64_type.const_int(1, false),
+        //         "sc_cond",
+        //     );
+        //
+        //     let next_block = codegen.get_label(next_pc);
+        //     let name = format!("label_{pc:06x}_write");
+        //     let then_block = codegen.build_fall_through_block(&name, next_block, || {
+        //         let addr = codegen.base_plus_offset(instr, "sc_addr");
+        //         let value = codegen.read_general_reg(instr.rt());
+        //         codegen.write_memory(addr, value);
+        //     });
+        //
+        //     codegen
+        //         .builder
+        //         .build_conditional_branch(cond, then_block, next_block);
+        // }
+        //
+        // Mnenomic::Scd => {
+        //     // If LL bit is set, stores contents of rt, to memory address (base + offset)
+        //     let ll_bit = codegen.read_special_reg(register::Special::LoadLink);
+        //     let cond = codegen.builder.build_int_compare(
+        //         IntPredicate::EQ,
+        //         ll_bit.into_int_value(),
+        //         i64_type.const_int(1, false),
+        //         "scd_cond",
+        //     );
+        //
+        //     let next_block = codegen.get_label(next_pc);
+        //     let name = format!("label_{pc:6x}_write");
+        //     let then_block = codegen.build_fall_through_block(&name, next_block, || {
+        //         let addr = codegen.base_plus_offset(instr, "scd_addr");
+        //         let value = codegen.read_general_reg(instr.rt());
+        //         codegen.write_memory(addr, value);
+        //     });
+        //
+        //     codegen
+        //         .builder
+        //         .build_conditional_branch(cond, then_block, next_block);
+        // }
         Mnenomic::Ll => {
             // Loads word stored at memory address (base + offset), stores sign-extended word in rt, and sets the LL bit to 1
             let addr = codegen.base_plus_offset(instr, "ll_addr");
@@ -1141,7 +1137,7 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
                     .build_int_compare(IntPredicate::EQ, source, target, "beq_cmp");
 
             let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch(cmp, target_pc, next_pc);
+            codegen.build_conditional_branch(cmp, target_pc);
         }
 
         Mnenomic::Bne => {
@@ -1154,7 +1150,7 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
                     .build_int_compare(IntPredicate::NE, source, target, "bne_cmp");
 
             let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch(cmp, target_pc, next_pc);
+            codegen.build_conditional_branch(cmp, target_pc);
         }
 
         Mnenomic::Bltz => {
@@ -1167,7 +1163,7 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
                     .build_int_compare(IntPredicate::SLT, source, zero, "bltz_cmp");
 
             let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch(cmp, target_pc, next_pc);
+            codegen.build_conditional_branch(cmp, target_pc);
         }
 
         Mnenomic::Bltzl => {
@@ -1180,7 +1176,7 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
                     .build_int_compare(IntPredicate::SLT, source, zero, "bltz_cmp");
 
             let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch(cmp, target_pc, next_pc);
+            codegen.build_conditional_branch(cmp, target_pc);
         }
 
         Mnenomic::Beql => {
@@ -1193,7 +1189,7 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
                     .build_int_compare(IntPredicate::EQ, source, target, "beql_cmp");
 
             let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch(cmp, target_pc, next_pc);
+            codegen.build_conditional_branch(cmp, target_pc);
         }
 
         Mnenomic::Bgezal => {
@@ -1258,7 +1254,7 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
                     .build_int_compare(IntPredicate::NE, source, target, "bnel_cmp");
 
             let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch(cmp, target_pc, next_pc);
+            codegen.build_conditional_branch(cmp, target_pc);
         }
 
         Mnenomic::Blez => {
@@ -1271,7 +1267,7 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
                     .build_int_compare(IntPredicate::SLE, source, zero, "blez_cmp");
 
             let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch(cmp, target_pc, next_pc);
+            codegen.build_conditional_branch(cmp, target_pc);
         }
 
         Mnenomic::Blezl => {
@@ -1284,7 +1280,7 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
                     .build_int_compare(IntPredicate::SLE, source, zero, "blezl_cmp");
 
             let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch(cmp, target_pc, next_pc);
+            codegen.build_conditional_branch(cmp, target_pc);
         }
 
         Mnenomic::Bgezl => {
@@ -1297,7 +1293,7 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
                     .build_int_compare(IntPredicate::SGE, source, zero, "blezl_cmp");
 
             let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch(cmp, target_pc, next_pc);
+            codegen.build_conditional_branch(cmp, target_pc);
         }
 
         Mnenomic::Bgez => {
@@ -1310,7 +1306,7 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
                     .build_int_compare(IntPredicate::SGE, source, zero, "bgez_cmp");
 
             let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch(cmp, target_pc, next_pc);
+            codegen.build_conditional_branch(cmp, target_pc);
         }
 
         Mnenomic::Bgtz => {
@@ -1323,7 +1319,7 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
                     .build_int_compare(IntPredicate::SGT, source, zero, "bgtz_cmp");
 
             let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch(cmp, target_pc, next_pc);
+            codegen.build_conditional_branch(cmp, target_pc);
         }
 
         Mnenomic::Bgtzl => {
@@ -1336,7 +1332,7 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
                     .build_int_compare(IntPredicate::SGT, source, zero, "bgtz_cmp");
 
             let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch(cmp, target_pc, next_pc);
+            codegen.build_conditional_branch(cmp, target_pc);
         }
 
         _ => todo!("instruction {} at {pc:#x}", instr.mnemonic().name()),

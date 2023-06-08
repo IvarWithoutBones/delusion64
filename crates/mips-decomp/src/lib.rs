@@ -1,14 +1,14 @@
 use crate::instruction::ParsedInstruction;
 
 pub mod instruction;
+mod label;
 mod pattern;
 pub mod register;
 
+pub use crate::label::{Label, LabelList};
+
 pub const INSTRUCTION_SIZE: usize = 4;
 pub const REGISTER_COUNT: usize = 32;
-
-pub type Block = Vec<MaybeInstruction>;
-pub type BlockList = Vec<Block>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MaybeInstruction {
@@ -80,17 +80,18 @@ impl std::fmt::Display for MaybeInstruction {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Endian {
+    #[default]
     Big,
     Little,
 }
 
 pub struct Decompiler<'a> {
     /// The binary to disassemble.
-    bin: &'a [u8],
+    pub bin: &'a [u8],
     /// The endianness of the binary.
-    endian: Endian,
+    pub endian: Endian,
     /// The current position in the binary.
     pos: usize,
 }
@@ -104,86 +105,23 @@ impl<'a> Decompiler<'a> {
         }
     }
 
-    pub fn next_instruction(&mut self) -> Option<ParsedInstruction> {
+    pub fn next_instruction(&mut self) -> Option<MaybeInstruction> {
         let raw_instr = self.read_u32(self.pos)?;
         self.pos += INSTRUCTION_SIZE;
         raw_instr.try_into().ok()
     }
 
-    pub fn instruction_at(&self, pos: usize) -> Option<ParsedInstruction> {
+    pub fn instruction_at(&self, pos: usize) -> Option<MaybeInstruction> {
         self.read_u32(pos)?.try_into().ok()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = ParsedInstruction> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = MaybeInstruction> + '_ {
         let mut pos = 0;
         std::iter::from_fn(move || {
             let instr = self.instruction_at(pos)?;
             pos += INSTRUCTION_SIZE;
             Some(instr)
         })
-    }
-
-    pub fn blocks(&self) -> impl Iterator<Item = Block> + '_ {
-        let mut pos = 0;
-        let mut found_eof = false;
-        std::iter::from_fn(move || {
-            if found_eof {
-                return None;
-            }
-
-            let mut block = Vec::new();
-            loop {
-                if let Some(raw) = self.read_u32(pos) {
-                    pos += INSTRUCTION_SIZE;
-                    let (instr, ends_block, is_valid) = {
-                        let instr: MaybeInstruction = raw.into();
-                        let ends_block = instr.ends_block();
-                        let is_valid = instr.is_valid();
-                        (instr, ends_block, is_valid)
-                    };
-
-                    if !is_valid {
-                        break;
-                    }
-
-                    block.push(instr);
-
-                    if ends_block {
-                        break;
-                    }
-                } else {
-                    found_eof = true;
-                    break;
-                }
-            }
-
-            Some(block)
-        })
-        .filter(|block| !block.is_empty())
-    }
-
-    pub fn pretty_print(&self, blocks: &BlockList) {
-        let mut pos = 0;
-        for (i, block) in blocks.iter().enumerate() {
-            println!("block {i}:");
-
-            for instr in block.iter() {
-                let formatted = format!("  {pos:#04x}    {instr}");
-
-                if instr.is_valid() && instr.ends_block() {
-                    // Last instruction in block, usually because of a jump.
-                    if let Some(target) = instr.try_resolve_static_jump(pos) {
-                        println!("{formatted: <40}-> {target:#04x}");
-                    } else {
-                        println!("{formatted: <40}-> ???");
-                    }
-                } else {
-                    println!("{formatted}");
-                }
-
-                pos += INSTRUCTION_SIZE as u64;
-            }
-        }
     }
 
     fn read_u32(&self, from_pos: usize) -> Option<u32> {
@@ -212,42 +150,4 @@ impl<'a> From<&'a [u8]> for Decompiler<'a> {
             endian: Endian::Big,
         }
     }
-}
-
-pub fn reorder_delay_slots(blocks: BlockList) -> BlockList {
-    // Cloning isnt very efficient, but can be fixed later.
-    let mut result = blocks.clone();
-    for (block_idx, block) in blocks.iter().enumerate() {
-        if block.is_empty() || block_idx + 1 >= result.len() {
-            // No next block, so we can't swap.
-            continue;
-        }
-
-        let instr = block.last().unwrap();
-        if !instr.is_valid() {
-            // Can't swap invalid instructions.
-            continue;
-        }
-
-        if instr.has_delay_slot() {
-            // Swap the last instruction with the first instruction of the next block.
-            let next_instr = result[block_idx + 1].first().unwrap();
-            if next_instr.ends_block() {
-                // Can't swap if the next instruction ends the block. This is UB in MIPS.
-                continue;
-            }
-
-            let next_instr = result[block_idx + 1].remove(0);
-            let instr = result[block_idx].pop().unwrap();
-
-            result[block_idx].push(next_instr);
-            result[block_idx].push(instr);
-
-            // Remove empty blocks
-            if result[block_idx + 1].is_empty() {
-                result.remove(block_idx + 1);
-            }
-        }
-    }
-    result
 }

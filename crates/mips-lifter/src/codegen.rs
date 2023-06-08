@@ -1,4 +1,4 @@
-use crate::{label::Labels, runtime::RuntimeFunction};
+use crate::{label::LabelWithContext, runtime::RuntimeFunction};
 use inkwell::{
     basic_block::BasicBlock,
     builder::Builder,
@@ -7,7 +7,8 @@ use inkwell::{
     module::Module,
     types::IntType,
     values::{
-        BasicMetadataValueEnum, BasicValueEnum, CallSiteValue, GlobalValue, IntValue, PointerValue,
+        BasicMetadataValueEnum, BasicValueEnum, CallSiteValue, FunctionValue, GlobalValue,
+        IntValue, PointerValue,
     },
     IntPredicate,
 };
@@ -40,13 +41,14 @@ pub struct CodeGen<'ctx> {
 
     /// Global mappings to the runtime environment.
     pub globals: Globals<'ctx>,
-    /// The generated labels, with associated basic blocks.
-    pub labels: Labels<'ctx>,
-    /// The generated label IDs, with associated basic blocks.
-    /// Can be used from a switch statement to resolve dynamic jumps.
-    pub label_cases: Vec<(IntValue<'ctx>, BasicBlock<'ctx>)>,
-    /// The basic block to jump to when a dynamic jump could not be resolved.
-    pub label_not_found: BasicBlock<'ctx>,
+
+    /// The generated labels, with associated functions.
+    pub labels: Vec<LabelWithContext<'ctx>>,
+
+    pub dynamic_jump_to_id: FunctionValue<'ctx>,
+
+    /// The function to jump to when a dynamic jump could not be resolved.
+    pub label_not_found: FunctionValue<'ctx>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -55,51 +57,113 @@ impl<'ctx> CodeGen<'ctx> {
         module: Module<'ctx>,
         execution_engine: ExecutionEngine<'ctx>,
         globals: Globals<'ctx>,
-        labels: Labels<'ctx>,
+        labels: Vec<LabelWithContext<'ctx>>,
     ) -> Self {
-        let i64_type = context.i64_type();
-        let label_cases = labels
-            .values()
-            .map(|label| {
-                let id = i64_type.const_int(label.id, false);
-                (id, label.basic_block)
-            })
-            .collect::<Vec<_>>();
+        let builder = context.create_builder();
 
-        let label_not_found =
-            context.append_basic_block(module.get_function("main").unwrap(), "label_not_found");
+        let label_not_found = module.add_function(
+            "label_not_found",
+            context.void_type().fn_type(&[], false),
+            None,
+        );
+        label_not_found.set_call_conventions(crate::LLVM_CALLING_CONVENTION_FAST);
+
+        let i64_type = context.i64_type();
+        let dynamic_jump_to_id = module.add_function(
+            "dynamic_jump_to_id",
+            context.void_type().fn_type(&[i64_type.into()], false),
+            None,
+        );
+        dynamic_jump_to_id.set_call_conventions(crate::LLVM_CALLING_CONVENTION_FAST);
 
         let codegen = Self {
             context,
             module,
-            builder: context.create_builder(),
+            builder,
             execution_engine,
             globals,
             labels,
-            label_cases,
             label_not_found,
+            dynamic_jump_to_id,
         };
 
-        // Initialize the error case for attempting to jump to a label that doesn't exist.
-        codegen.builder.position_at_end(label_not_found);
-        codegen.print_constant_string(
-            "ERROR: unable to fetch basic block\n",
-            "label_not_found_str",
-        );
-        codegen.builder.build_return(None);
-
+        codegen.init_dynamic_jump_to_id();
+        codegen.init_label_not_found();
         codegen
+    }
+
+    // Initialise the dynamic label lookup function.
+    fn init_dynamic_jump_to_id(&self) {
+        let main_block = self
+            .context
+            .append_basic_block(self.dynamic_jump_to_id, "main");
+
+        let error_block = self
+            .context
+            .append_basic_block(self.dynamic_jump_to_id, "error");
+        self.builder.position_at_end(error_block);
+        self.print_constant_string(
+            "ERROR: unable to fetch label for dynamic jump\n",
+            "label_not_found_dynamic_jump_str",
+        );
+        self.builder.build_return(None);
+
+        let cases = {
+            let i64_type = self.context.i64_type();
+            let mut cases = Vec::with_capacity(self.labels.len());
+            for label in &self.labels {
+                let label_id = label.label.start() as u64;
+                let name = format!("case_{label_id:06x}",);
+
+                let block = self
+                    .context
+                    .append_basic_block(self.dynamic_jump_to_id, &name);
+                self.builder.position_at_end(block);
+                self.call_label(label.function);
+
+                cases.push((i64_type.const_int(label_id, false), block));
+            }
+            cases
+        };
+
+        self.builder.position_at_end(main_block);
+        self.builder.build_switch(
+            self.dynamic_jump_to_id
+                .get_first_param()
+                .unwrap()
+                .into_int_value(),
+            error_block,
+            &cases,
+        );
+    }
+
+    /// Initializes the error case that occurs when attempting to jump to a label that wasnt found.
+    fn init_label_not_found(&self) {
+        let label_not_found_block = self
+            .context
+            .append_basic_block(self.label_not_found, "label_not_found");
+        self.builder.position_at_end(label_not_found_block);
+        self.print_constant_string("ERROR: unable to fetch label\n", "label_not_found_str");
+        self.builder.build_return(None);
     }
 
     pub fn verify(&self) -> Result<(), String> {
         self.module.verify().map_err(|e| e.to_string())
     }
 
-    /// Gets the basic block associated with the given address, or the error block if none exists.
-    pub fn get_basic_block(&self, address: u64) -> BasicBlock<'ctx> {
+    /// Get the label associated with the given address, or the error function if it doesn't exist.
+    pub fn get_label(&self, address: u64) -> FunctionValue<'ctx> {
         self.labels
-            .get(&address)
-            .map_or_else(|| self.label_not_found, |l| l.basic_block)
+            .iter()
+            .find(|l| l.label.start() == (address as usize / mips_decomp::INSTRUCTION_SIZE))
+            .map_or_else(|| self.label_not_found, |l| l.function)
+    }
+
+    pub fn call_label(&self, label: FunctionValue<'ctx>) {
+        let callsite_value = self.builder.build_call(label, &[], "");
+        callsite_value.set_tail_call(true);
+        callsite_value.set_call_convention(crate::LLVM_CALLING_CONVENTION_FAST);
+        self.builder.build_return(None);
     }
 
     pub fn get_function<F>(&self, name: &str) -> Option<JitFunction<F>>
@@ -166,7 +230,7 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     /// Generate a conditional branch to the given address, and sets the return address to the next instruction.
-    /// This ends the current basic block. Useful for static conditional branches.
+    /// Sets the current insert block to the case the comparison is false, to support fallthrough.
     pub fn build_conditional_branch_set_ra(
         &self,
         cmp: IntValue<'ctx>,
@@ -174,28 +238,47 @@ impl<'ctx> CodeGen<'ctx> {
         next_instr_pc: u64,
     ) {
         let i64_type = self.context.i64_type();
-        let target_block = self.get_basic_block(target_pc);
-        let else_block = self.get_basic_block(next_instr_pc);
+        let curr_block = self.builder.get_insert_block().unwrap();
+        let curr_fn = curr_block.get_parent().unwrap();
+        let curr_name = curr_block.get_name().to_str().unwrap().to_string();
 
-        let name = format!("label_{next_instr_pc:6x}_set_ra");
-        let then_block = self.build_fall_through_block(&name, target_block, || {
-            self.write_general_reg(
-                register::GeneralPurpose::Ra,
-                i64_type.const_int(next_instr_pc, false).into(),
-            );
-        });
+        let then_name = format!("{curr_name}_cond_branch_then");
+        let then_block = self.context.append_basic_block(curr_fn, &then_name);
+        let else_name = format!("{curr_name}_cond_branch_else");
+        let else_block = self.context.append_basic_block(curr_fn, &else_name);
 
         self.builder
             .build_conditional_branch(cmp, then_block, else_block);
+
+        self.builder.position_at_end(then_block);
+        self.write_general_reg(
+            register::GeneralPurpose::Ra,
+            i64_type.const_int(next_instr_pc, false).into(),
+        );
+        self.call_label(self.get_label(target_pc));
+
+        self.builder.position_at_end(else_block);
     }
 
     /// Generate a conditional branch to the given address, ending the current basic block.
-    /// Useful for static conditional branches.
-    pub fn build_conditional_branch(&self, cmp: IntValue<'ctx>, then_pc: u64, else_pc: u64) {
-        let then_block = self.get_basic_block(then_pc);
-        let else_block = self.get_basic_block(else_pc);
+    /// Sets the current insert block to the case the comparison is false, to support fallthrough.
+    pub fn build_conditional_branch(&self, cmp: IntValue<'ctx>, target_pc: u64) {
+        let curr_block = self.builder.get_insert_block().unwrap();
+        let curr_fn = curr_block.get_parent().unwrap();
+        let curr_name = curr_block.get_name().to_str().unwrap().to_string();
+
+        let then_name = format!("{curr_name}_cond_branch_then");
+        let then_block = self.context.append_basic_block(curr_fn, &then_name);
+        let else_name = format!("{curr_name}_cond_branch_else");
+        let else_block = self.context.append_basic_block(curr_fn, &else_name);
+
         self.builder
             .build_conditional_branch(cmp, then_block, else_block);
+
+        self.builder.position_at_end(then_block);
+        self.call_label(self.get_label(target_pc));
+
+        self.builder.position_at_end(else_block);
     }
 
     /// Generate a dynamic jump to the given address, ending the current basic block.
@@ -207,8 +290,11 @@ impl<'ctx> CodeGen<'ctx> {
         };
 
         // Build a switch statement with all possible labels.
-        self.builder
-            .build_switch(label_id, self.label_not_found, &self.label_cases);
+        let callsite_value =
+            self.builder
+                .build_call(self.dynamic_jump_to_id, &[label_id.into()], "dynamic_jump");
+        callsite_value.set_tail_call(true);
+        callsite_value.set_call_convention(crate::LLVM_CALLING_CONVENTION_FAST);
     }
 
     pub fn build_i64<T>(&self, value: T) -> BasicMetadataValueEnum<'ctx>

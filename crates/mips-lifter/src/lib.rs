@@ -1,27 +1,30 @@
-use crate::{codegen::CodeGen, recompiler::recompile_instruction, runtime::RuntimeFunction};
+use crate::codegen::CodeGen;
 use inkwell::{context::Context, execution_engine::JitFunction, OptimizationLevel};
-use mips_decomp::{register, MaybeInstruction, INSTRUCTION_SIZE};
+use mips_decomp::register;
 use std::net::TcpStream;
 
+#[macro_use]
 mod codegen;
 mod label;
 mod recompiler;
 pub mod runtime;
 
-pub fn lift<Mem>(
-    bin: &[u8],
-    entry_point: u64,
-    mem: Mem,
-    ir_path: Option<&str>,
-    gdb_stream: Option<TcpStream>,
-) where
+/// The "fast" calling convention, as defined by LLVM at https://llvm.org/doxygen/namespacellvm_1_1CallingConv.html.
+/// "Attempts to make calls as fast as possible (e.g. by passing things in registers)."
+// TODO: upstream this to inkwell
+const LLVM_CALLING_CONVENTION_FAST: u32 = 8;
+
+// TODO: dont do this all at once, provide a builder API instead.
+// TODO: pass a range we can read from `mem` instead of a slice to be more consistent with the runtime.
+pub fn run<Mem>(bin: &[u8], mem: Mem, gdb_stream: Option<TcpStream>, ir_path: Option<&str>)
+where
     Mem: runtime::Memory,
 {
-    println!("disassembling {:#x} bytes", bin.len());
-    let decomp = mips_decomp::Decompiler::from(bin);
-    let blocks = mips_decomp::reorder_delay_slots(decomp.blocks().collect());
+    let labels = mips_decomp::LabelList::from(bin);
+    println!("{:#?}", labels);
+    // return;
 
-    // Create an LLVM module and execution engine.
+    // Create the compiler context.
     let context = Context::create();
     let module = context.create_module("codegen");
     let execution_engine = module
@@ -30,85 +33,57 @@ pub fn lift<Mem>(
 
     // Create the main function.
     let fn_type = context.void_type().fn_type(&[], false);
+    let i64_type = context.i64_type();
     let main = module.add_function("main", fn_type, None);
     let entry_block = context.append_basic_block(main, "entry");
 
-    // Generate labels for all blocks, and insert them into the function.
-    println!("generating labels");
-    let mut label_pass = label::LabelPass::new(&context, module, &blocks, entry_point);
-    label_pass.run();
-
-    // label_pass.dump();
-    // return;
-
-    let (context, module, labels) = label_pass.consume();
-
+    // Create our own compilation/runtime environment.
+    let labels_with_context = label::generate_label_functions(labels, &context, &module);
     let (env, globals) = {
-        let labels = labels.values().map(|l| l.to_owned()).collect::<Vec<_>>();
-        let env = runtime::Environment::new(mem, labels, gdb_stream);
+        let env = runtime::Environment::new(mem, labels_with_context.to_owned(), gdb_stream);
         let globals = env.map_into(&module, &execution_engine);
         (env, globals)
     };
-    let codegen = CodeGen::new(context, module, execution_engine, globals, labels);
+    let codegen = CodeGen::new(
+        &context,
+        module,
+        execution_engine,
+        globals,
+        labels_with_context,
+    );
 
-    // Generate the main functions entry block
+    // Build the main function.
     codegen.builder.position_at_end(entry_block);
+
+    // Set the initial register state.
+    // TODO: move this to a downstream crate
     codegen.write_general_reg(
         register::GeneralPurpose::Sp,
-        codegen.build_i64(0x500_u32).into_int_value().into(),
+        i64_type.const_int(0x500, false).into(),
+        // i64_type.const_int(0xFFFFFFFFA4001FF0, false).into(),
     );
-    codegen
-        .builder
-        .build_unconditional_branch(codegen.get_basic_block(entry_point));
 
-    // Generate code for each label.
-    for (lab_idx, label) in codegen.labels.values().enumerate() {
-        println!(
-            "generating instructions for label {}/{}",
-            lab_idx + 1,
-            codegen.labels.len()
-        );
+    codegen.write_general_reg(
+        register::GeneralPurpose::S6,
+        i64_type.const_int(0x000000000000003F, false).into(),
+    );
 
-        let basic_block = label.basic_block;
-        codegen.builder.position_at_end(basic_block);
-        for (i, instr) in label.instructions.iter().enumerate() {
-            let addr = label.start_address + (i * INSTRUCTION_SIZE) as u64;
+    codegen.write_general_reg(
+        register::GeneralPurpose::S4,
+        i64_type.const_int(0x0000000000000001, false).into(),
+    );
 
-            // Print the instruction if the debug-print feature is enabled.
-            #[cfg(feature = "debug-print")]
-            {
-                let instr_str = if let Some(target) = instr.try_resolve_static_jump(addr) {
-                    format!("{addr:#06x}: {instr}\t-> {target:#06x}\n")
-                } else {
-                    format!("{addr:#06x}: {instr}\n")
-                };
+    codegen.write_general_reg(
+        register::GeneralPurpose::T3,
+        i64_type.const_int(0xFFFFFFFFA4000040, false).into(),
+    );
 
-                let storage_name = format!("instr_str_{addr:06x}");
-                codegen.print_constant_string(&instr_str, &storage_name);
-            }
+    codegen.call_label(codegen.get_label(0));
 
-            let pc = codegen.build_i64(addr).into_int_value();
-            codegen.write_special_reg(register::Special::Pc, pc.into());
-
-            // Call the `on_instruction` callback from the environment, used for the debugger.
-            env_call!(codegen, RuntimeFunction::OnInstruction, []);
-
-            // Recompile the instruction.
-            if let MaybeInstruction::Instruction(instr) = instr {
-                recompile_instruction(&codegen, instr, addr);
-            } else {
-                codegen.builder.build_unreachable();
-            }
-        }
-
-        // If the block doesn't end with a terminator, insert a branch to the next block.
-        if basic_block.get_terminator().is_none() {
-            if let Some(fall_through) = label.fall_through {
-                codegen.builder.build_unconditional_branch(fall_through);
-            } else {
-                codegen.builder.build_unreachable();
-            }
-        }
+    // Compile the generated functions.
+    for (i, label) in codegen.labels.iter().enumerate() {
+        println!("compiling label {}/{}", i + 1, codegen.labels.len());
+        label.compile(&codegen);
     }
 
     println!("finished generating instructions");
@@ -119,18 +94,16 @@ pub fn lift<Mem>(
         println!("Wrote LLVM IR to '{path}'\n");
     }
 
-    println!("verifying generated code...");
-
+    // Ensure the generated LLVM IR is valid.
     if let Err(err) = codegen.verify() {
-        println!("ERROR: Generated code failed to verify:\n\n{err}\nTerminating.");
-        return;
+        println!("\nERROR: Generated code failed to verify:\n\n{err}\nTerminating.");
+        panic!()
     }
 
-    println!("compiling and running code...");
-
-    // Run the generated code.
-    let main_func: JitFunction<unsafe extern "C" fn()> = codegen.get_function("main").unwrap();
-    unsafe { main_func.call() }
+    // Run the generated code!
+    let main_fn: JitFunction<unsafe extern "C" fn()> =
+        unsafe { codegen.execution_engine.get_function("main").unwrap() };
+    unsafe { main_fn.call() };
 
     env.print_registers();
 }

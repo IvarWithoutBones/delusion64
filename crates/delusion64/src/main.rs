@@ -44,21 +44,18 @@ fn main() {
     });
     println!("{cart:#?}");
 
+    let mut rom = cart.ipl3_boot_code.to_vec();
+    rom.extend_from_slice(&cart.data);
+    let emulator = Emulator::new(rom.clone().into());
+
     let maybe_gdb_stream = cli
         .gdb
         .map(|port| wait_for_gdb_connection(port).expect("failed to wait for GDB connection"));
 
-    let mut rom = cart.ipl3_boot_code.to_vec();
-    rom.extend_from_slice(&cart.data);
-    let rom = rom.into_boxed_slice();
-    let emulator = Emulator::new(rom.clone());
-
-    mips_lifter::lift(
-        &rom[..0x70000],
-        // &rom[..0x90000],
-        emu::CARTRIDGE_ROM.start,
+    mips_lifter::run(
+        &rom.as_slice()[..0x100_000],
         emulator,
-        cli.llvm_ir_output.as_deref(),
         maybe_gdb_stream,
-    );
+        cli.llvm_ir_output.as_deref(),
+    )
 }

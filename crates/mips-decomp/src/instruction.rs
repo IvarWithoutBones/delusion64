@@ -1,6 +1,6 @@
 use crate::{
     pattern::{InstructionPattern, Operand},
-    register,
+    register, INSTRUCTION_SIZE,
 };
 use std::fmt;
 use strum::{EnumVariantNames, VariantNames};
@@ -242,7 +242,7 @@ impl Mnenomic {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Signedness {
     Signed32,
     Signed16,
@@ -288,9 +288,9 @@ impl Instruction {
 
         match self.operands {
             [.., (Operand::Offset, Signedness::Signed16)] => {
-                // Branch instructions
+                // Branch instructions, these jump from the delay slot + the offset (which can be negative)
                 let offset = ((self.pattern.get(Operand::Offset, raw)? as i16) << 2) as i64;
-                Some((pc as i64 + offset) as u64)
+                Some(((pc + INSTRUCTION_SIZE as u64) as i64 + offset) as u64)
             }
 
             [.., (Operand::Immediate, Signedness::Unsigned32)] => {

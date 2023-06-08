@@ -1,7 +1,7 @@
 //! The runtime environment for generated code.
 
 use self::memory::TranslationLookasideBuffer;
-use crate::{codegen, label::Label};
+use crate::{codegen, label::LabelWithContext};
 use inkwell::{execution_engine::ExecutionEngine, module::Module, AddressSpace};
 use mips_decomp::register;
 use std::{fmt, net::TcpStream, pin::Pin};
@@ -28,7 +28,7 @@ where
     tlb: TranslationLookasideBuffer,
     pub(crate) registers: Registers,
     debugger: Option<gdb::Debugger<'ctx, Mem>>,
-    labels: Vec<Label<'ctx>>,
+    labels: Vec<LabelWithContext<'ctx>>,
 }
 
 impl<'ctx, Mem> Environment<'ctx, Mem>
@@ -37,7 +37,7 @@ where
 {
     pub fn new(
         memory: Mem,
-        labels: Vec<Label<'ctx>>,
+        labels: Vec<LabelWithContext<'ctx>>,
         gdb_stream: Option<TcpStream>,
     ) -> Pin<Box<Self>> {
         let mut env = Self {
@@ -140,8 +140,12 @@ where
     }
 
     unsafe extern "C" fn block_id(&mut self, addr: u64) -> u64 {
-        if let Some(label) = self.labels.iter().find(|l| l.start_address == addr) {
-            let id = label.id;
+        if let Some(id) = self
+            .labels
+            .iter()
+            .map(|l| l.label.start() as u64)
+            .find(|id| *id == addr)
+        {
             println!("block_id({addr:#x}) = {id}"); // TODO: remove
             id
         } else {

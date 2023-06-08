@@ -59,7 +59,7 @@ const fn parse_repeated(input: &[u8], start: usize, pattern: u8) -> usize {
     i - start
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Operand {
     Source,
     Destination,
