@@ -170,12 +170,8 @@ where
         addr: <Self::Arch as gdbstub::arch::Arch>::Usize,
         _kind: <Self::Arch as gdbstub::arch::Arch>::BreakpointKind,
     ) -> TargetResult<bool, Self> {
-        Ok(self
-            .debugger
-            .as_mut()
-            .unwrap()
-            .breakpoints
-            .insert(addr as _))
+        let paddr = self.translate_vaddr(addr as _);
+        Ok(self.debugger.as_mut().unwrap().breakpoints.insert(paddr))
     }
 
     fn remove_sw_breakpoint(
@@ -183,12 +179,8 @@ where
         addr: <Self::Arch as gdbstub::arch::Arch>::Usize,
         _kind: <Self::Arch as gdbstub::arch::Arch>::BreakpointKind,
     ) -> TargetResult<bool, Self> {
-        Ok(self
-            .debugger
-            .as_mut()
-            .unwrap()
-            .breakpoints
-            .remove(&(addr as _)))
+        let paddr = self.translate_vaddr(addr as _);
+        Ok(self.debugger.as_mut().unwrap().breakpoints.remove(&paddr))
     }
 }
 
@@ -202,7 +194,8 @@ where
         data: &mut [u8],
     ) -> TargetResult<(), Self> {
         for i in (0..data.len()).step_by(4) {
-            let word = self.memory.read_u32(start_addr as u64 + i as u64);
+            let paddr = self.translate_vaddr(start_addr as u64 + i as u64);
+            let word = self.memory.read_u32(paddr);
             data[i..i + 4].copy_from_slice(&word.to_le_bytes());
         }
 
@@ -215,8 +208,9 @@ where
         data: &[u8],
     ) -> TargetResult<(), Self> {
         for i in (0..data.len()).step_by(4) {
+            let paddr = self.translate_vaddr(start_addr as u64 + i as u64);
             let word = u32::from_le_bytes(data[i..i + 4].try_into().unwrap());
-            self.memory.write_u32(start_addr as u64 + i as u64, word);
+            self.memory.write_u32(paddr, word);
         }
 
         Ok(())

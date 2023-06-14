@@ -68,11 +68,11 @@ impl<'ctx> LabelWithContext<'ctx> {
                 };
 
                 self.compile_instruction(i + 1, next_instr, codegen);
-
                 if !next_instr.ends_block() {
                     // Any other case would be undefined behavior, so we can't really do anything here.
                     self.compile_instruction(i, instr, codegen);
                 }
+
                 break;
             } else {
                 self.compile_instruction(i, instr, codegen);
@@ -105,21 +105,10 @@ impl<'ctx> LabelWithContext<'ctx> {
 
         // Set the program counter to the current instruction.
         // TODO: this is inaccurate, we should set PC based on the TLB.
-        let pc = codegen.build_i64(addr).into_int_value();
+        let pc = codegen
+            .build_i64(addr + 0x0000_0000_A400_0040)
+            .into_int_value();
         codegen.write_special_reg(register::Special::Pc, pc.into());
-
-        // Print the instruction if the debug-print feature is enabled.
-        #[cfg(feature = "debug-print")]
-        {
-            let instr_str = if let Some(target) = instr.try_resolve_static_jump(addr) {
-                format!("{addr:#06x}: {instr}\t-> {target:#06x}\n")
-            } else {
-                format!("{addr:#06x}: {instr}\n")
-            };
-
-            let storage_name = format!("instr_str_{addr:06x}");
-            codegen.print_constant_string(&instr_str, &storage_name);
-        }
 
         // Call the `on_instruction` callback from the environment, used for the debugger.
         env_call!(codegen, RuntimeFunction::OnInstruction, []);

@@ -12,6 +12,7 @@ pub enum RuntimeFunction {
     GetBlockId,
     PrintString,
     OnInstruction,
+    Panic,
 
     ReadI8,
     ReadI16,
@@ -42,7 +43,7 @@ impl RuntimeFunction {
         // The name doesnt do anything, its just there to enforce nicer syntax.
         macro_rules! sig {
             ($ret_ty:expr, [$(
-               $name:ident: $arg_ty:expr
+               $name:ident : $arg_ty:expr
             ),* $(,)?]) => {
                 $ret_ty.fn_type(&[
                     ptr_type.into(), // Environment pointer (&mut self)
@@ -57,6 +58,8 @@ impl RuntimeFunction {
             Self::GetBlockId => sig!(i64_type, [addr: i64_type]),
             // `Environment::print_string()`
             Self::PrintString => sig!(void_type, [string_ptr: ptr_type, len: i64_type]),
+            // `Environment::panic()`
+            Self::Panic => sig!(void_type, []),
             // `Environment::on_instruction()`
             Self::OnInstruction => sig!(void_type, []),
 

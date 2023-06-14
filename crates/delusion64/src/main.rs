@@ -28,7 +28,10 @@ struct CommandLineInterface {
     rom: String,
 
     #[clap(short, long, value_name = "path")]
-    llvm_ir_output: Option<String>,
+    llvm_ir: Option<String>,
+
+    #[clap(short, long, value_name = "path")]
+    disassembly: Option<String>,
 
     #[clap(short, long, value_name = "port")]
     gdb: Option<Option<u16>>,
@@ -53,9 +56,10 @@ fn main() {
         .map(|port| wait_for_gdb_connection(port).expect("failed to wait for GDB connection"));
 
     mips_lifter::run(
-        &rom.as_slice()[..0x100_000],
         emulator,
+        emu::CARTRIDGE_ROM.start..(emu::CARTRIDGE_ROM.start + bin.len() as u64 + 1),
         maybe_gdb_stream,
-        cli.llvm_ir_output.as_deref(),
+        cli.llvm_ir.as_deref(),
+        cli.disassembly.as_deref(),
     )
 }

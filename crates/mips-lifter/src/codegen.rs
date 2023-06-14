@@ -15,6 +15,7 @@ use inkwell::{
 use mips_decomp::{
     instruction::ParsedInstruction,
     register::{self, Register},
+    INSTRUCTION_SIZE,
 };
 
 #[macro_export]
@@ -106,6 +107,7 @@ impl<'ctx> CodeGen<'ctx> {
             "ERROR: unable to fetch label for dynamic jump\n",
             "label_not_found_dynamic_jump_str",
         );
+        env_call!(self, RuntimeFunction::Panic, []);
         self.builder.build_return(None);
 
         let cases = {
@@ -147,8 +149,39 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.build_return(None);
     }
 
+    /// Verify our module is valid.
     pub fn verify(&self) -> Result<(), String> {
         self.module.verify().map_err(|e| e.to_string())
+    }
+
+    /// Recompile the module into the execution engine, generating instructions.
+    /// Note that compilation is still lazy, so the first time a function is called, it will be compiled.
+    pub fn reload(&self) -> Result<(), String> {
+        self.execution_engine
+            .remove_module(&self.module)
+            .map_err(|e| e.to_string())?;
+        self.execution_engine
+            .add_module(&self.module)
+            .map_err(|_| "Failed to add module")?;
+        self.verify()?;
+        Ok(())
+    }
+
+    /// Link the given module into the current module, and recompile them. The result is verified.
+    pub fn link_in_module(&self, module: Module<'ctx>) -> Result<(), String> {
+        self.module
+            .link_in_module(module)
+            .map_err(|e| e.to_string())?;
+        self.reload()
+    }
+
+    pub fn dynamic_add_fn<F>(&self, f: F) -> Result<(), String>
+    where
+        F: FnOnce(&CodeGen<'ctx>, &Module<'ctx>) -> FunctionValue<'ctx>,
+    {
+        let new_module = self.context.create_module("tmp_dynamic_module");
+        f(self, &new_module);
+        self.link_in_module(new_module)
     }
 
     /// Get the label associated with the given address, or the error function if it doesn't exist.
@@ -235,27 +268,43 @@ impl<'ctx> CodeGen<'ctx> {
         &self,
         cmp: IntValue<'ctx>,
         target_pc: u64,
-        next_instr_pc: u64,
+        instr: &ParsedInstruction,
     ) {
         let i64_type = self.context.i64_type();
         let curr_block = self.builder.get_insert_block().unwrap();
         let curr_fn = curr_block.get_parent().unwrap();
         let curr_name = curr_block.get_name().to_str().unwrap().to_string();
 
-        let then_name = format!("{curr_name}_cond_branch_then");
-        let then_block = self.context.append_basic_block(curr_fn, &then_name);
-        let else_name = format!("{curr_name}_cond_branch_else");
-        let else_block = self.context.append_basic_block(curr_fn, &else_name);
+        let then_block = {
+            let then_name = format!("{curr_name}_cond_branch_then");
+            self.context.append_basic_block(curr_fn, &then_name)
+        };
+        let else_block = {
+            let else_name = format!("{curr_name}_cond_branch_else");
+            self.context.append_basic_block(curr_fn, &else_name)
+        };
 
         self.builder
             .build_conditional_branch(cmp, then_block, else_block);
 
         self.builder.position_at_end(then_block);
-        self.write_general_reg(
-            register::GeneralPurpose::Ra,
-            i64_type.const_int(next_instr_pc, false).into(),
-        );
-        self.call_label(self.get_label(target_pc));
+        {
+            let next_instr_pc = {
+                let offset = {
+                    let value =
+                        (if instr.discards_delay_slot() { 2 } else { 1 }) * INSTRUCTION_SIZE;
+                    i64_type.const_int(value as u64, false)
+                };
+
+                let pc = self
+                    .read_special_reg(register::Special::Pc)
+                    .into_int_value();
+                self.builder.build_int_add(pc, offset, "next_instr_pc")
+            };
+
+            self.write_general_reg(register::GeneralPurpose::Ra, next_instr_pc.into());
+            self.call_label(self.get_label(target_pc));
+        }
 
         self.builder.position_at_end(else_block);
     }

@@ -1,7 +1,7 @@
 use crate::codegen::CodeGen;
 use inkwell::{context::Context, execution_engine::JitFunction, OptimizationLevel};
 use mips_decomp::register;
-use std::net::TcpStream;
+use std::{io::Write, net::TcpStream, ops::Range};
 
 #[macro_use]
 mod codegen;
@@ -15,14 +15,28 @@ pub mod runtime;
 const LLVM_CALLING_CONVENTION_FAST: u32 = 8;
 
 // TODO: dont do this all at once, provide a builder API instead.
-// TODO: pass a range we can read from `mem` instead of a slice to be more consistent with the runtime.
-pub fn run<Mem>(bin: &[u8], mem: Mem, gdb_stream: Option<TcpStream>, ir_path: Option<&str>)
-where
+pub fn run<Mem>(
+    mem: Mem,
+    binary_range: Range<u64>,
+    gdb_stream: Option<TcpStream>,
+    ir_path: Option<&str>,
+    disassembly_path: Option<&str>,
+) where
     Mem: runtime::Memory,
 {
-    let labels = mips_decomp::LabelList::from(bin);
-    println!("{:#?}", labels);
-    // return;
+    let bin = binary_range
+        .map(|addr| mem.read_u8(addr))
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
+    let labels = mips_decomp::LabelList::from(&*bin);
+    let labels_str = format!("{labels:#?}");
+    println!("{labels_str}");
+
+    if let Some(path) = disassembly_path {
+        let mut file = std::fs::File::create(path).unwrap();
+        writeln!(file, "{labels_str}").unwrap();
+        println!("wrote disassembly to {path}");
+    }
 
     // Create the compiler context.
     let context = Context::create();
@@ -55,27 +69,37 @@ where
     // Build the main function.
     codegen.builder.position_at_end(entry_block);
 
-    // Set the initial register state.
-    // TODO: move this to a downstream crate
+    // Set the bootup state, emulating the PIF ROM. TODO: move this to a downstream crate
+
+    for (i, byte) in bin[..0x1000 - 0x40].iter().enumerate() {
+        let addr = codegen.context.i64_type().const_int((i as u64 + 0x40) + 0x0000_0000_A400_0000, false);
+        let value = codegen
+            .context
+            .i8_type()
+            .const_int(*byte as _, false)
+            .into();
+
+        codegen.write_memory(addr, value);
+    }
+
     codegen.write_general_reg(
-        register::GeneralPurpose::Sp,
-        i64_type.const_int(0x500, false).into(),
-        // i64_type.const_int(0xFFFFFFFFA4001FF0, false).into(),
+        register::Special::Pc,
+        i64_type.const_int(0x0000_0000_A400_0040, false).into(),
     );
 
     codegen.write_general_reg(
-        register::GeneralPurpose::S6,
-        i64_type.const_int(0x000000000000003F, false).into(),
+        register::GeneralPurpose::Sp,
+        i64_type.const_int(0x0000_0000_A400_1FF0, false).into(),
     );
 
     codegen.write_general_reg(
         register::GeneralPurpose::S4,
-        i64_type.const_int(0x0000000000000001, false).into(),
+        i64_type.const_int(0x0000_0000_0000_0001, false).into(),
     );
 
     codegen.write_general_reg(
-        register::GeneralPurpose::T3,
-        i64_type.const_int(0xFFFFFFFFA4000040, false).into(),
+        register::GeneralPurpose::S6,
+        i64_type.const_int(0x0000_0000_0000_003F, false).into(),
     );
 
     codegen.call_label(codegen.get_label(0));
@@ -100,10 +124,13 @@ where
         panic!()
     }
 
-    // Run the generated code!
+    // Compile the entry point, and with that lazily all other codepaths.
     let main_fn: JitFunction<unsafe extern "C" fn()> =
         unsafe { codegen.execution_engine.get_function("main").unwrap() };
-    unsafe { main_fn.call() };
 
+    env.attach_codegen(codegen);
+
+    // Run the generated code!
+    unsafe { main_fn.call() };
     env.print_registers();
 }

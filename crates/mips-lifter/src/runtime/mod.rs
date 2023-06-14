@@ -1,10 +1,17 @@
 //! The runtime environment for generated code.
 
 use self::memory::TranslationLookasideBuffer;
-use crate::{codegen, label::LabelWithContext};
-use inkwell::{execution_engine::ExecutionEngine, module::Module, AddressSpace};
-use mips_decomp::register;
-use std::{fmt, net::TcpStream, pin::Pin};
+use crate::{
+    codegen::{self, CodeGen},
+    label::LabelWithContext,
+};
+use inkwell::{
+    execution_engine::{ExecutionEngine, JitFunction},
+    module::Module,
+    AddressSpace,
+};
+use mips_decomp::{instruction::ParsedInstruction, register};
+use std::{cell::RefCell, fmt, net::TcpStream, pin::Pin};
 use strum::IntoEnumIterator;
 
 pub(crate) use self::function::RuntimeFunction;
@@ -24,11 +31,14 @@ pub struct Environment<'ctx, Mem>
 where
     Mem: Memory,
 {
+    pub(crate) registers: Registers,
     memory: Mem,
     tlb: TranslationLookasideBuffer,
-    pub(crate) registers: Registers,
-    debugger: Option<gdb::Debugger<'ctx, Mem>>,
+
     labels: Vec<LabelWithContext<'ctx>>,
+    codegen: RefCell<Option<CodeGen<'ctx>>>,
+
+    debugger: Option<gdb::Debugger<'ctx, Mem>>,
 }
 
 impl<'ctx, Mem> Environment<'ctx, Mem>
@@ -44,6 +54,7 @@ where
             registers: Registers::default(),
             tlb: TranslationLookasideBuffer::default(),
             debugger: None,
+            codegen: Default::default(),
             labels,
             memory,
         };
@@ -92,6 +103,7 @@ where
                 RuntimeFunction::GetBlockId => Self::block_id as _,
                 RuntimeFunction::PrintString => Self::print_string as _,
                 RuntimeFunction::OnInstruction => Self::on_instruction as _,
+                RuntimeFunction::Panic => Self::panic as _,
                 RuntimeFunction::ReadI8 => Self::read_u8 as _,
                 RuntimeFunction::ReadI16 => Self::read_u16 as _,
                 RuntimeFunction::ReadI32 => Self::read_u32 as _,
@@ -113,18 +125,124 @@ where
         }
     }
 
+    pub fn attach_codegen(&self, codegen: CodeGen<'ctx>) {
+        *self.codegen.borrow_mut() = Some(codegen);
+    }
+
     pub fn print_registers(&self) {
         println!("{:#?}", self.registers);
+    }
+
+    fn translate_vaddr(&mut self, vaddr: u64) -> u64 {
+        self.tlb.translate(vaddr).unwrap_or_else(|| {
+            self.print_registers();
+            panic!("failed to generate paddr for vaddr {vaddr:#06x}");
+        })
     }
 
     /*
         Runtime functions. These are not meant to be called directly, but rather by generated code.
     */
 
+    unsafe extern "C" fn block_id(&mut self, vaddr: u64) -> u64 {
+        let paddr = self.translate_vaddr(vaddr);
+
+        println!("\nblock_id FOUND INSTRUCTIONS ({paddr:#x})\n");
+        for i in 0..10 {
+            let addr = paddr + (i * 4);
+            let instr = ParsedInstruction::try_from(self.memory.read_u32(addr)).unwrap();
+            let vaddr = vaddr + (i * 4);
+            println!("  {vaddr:06x}: {instr}");
+        }
+        println!();
+
+        // TODO: This is not at all accurate, the physical address for a label could be anywhere.
+        // We should instead hash a block by its instructions and do a lookup in a hashmap.
+        let offset = ((paddr - 0x4000000) / 4) - 1;
+        if let Some(label_with_ctx) = self
+            .labels
+            .iter()
+            .find(|l| l.label.range().contains(&(offset as _)))
+        {
+            let start = label_with_ctx.label.start() as u64;
+            if offset == start {
+                // Already compiled a block for this address
+                println!("block_id({paddr:#x}) = {start:#x}");
+                return start;
+            } else {
+                // The target instruction lies in the middle of an existing block
+                let target_block = start * 4;
+                let offset = offset * 4;
+                println!("ERROR: target block is {target_block:#x} but tried to jump to the middle ({paddr:#x}). offset={offset:#x}\n");
+                return start;
+
+                // panic!();
+
+                let codegen = &mut self.codegen.borrow_mut();
+                let codegen = codegen.as_mut().unwrap();
+
+                codegen
+                    .dynamic_add_fn(|codegen, module| {
+                        let func = module.add_function(
+                            "dynamic_block",
+                            codegen.context.void_type().fn_type(&[], false),
+                            None,
+                        );
+
+                        {
+                            // https://github.com/llvm/llvm-project/blob/29293e6f9d8d20464ffcb9f9401c968674c90ea2/llvm/lib/Transforms/Utils/CloneFunction.cpp
+                            for b in label_with_ctx.function.get_basic_blocks() {
+                                let new_block = codegen
+                                    .context
+                                    .append_basic_block(func, b.get_name().to_str().unwrap());
+                                codegen.builder.position_at_end(new_block);
+
+                                let mut instr = b.get_first_instruction().unwrap();
+                                println!("instr: {instr}");
+                                codegen.builder.insert_instruction(&instr.clone(), None);
+                                while let Some(next) = instr.get_next_instruction() {
+                                    println!("instr: {next}");
+                                    let name = next.get_name().map(|name| name.to_str().unwrap());
+                                    codegen.builder.insert_instruction(&next.clone(), name);
+                                    instr = next;
+                                }
+                            }
+                        }
+
+                        func
+                    })
+                    .unwrap_or_else(|e| {
+                        codegen.module.print_to_file("test/gen.ll").unwrap();
+                        println!("failed to add dynamic block: {e}");
+                        panic!();
+                    });
+
+                println!("called dynamic_block, recompiling...");
+                let block_fn: JitFunction<unsafe extern "C" fn()> = unsafe {
+                    codegen
+                        .execution_engine
+                        .get_function("dynamic_block")
+                        .unwrap()
+                };
+                block_fn.call();
+            }
+        } else {
+            println!("ERROR: no block contains offset {offset:#x}");
+        }
+
+        self.print_registers();
+        panic!("failed to find label for address {paddr:#x}");
+    }
+
     unsafe extern "C" fn on_instruction(&mut self) {
+        let pc_vaddr = self.registers[register::Special::Pc];
+        let pc_paddr = self.translate_vaddr(pc_vaddr);
+
+        let instr = ParsedInstruction::try_from(self.memory.read_u32(pc_paddr)).unwrap();
+        println!("{pc_vaddr:06x}: {instr}");
+
         if self.debugger.is_some() {
-            let pc = self.registers[register::Special::Pc];
-            self.debugger.as_mut().unwrap().on_instruction(pc);
+            self.debugger.as_mut().unwrap().on_instruction(pc_paddr);
             self.update_debugger();
             while self.debugger.as_ref().unwrap().is_paused() {
                 // Block until the debugger tells us to continue
@@ -139,66 +257,48 @@ where
         print!("{string}");
     }
 
-    unsafe extern "C" fn block_id(&mut self, addr: u64) -> u64 {
-        if let Some(id) = self
-            .labels
-            .iter()
-            .map(|l| l.label.start() as u64)
-            .find(|id| *id == addr)
-        {
-            println!("block_id({addr:#x}) = {id}"); // TODO: remove
-            id
-        } else {
-            self.print_registers();
-            panic!("failed to find label for address {addr:#x}");
-        }
+    unsafe extern "C" fn panic(&mut self) {
+        self.print_registers();
+        panic!("Environment::panic called");
     }
 
     unsafe extern "C" fn read_u8(&mut self, vaddr: u64) -> u8 {
-        let entry_hi = self.registers[register::Cp0::EntryHi];
-        let paddr = self.tlb.translate(vaddr, entry_hi).unwrap();
+        let paddr = self.translate_vaddr(vaddr);
         self.memory.read_u8(paddr)
     }
 
     unsafe extern "C" fn read_u16(&mut self, vaddr: u64) -> u16 {
-        let entry_hi = self.registers[register::Cp0::EntryHi];
-        let paddr = self.tlb.translate(vaddr, entry_hi).unwrap();
+        let paddr = self.translate_vaddr(vaddr);
         self.memory.read_u16(paddr)
     }
 
     unsafe extern "C" fn read_u32(&mut self, vaddr: u64) -> u32 {
-        let entry_hi = self.registers[register::Cp0::EntryHi];
-        let paddr = self.tlb.translate(vaddr, entry_hi).unwrap();
+        let paddr = self.translate_vaddr(vaddr);
         self.memory.read_u32(paddr)
     }
 
     unsafe extern "C" fn read_u64(&mut self, vaddr: u64) -> u64 {
-        let entry_hi = self.registers[register::Cp0::EntryHi];
-        let paddr = self.tlb.translate(vaddr, entry_hi).unwrap();
+        let paddr = self.translate_vaddr(vaddr);
         self.memory.read_u64(paddr)
     }
 
     unsafe extern "C" fn write_u8(&mut self, vaddr: u64, value: u8) {
-        let entry_hi = self.registers[register::Cp0::EntryHi];
-        let paddr = self.tlb.translate(vaddr, entry_hi).unwrap();
+        let paddr = self.translate_vaddr(vaddr);
         self.memory.write_u8(paddr, value)
     }
 
     unsafe extern "C" fn write_u16(&mut self, vaddr: u64, value: u16) {
-        let entry_hi = self.registers[register::Cp0::EntryHi];
-        let paddr = self.tlb.translate(vaddr, entry_hi).unwrap();
+        let paddr = self.translate_vaddr(vaddr);
         self.memory.write_u16(paddr, value)
     }
 
     unsafe extern "C" fn write_u32(&mut self, vaddr: u64, value: u32) {
-        let entry_hi = self.registers[register::Cp0::EntryHi];
-        let paddr = self.tlb.translate(vaddr, entry_hi).unwrap();
+        let paddr = self.translate_vaddr(vaddr);
         self.memory.write_u32(paddr, value)
     }
 
     unsafe extern "C" fn write_u64(&mut self, vaddr: u64, value: u64) {
-        let entry_hi = self.registers[register::Cp0::EntryHi];
-        let paddr = self.tlb.translate(vaddr, entry_hi).unwrap();
+        let paddr = self.translate_vaddr(vaddr);
         self.memory.write_u64(paddr, value)
     }
 }

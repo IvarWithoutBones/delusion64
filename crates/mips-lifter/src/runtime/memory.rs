@@ -34,7 +34,7 @@ bitfield! {
         [1] valid,
         /// `D` bit
         [2] dirty,
-        /// `C` bit
+        /// `C` bits
         [3..=5] page_attr: u8,
         /// `PFN` bits
         [6..=25] physical_frame_number: u32,
@@ -82,49 +82,131 @@ impl TlbEntry32 {
 }
 
 #[derive(Default)]
+struct Entry {
+    global: [bool; 2],
+    valid: [bool; 2],
+    dirty: [bool; 2],
+    /// 3 bits each
+    cache_algorithm: [u8; 2],
+    /// 36 bits each
+    physical_address: [u64; 2],
+    page_mask: u32,
+    /// 40 bits
+    virtual_address: u64,
+    address_space_id: u8,
+    /// 2 bits
+    region: u8,
+
+    /*
+        internal
+    */
+    /// 40 bits
+    address_mask_hi: u64,
+    /// 40 bits
+    address_mask_lo: u64,
+    /// 40 bits
+    address_select: u64,
+}
+
+const fn bit_range(num: u64, range: &Range<u64>) -> u64 {
+    assert!(range.start <= u64::BITS as u64);
+    assert!(range.end <= u64::BITS as u64);
+    let mask = 2_usize.pow(range.end as u32 - range.start as u32) - 1;
+    (num >> range.start) & mask as u64
+}
+
+impl Entry {
+    pub fn sync(&mut self) {
+        self.page_mask &= 0b101010101010 << 13;
+        self.page_mask |= self.page_mask >> 1;
+
+        // extract as u40
+        self.address_mask_hi = {
+            let tmp = !(self.page_mask as u64 | 0x1FFF);
+            bit_range(tmp, &(0..40))
+        };
+
+        self.address_mask_lo = (self.page_mask as u64 | 0x1FFF) >> 1;
+        self.address_select = self.address_mask_lo + 1;
+        self.physical_address[0] &= 0xFFFF_FFFF;
+        self.physical_address[1] &= 0xFFFF_FFFF;
+        self.virtual_address &= self.address_mask_hi;
+
+        let global = self.global[0] && self.global[1];
+        self.global[0] = global;
+        self.global[1] = global;
+    }
+}
+
+impl Entry {
+    fn global(&self) -> bool {
+        self.global[0] && self.global[1]
+    }
+}
+
+#[derive(Default)]
 pub struct TranslationLookasideBuffer {
     entries: [TlbEntry32; 32],
+    physical_address: u32,
 }
 
 impl TranslationLookasideBuffer {
-    fn find(&self, vaddr: VirtualAddress32, cp0_asid: u8) -> Option<&TlbEntry32> {
-        self.entries.iter().find(|entry| {
-            let vpn_match = entry.entry_hi().virtual_page_number() == vaddr.virtual_page_number();
-            let asid_match = entry.global() || (entry.entry_hi().asid() == cp0_asid);
-            vpn_match && asid_match
-        })
+    fn load(&mut self, vaddr: u64) -> Option<u64> {
+        for entry in &self.entries {
+            let mask: u32 = (entry.page_mask().mask() as u32 >> 1) | 0x0FFF;
+            let page_size: u32 = mask + 1;
+
+            let tmp: u16 = (entry.page_mask().mask() | 0x1FFF) as _;
+            let vpn: u32 = (entry.entry_hi().0 & ((!tmp) as u32)) as _;
+            let masked_vaddr: u32 = (vaddr & (vpn as u64)) as _;
+
+            println!("\nvaddr:        {vaddr:064b} ({vaddr:#x})\nmasked vaddr: {masked_vaddr:032b} ({masked_vaddr:#x})\nvpn:          {vpn:032b} ({vpn:#x})\npage size:    {page_size:032b} ({page_size:#x})");
+
+            if masked_vaddr != vpn {
+                println!("vpn mismatch");
+                continue;
+            }
+
+            let odd: u32 = (vaddr & (page_size as u64)) as _;
+
+            let pfn: u32 = {
+                let entry_lo = if odd == 0 {
+                    entry.entry_lo_0()
+                } else {
+                    entry.entry_lo_1()
+                };
+
+                if (entry_lo.0 & 0x02) == 0 {
+                    println!("invalid");
+                    continue;
+                }
+
+                (entry_lo.0 >> 6) & 0x00FF_FFFF
+            };
+
+            let paddr = 0x80000000 | (pfn * page_size) | (vaddr & mask as u64) as u32;
+            println!("paddr: {paddr:#x}");
+            return Some(paddr as _);
+        }
+
+        None
     }
 
-    fn probe(&self, vaddr_raw: u64, cp0_asid: u8) -> Option<u64> {
-        let vaddr = VirtualAddress32(vaddr_raw);
-        let entry = self.find(vaddr, cp0_asid)?;
-        let even = (vaddr_raw & ((entry.page_mask().mask() + 1) as u64)) == 0;
-
-        // TODO: error handling in case the page is not valid
-        let pfn = if even {
-            entry.entry_lo_0().physical_frame_number()
-        } else {
-            entry.entry_lo_1().physical_frame_number()
-        };
-
-        let paddr = PhysicalAddress32::default()
-            .with_physical_frame_number(pfn)
-            .with_offset(vaddr.offset());
-        Some(paddr.0 as _)
-    }
-
-    /// Translate a virtual address to a physical address.
-    pub fn translate(&self, vaddr: u64, cp0_entry_hi: u64) -> Option<u64> {
+    fn translate_unmapped(vaddr: u64) -> Option<u64> {
         match vaddr {
             // Physically addressed segments
             _ if KSEG0.contains(&vaddr) => Some(vaddr - KSEG0.start),
             _ if KSEG1.contains(&vaddr) => Some(vaddr - KSEG1.start),
+            _ => None,
+        }
+    }
 
-            // TLB mapped segments
-            _ => {
-                let cp0_asid = EntryHi32(cp0_entry_hi as _).asid();
-                self.probe(vaddr, cp0_asid)
-            }
+    /// Translate a virtual address to a physical address.
+    pub fn translate(&mut self, vaddr: u64) -> Option<u64> {
+        if let Some(paddr) = Self::translate_unmapped(vaddr) {
+            Some(paddr)
+        } else {
+            self.load(vaddr)
         }
     }
 }

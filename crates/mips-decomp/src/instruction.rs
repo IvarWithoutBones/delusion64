@@ -233,10 +233,6 @@ impl Mnenomic {
         self.ends_block()
     }
 
-    pub const fn has_static_jump(&self) -> bool {
-        self.is_branch() | matches!(self, Mnenomic::J | Mnenomic::Jal)
-    }
-
     pub const fn name(&self) -> &'static str {
         Self::VARIANTS[*self as usize]
     }
@@ -282,7 +278,7 @@ impl Instruction {
     }
 
     pub fn try_resolve_static_jump(&self, raw: u32, pc: u64) -> Option<u64> {
-        if !self.mnenomic.has_static_jump() {
+        if !self.mnenomic.is_branch() {
             return None;
         }
 
@@ -291,13 +287,6 @@ impl Instruction {
                 // Branch instructions, these jump from the delay slot + the offset (which can be negative)
                 let offset = ((self.pattern.get(Operand::Offset, raw)? as i16) << 2) as i64;
                 Some(((pc + INSTRUCTION_SIZE as u64) as i64 + offset) as u64)
-            }
-
-            [.., (Operand::Immediate, Signedness::Unsigned32)] => {
-                // Jump instructions
-                let target = (self.pattern.get(Operand::Immediate, raw)? << 2) as u64;
-                let pc_high = pc & 0xf000_0000;
-                Some(pc_high | target)
             }
 
             _ => todo!(

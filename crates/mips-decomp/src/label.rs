@@ -73,6 +73,15 @@ impl Label {
         self.start_offset + self.instructions.len()
     }
 
+    pub fn len(&self) -> usize {
+        self.instructions.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn range(&self) -> Range<usize> {
         self.start()..self.end()
     }

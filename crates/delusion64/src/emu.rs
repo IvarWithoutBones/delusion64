@@ -141,7 +141,12 @@ impl mips_lifter::runtime::Memory for Emulator {
             }
 
             _ if CARTRIDGE_ROM.contains(&addr) => {
-                self.cartridge_rom[subtract_range(CARTRIDGE_ROM, addr)]
+                let offset = subtract_range(CARTRIDGE_ROM, addr);
+                if offset > self.cartridge_rom.len() - 1 {
+                    0
+                } else {
+                    self.cartridge_rom[offset]
+                }
             }
 
             _ if PIF_ROM.contains(&addr) => {
