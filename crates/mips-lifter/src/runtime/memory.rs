@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Memory access for runtime environment.
 
 use std::{mem::size_of, ops::Range};
@@ -82,72 +81,8 @@ impl TlbEntry32 {
 }
 
 #[derive(Default)]
-struct Entry {
-    global: [bool; 2],
-    valid: [bool; 2],
-    dirty: [bool; 2],
-    /// 3 bits each
-    cache_algorithm: [u8; 2],
-    /// 36 bits each
-    physical_address: [u64; 2],
-    page_mask: u32,
-    /// 40 bits
-    virtual_address: u64,
-    address_space_id: u8,
-    /// 2 bits
-    region: u8,
-
-    /*
-        internal
-    */
-    /// 40 bits
-    address_mask_hi: u64,
-    /// 40 bits
-    address_mask_lo: u64,
-    /// 40 bits
-    address_select: u64,
-}
-
-const fn bit_range(num: u64, range: &Range<u64>) -> u64 {
-    assert!(range.start <= u64::BITS as u64);
-    assert!(range.end <= u64::BITS as u64);
-    let mask = 2_usize.pow(range.end as u32 - range.start as u32) - 1;
-    (num >> range.start) & mask as u64
-}
-
-impl Entry {
-    pub fn sync(&mut self) {
-        self.page_mask &= 0b101010101010 << 13;
-        self.page_mask |= self.page_mask >> 1;
-
-        // extract as u40
-        self.address_mask_hi = {
-            let tmp = !(self.page_mask as u64 | 0x1FFF);
-            bit_range(tmp, &(0..40))
-        };
-
-        self.address_mask_lo = (self.page_mask as u64 | 0x1FFF) >> 1;
-        self.address_select = self.address_mask_lo + 1;
-        self.physical_address[0] &= 0xFFFF_FFFF;
-        self.physical_address[1] &= 0xFFFF_FFFF;
-        self.virtual_address &= self.address_mask_hi;
-
-        let global = self.global[0] && self.global[1];
-        self.global[0] = global;
-        self.global[1] = global;
-    }
-}
-
-impl Entry {
-    fn global(&self) -> bool {
-        self.global[0] && self.global[1]
-    }
-}
-
-#[derive(Default)]
 pub struct TranslationLookasideBuffer {
     entries: [TlbEntry32; 32],
-    physical_address: u32,
 }
 
 impl TranslationLookasideBuffer {

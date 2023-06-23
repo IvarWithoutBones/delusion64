@@ -2,8 +2,11 @@ use crate::{
     codegen::CodeGen, recompiler::recompile_instruction, runtime::RuntimeFunction,
     LLVM_CALLING_CONVENTION_FAST,
 };
-use inkwell::{context::Context, module::Module, values::FunctionValue};
+use inkwell::{basic_block::BasicBlock, context::Context, module::Module, values::FunctionValue};
 use mips_decomp::{instruction::ParsedInstruction, register, Label, INSTRUCTION_SIZE};
+use std::sync::atomic::AtomicUsize;
+
+static FUNCTION_ID: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LabelWithContext<'ctx> {
@@ -25,7 +28,12 @@ impl<'ctx> LabelWithContext<'ctx> {
         module: &Module<'ctx>,
         context: &'ctx Context,
     ) -> LabelWithContext<'ctx> {
-        let name = format!("function_{:06x}", label.start() * INSTRUCTION_SIZE);
+        let name = {
+            let start = label.start() * INSTRUCTION_SIZE;
+            let id = FUNCTION_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            format!("function_{start:06x}.{id}")
+        };
+
         let void_fn_type = context.void_type().fn_type(&[], false);
         let function = module.add_function(&name, void_fn_type, None);
         function.set_call_conventions(LLVM_CALLING_CONVENTION_FAST);
@@ -67,10 +75,23 @@ impl<'ctx> LabelWithContext<'ctx> {
                     panic!("unable to resolve delay slot for {instr:#?}");
                 };
 
-                self.compile_instruction(i + 1, next_instr, codegen);
-                if !next_instr.ends_block() {
-                    // Any other case would be undefined behavior, so we can't really do anything here.
+                // `recompile_instruction` positions the builder at the block ran when the branch was not taken, so that we can generate a fallthrough.
+                // This is problematic for an Likely Branch instruction, as should *only* run the delay slot instruction if the branch is taken.
+                // In this case we cannot simply swap the instructions, but instead inject the delay slot instruction prior to the jump to the branch target.
+                if !instr.mnemonic().discards_delay_slot() {
+                    self.compile_instruction(i + 1, next_instr, codegen);
                     self.compile_instruction(i, instr, codegen);
+                } else {
+                    // The block taken when the branch was
+                    let then_block = self.compile_instruction(i, instr, codegen).unwrap();
+                    let current_block = codegen.builder.get_insert_block().unwrap();
+
+                    codegen
+                        .builder
+                        .position_before(&then_block.get_first_instruction().unwrap());
+                    self.compile_instruction(i + 1, next_instr, codegen);
+
+                    codegen.builder.position_at_end(current_block);
                 }
 
                 break;
@@ -100,7 +121,7 @@ impl<'ctx> LabelWithContext<'ctx> {
         index: usize,
         instr: &ParsedInstruction,
         codegen: &CodeGen<'ctx>,
-    ) {
+    ) -> Option<BasicBlock<'ctx>> {
         let addr = ((self.label.start() + index) * INSTRUCTION_SIZE) as u64;
 
         // Set the program counter to the current instruction.
@@ -114,7 +135,7 @@ impl<'ctx> LabelWithContext<'ctx> {
         env_call!(codegen, RuntimeFunction::OnInstruction, []);
 
         // Finally recompile the disassembled instruction.
-        recompile_instruction(codegen, instr, addr);
+        recompile_instruction(codegen, instr, addr)
     }
 }
 

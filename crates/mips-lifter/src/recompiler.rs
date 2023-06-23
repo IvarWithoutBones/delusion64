@@ -1,5 +1,5 @@
 use crate::{codegen::CodeGen, runtime::RuntimeFunction};
-use inkwell::IntPredicate;
+use inkwell::{basic_block::BasicBlock, IntPredicate};
 use mips_decomp::{
     instruction::{Mnenomic, ParsedInstruction},
     register, INSTRUCTION_SIZE,
@@ -12,7 +12,11 @@ fn stub(codegen: &CodeGen, name: &str) {
     env_call!(codegen, RuntimeFunction::Panic, []);
 }
 
-pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u64) {
+pub fn recompile_instruction<'ctx>(
+    codegen: &CodeGen<'ctx>,
+    instr: &ParsedInstruction,
+    pc: u64,
+) -> Option<BasicBlock<'ctx>> {
     let mnemonic = instr.mnemonic();
     let i8_type = codegen.context.i8_type();
     let i16_type = codegen.context.i16_type();
@@ -109,6 +113,17 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
         Mnenomic::Bczfl => {
             // If CPz's CpCond is false, branch to address (delay slot + offset), otherwise discard delay slot instruction
             stub(codegen, "bczfl");
+            // Stub needed because this is a likely branch
+            let curr_block = codegen.builder.get_insert_block().unwrap();
+            return Some(curr_block);
+        }
+
+        Mnenomic::Bcztl => {
+            // If CPz's CpCond is true, branch to address (delay slot + offset), otherwise discard delay slot instruction
+            stub(codegen, "bcztl");
+            // Stub needed because this is a likely branch
+            let curr_block = codegen.builder.get_insert_block().unwrap();
+            return Some(curr_block);
         }
 
         Mnenomic::Bczf => {
@@ -119,11 +134,6 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
         Mnenomic::Bczt => {
             // If CPz's CpCond is true, branch to address (delay slot + offset)
             stub(codegen, "bczt");
-        }
-
-        Mnenomic::Bcztl => {
-            // If CPz's CpCond is true, branch to address (delay slot + offset), otherwise discard delay slot instruction
-            stub(codegen, "bcztl");
         }
 
         Mnenomic::Swcz => {
@@ -680,7 +690,7 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
             let shift = i64_type.const_int(instr.sa() as _, false);
             let result = codegen
                 .builder
-                .build_right_shift(target, shift, true, "srl_shift");
+                .build_right_shift(target, shift, false, "srl_shift");
             codegen.write_general_reg(instr.rd(), result.into());
         }
 
@@ -1082,12 +1092,18 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
         Mnenomic::Addiu => {
             // Add sign-extended 16bit immediate and rs, store result in rt
             let immediate =
-                codegen.sign_extend_to_i64(i16_type.const_int(instr.immediate() as _, true));
+                codegen.sign_extend_to_i64(i16_type.const_int(instr.immediate() as _, false));
+
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
             let result = codegen
                 .builder
                 .build_int_add(source, immediate, "addiu_res");
-            codegen.write_general_reg(instr.rt(), result.into());
+
+            let truncated = codegen
+                .builder
+                .build_int_truncate(result, i32_type, "addiu_trunc");
+
+            codegen.write_general_reg(instr.rt(), truncated.into());
         }
 
         Mnenomic::Addi => {
@@ -1163,17 +1179,22 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
 
         Mnenomic::Slti => {
             // If signed rs is less than sign-extended immediate, store one in rd, otherwise store zero
-            let immediate =
-                codegen.sign_extend_to_i64(i16_type.const_int(instr.immediate() as _, true));
+            let immediate = codegen.builder.build_int_s_extend(
+                i16_type.const_int(instr.immediate() as _, false),
+                i32_type,
+                "slti_ext",
+            );
+
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
 
-            let result = codegen.build_int_compare_as_i64(
-                IntPredicate::SLT,
-                source,
-                immediate,
-                "slti_cmp",
-                "slti_res",
-            );
+            let source = codegen
+                .builder
+                .build_int_truncate(source, i32_type, "slti_trunc");
+
+            let result =
+                codegen
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, source, immediate, "slti_cmp");
 
             codegen.write_general_reg(instr.rt(), result.into());
         }
@@ -1260,7 +1281,8 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
                     .build_int_compare(IntPredicate::SLT, source, zero, "bltz_cmp");
 
             let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch(cmp, target_pc);
+            let then_block = codegen.build_conditional_branch(cmp, target_pc);
+            return Some(then_block);
         }
 
         Mnenomic::Beql => {
@@ -1273,7 +1295,8 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
                     .build_int_compare(IntPredicate::EQ, source, target, "beql_cmp");
 
             let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch(cmp, target_pc);
+            let then_block = codegen.build_conditional_branch(cmp, target_pc);
+            return Some(then_block);
         }
 
         Mnenomic::Bgezal => {
@@ -1286,7 +1309,8 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
                     .build_int_compare(IntPredicate::SGE, source, zero, "bgezal_cmp");
 
             let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch_set_ra(cmp, target_pc, instr);
+            let then_block = codegen.build_conditional_branch(cmp, target_pc);
+            return Some(then_block);
         }
 
         Mnenomic::Bgezall => {
@@ -1299,7 +1323,8 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
                     .build_int_compare(IntPredicate::SGE, source, zero, "bgezall_cmp");
 
             let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch_set_ra(cmp, target_pc, instr);
+            let then_block = codegen.build_conditional_branch(cmp, target_pc);
+            return Some(then_block);
         }
 
         Mnenomic::Bltzal => {
@@ -1312,7 +1337,8 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
                     .build_int_compare(IntPredicate::SLT, source, zero, "bltzal_cmp");
 
             let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch_set_ra(cmp, target_pc, instr);
+            let then_block = codegen.build_conditional_branch(cmp, target_pc);
+            return Some(then_block);
         }
 
         Mnenomic::Bltzall => {
@@ -1325,7 +1351,8 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
                     .build_int_compare(IntPredicate::SLT, source, zero, "bltzal_cmp");
 
             let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch_set_ra(cmp, target_pc, instr);
+            let then_block = codegen.build_conditional_branch(cmp, target_pc);
+            return Some(then_block);
         }
 
         Mnenomic::Bnel => {
@@ -1338,7 +1365,8 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
                     .build_int_compare(IntPredicate::NE, source, target, "bnel_cmp");
 
             let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch(cmp, target_pc);
+            let then_block = codegen.build_conditional_branch(cmp, target_pc);
+            return Some(then_block);
         }
 
         Mnenomic::Blez => {
@@ -1364,7 +1392,8 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
                     .build_int_compare(IntPredicate::SLE, source, zero, "blezl_cmp");
 
             let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch(cmp, target_pc);
+            let then_block = codegen.build_conditional_branch(cmp, target_pc);
+            return Some(then_block);
         }
 
         Mnenomic::Bgezl => {
@@ -1377,7 +1406,8 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
                     .build_int_compare(IntPredicate::SGE, source, zero, "blezl_cmp");
 
             let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch(cmp, target_pc);
+            let then_block = codegen.build_conditional_branch(cmp, target_pc);
+            return Some(then_block);
         }
 
         Mnenomic::Bgez => {
@@ -1416,9 +1446,12 @@ pub fn recompile_instruction(codegen: &CodeGen, instr: &ParsedInstruction, pc: u
                     .build_int_compare(IntPredicate::SGT, source, zero, "bgtz_cmp");
 
             let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch(cmp, target_pc);
+            let then_block = codegen.build_conditional_branch(cmp, target_pc);
+            return Some(then_block);
         }
 
         _ => todo!("instruction {} at {pc:#x}", instr.mnemonic().name()),
-    }
+    };
+
+    None
 }

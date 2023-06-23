@@ -175,13 +175,19 @@ impl<'ctx> CodeGen<'ctx> {
         self.reload()
     }
 
-    pub fn dynamic_add_fn<F>(&self, f: F) -> Result<(), String>
+    pub fn add_dynamic_function<F>(&mut self, f: F) -> Result<LabelWithContext<'ctx>, String>
     where
-        F: FnOnce(&CodeGen<'ctx>, &Module<'ctx>) -> FunctionValue<'ctx>,
+        F: FnOnce(&mut CodeGen<'ctx>, &Module<'ctx>) -> LabelWithContext<'ctx>,
     {
         let new_module = self.context.create_module("tmp_dynamic_module");
-        f(self, &new_module);
-        self.link_in_module(new_module)
+        let mut lab = f(self, &new_module);
+        self.link_in_module(new_module)?;
+
+        // Now that we have linked the function into our existing module, the function pointer has been invalidated.
+        let func = self.module.get_last_function().unwrap();
+        lab.function = func;
+
+        Ok(lab)
     }
 
     /// Get the label associated with the given address, or the error function if it doesn't exist.
@@ -311,7 +317,11 @@ impl<'ctx> CodeGen<'ctx> {
 
     /// Generate a conditional branch to the given address, ending the current basic block.
     /// Sets the current insert block to the case the comparison is false, to support fallthrough.
-    pub fn build_conditional_branch(&self, cmp: IntValue<'ctx>, target_pc: u64) {
+    pub fn build_conditional_branch(
+        &self,
+        cmp: IntValue<'ctx>,
+        target_pc: u64,
+    ) -> BasicBlock<'ctx> {
         let curr_block = self.builder.get_insert_block().unwrap();
         let curr_fn = curr_block.get_parent().unwrap();
         let curr_name = curr_block.get_name().to_str().unwrap().to_string();
@@ -328,6 +338,8 @@ impl<'ctx> CodeGen<'ctx> {
         self.call_label(self.get_label(target_pc));
 
         self.builder.position_at_end(else_block);
+
+        then_block
     }
 
     /// Generate a dynamic jump to the given address, ending the current basic block.
@@ -369,9 +381,17 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     pub fn base_plus_offset(&self, instr: &ParsedInstruction, name: &str) -> IntValue<'ctx> {
-        let base = self.read_general_reg(instr.base()).into_int_value();
-        let offset = self.build_i64(instr.offset()).into_int_value();
-        self.builder.build_int_add(base, offset, name)
+        // TODO: Dont assume 32-bit mode
+        let i32_type = self.context.i32_type();
+
+        let base = {
+            let value = self.read_general_reg(instr.base()).into_int_value();
+            self.builder.build_int_truncate(value, i32_type, "base")
+        };
+        let offset = i32_type.const_int(instr.offset() as _, false);
+
+        let result = self.builder.build_int_add(base, offset, name);
+        self.zero_extend_to_i64(result)
     }
 
     #[inline]

@@ -65,6 +65,10 @@ pub struct Label {
 }
 
 impl Label {
+    pub fn set_start(&mut self, start_offset: usize) {
+        self.start_offset = start_offset;
+    }
+
     pub fn start(&self) -> usize {
         self.start_offset
     }
@@ -128,8 +132,7 @@ fn generate_labels(instrs: &[MaybeInstruction], targets: &[JumpTarget]) -> Vec<L
         }
     };
 
-    let len = targets.len().saturating_sub(1);
-    'outer: for target in 0..len {
+    'outer: for target in 0..targets.len() {
         let jump_target = &targets[target];
         if jump_target.referenced_from.is_empty() {
             clear_fallthrough(&mut labels, &mut prev_fallthrough);
@@ -137,7 +140,11 @@ fn generate_labels(instrs: &[MaybeInstruction], targets: &[JumpTarget]) -> Vec<L
         }
 
         let start_offset = jump_target.offset;
-        let end_offset = targets[target + 1].offset;
+        let end_offset = if let Some(next) = targets.get(target + 1) {
+            next.offset
+        } else {
+            instrs.len()
+        };
 
         let mut instructions = Vec::new();
         for i in start_offset..end_offset {
@@ -202,6 +209,10 @@ impl LabelList {
         self.labels.iter()
     }
 
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Label> {
+        self.labels.iter_mut()
+    }
+
     pub fn len(&self) -> usize {
         self.labels.len()
     }
@@ -209,6 +220,10 @@ impl LabelList {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    pub fn pop(&mut self) -> Option<Label> {
+        self.labels.pop()
     }
 
     pub fn get_within(&self, offset: usize) -> Option<&Label> {

@@ -9,10 +9,11 @@ use strum::{EnumIter, EnumVariantNames, VariantNames};
 #[derive(EnumVariantNames, EnumIter, Debug, Clone, Copy, PartialEq, Eq)]
 #[strum(serialize_all = "snake_case")]
 pub enum RuntimeFunction {
-    GetBlockId,
     PrintString,
-    OnInstruction,
     Panic,
+
+    GetBlockId,
+    OnInstruction,
 
     ReadI8,
     ReadI16,
@@ -54,31 +55,32 @@ impl RuntimeFunction {
 
         // NOTE: Must match the specified functions signature in `runtime/mod.rs`!
         match self {
-            // `Environment::block_id()`
-            Self::GetBlockId => sig!(i64_type, [addr: i64_type]),
-            // `Environment::print_string()`
+            // `Environment::print_string(&mut self, string_ptr: *const u8, len: u64)`
             Self::PrintString => sig!(void_type, [string_ptr: ptr_type, len: i64_type]),
-            // `Environment::panic()`
+            // `Environment::panic(&mut self)`
             Self::Panic => sig!(void_type, []),
-            // `Environment::on_instruction()`
+
+            // `Environment::block_id(&mut self, vaddr: u64) -> u64`
+            Self::GetBlockId => sig!(i64_type, [vaddr: i64_type]),
+            // `Environment::on_instruction(&mut self)`
             Self::OnInstruction => sig!(void_type, []),
 
-            // `Environment::read_u8()`
-            Self::ReadI8 => sig!(i8_type, [addr: i64_type]),
-            // `Environment::read_u16()`
-            Self::ReadI16 => sig!(i16_type, [addr: i64_type]),
-            // `Environment::read_u32()`
-            Self::ReadI32 => sig!(i32_type, [addr: i64_type]),
-            // `Environment::read_u64()`
-            Self::ReadI64 => sig!(i64_type, [addr: i64_type]),
-            // `Environment::write_u8()`
-            Self::WriteI8 => sig!(void_type, [addr: i64_type, value: i8_type]),
-            // `Environment::write_u16()`
-            Self::WriteI16 => sig!(void_type, [addr: i64_type, value: i16_type]),
-            // `Environment::write_u32()`
-            Self::WriteI32 => sig!(void_type, [addr: i64_type, value: i32_type]),
-            // `Environment::write_u64()`
-            Self::WriteI64 => sig!(void_type, [addr: i64_type, value: i64_type]),
+            // `Environment::read_u8(&mut self, vaddr: u64) -> u8`
+            Self::ReadI8 => sig!(i8_type, [vaddr: i64_type]),
+            // `Environment::read_u16(&mut self, vaddr: u64) -> u16`
+            Self::ReadI16 => sig!(i16_type, [vaddr: i64_type]),
+            // `Environment::read_u32(&mut self, vaddr: u64) -> u32`
+            Self::ReadI32 => sig!(i32_type, [vaddr: i64_type]),
+            // `Environment::read_u64(&mut self, vaddr: u64) -> u64`
+            Self::ReadI64 => sig!(i64_type, [vaddr: i64_type]),
+            // `Environment::write_u8(&mut self, vaddr: u64, value: u8)`
+            Self::WriteI8 => sig!(void_type, [vaddr: i64_type, value: i8_type]),
+            // `Environment::write_u16(&mut self, vaddr: u64, value: u16)`
+            Self::WriteI16 => sig!(void_type, [vaddr: i64_type, value: i16_type]),
+            // `Environment::write_u32(&mut self, vaddr: u64, value: u32)`
+            Self::WriteI32 => sig!(void_type, [vaddr: i64_type, value: i32_type]),
+            // `Environment::write_u64(&mut self, vaddr: u64, value: u64)`
+            Self::WriteI64 => sig!(void_type, [vaddr: i64_type, value: i64_type]),
         }
     }
 

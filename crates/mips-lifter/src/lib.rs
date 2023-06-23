@@ -28,7 +28,12 @@ pub fn run<Mem>(
         .map(|addr| mem.read_u8(addr))
         .collect::<Vec<_>>()
         .into_boxed_slice();
-    let labels = mips_decomp::LabelList::from(&*bin);
+
+    let mut labels = mips_decomp::LabelList::from(&*bin);
+
+    // TODO: remove!
+    labels.pop();
+
     let labels_str = format!("{labels:#?}");
     println!("{labels_str}");
 
@@ -53,11 +58,13 @@ pub fn run<Mem>(
 
     // Create our own compilation/runtime environment.
     let labels_with_context = label::generate_label_functions(labels, &context, &module);
+
     let (env, globals) = {
-        let env = runtime::Environment::new(mem, labels_with_context.to_owned(), gdb_stream);
+        let env = runtime::Environment::new(mem, gdb_stream);
         let globals = env.map_into(&module, &execution_engine);
         (env, globals)
     };
+
     let codegen = CodeGen::new(
         &context,
         module,
@@ -72,7 +79,10 @@ pub fn run<Mem>(
     // Set the bootup state, emulating the PIF ROM. TODO: move this to a downstream crate
 
     for (i, byte) in bin[..0x1000 - 0x40].iter().enumerate() {
-        let addr = codegen.context.i64_type().const_int((i as u64 + 0x40) + 0x0000_0000_A400_0000, false);
+        let addr = codegen
+            .context
+            .i64_type()
+            .const_int((i as u64 + 0x40) + 0x0000_0000_A400_0000, false);
         let value = codegen
             .context
             .i8_type()

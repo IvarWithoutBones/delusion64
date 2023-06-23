@@ -1,17 +1,12 @@
-//! The runtime environment for generated code.
+//! The runtime environment which generated code can call into.
 
 use self::memory::TranslationLookasideBuffer;
-use crate::{
-    codegen::{self, CodeGen},
-    label::LabelWithContext,
-};
+use crate::codegen::{self, CodeGen};
 use inkwell::{
-    execution_engine::{ExecutionEngine, JitFunction},
-    module::Module,
-    AddressSpace,
+    execution_engine::ExecutionEngine, module::Module, values::FunctionValue, AddressSpace,
 };
 use mips_decomp::{instruction::ParsedInstruction, register};
-use std::{cell::RefCell, fmt, net::TcpStream, pin::Pin};
+use std::{cell::Cell, fmt, net::TcpStream, pin::Pin};
 use strum::IntoEnumIterator;
 
 pub(crate) use self::function::RuntimeFunction;
@@ -34,10 +29,7 @@ where
     pub(crate) registers: Registers,
     memory: Mem,
     tlb: TranslationLookasideBuffer,
-
-    labels: Vec<LabelWithContext<'ctx>>,
-    codegen: RefCell<Option<CodeGen<'ctx>>>,
-
+    codegen: Cell<Option<CodeGen<'ctx>>>,
     debugger: Option<gdb::Debugger<'ctx, Mem>>,
 }
 
@@ -45,17 +37,12 @@ impl<'ctx, Mem> Environment<'ctx, Mem>
 where
     Mem: Memory,
 {
-    pub fn new(
-        memory: Mem,
-        labels: Vec<LabelWithContext<'ctx>>,
-        gdb_stream: Option<TcpStream>,
-    ) -> Pin<Box<Self>> {
+    pub fn new(memory: Mem, gdb_stream: Option<TcpStream>) -> Pin<Box<Self>> {
         let mut env = Self {
             registers: Registers::default(),
             tlb: TranslationLookasideBuffer::default(),
             debugger: None,
             codegen: Default::default(),
-            labels,
             memory,
         };
 
@@ -100,14 +87,17 @@ where
         // Add mappings to the runtime functions
         for func in RuntimeFunction::iter() {
             let ptr: *const u8 = match func {
-                RuntimeFunction::GetBlockId => Self::block_id as _,
                 RuntimeFunction::PrintString => Self::print_string as _,
-                RuntimeFunction::OnInstruction => Self::on_instruction as _,
                 RuntimeFunction::Panic => Self::panic as _,
+
+                RuntimeFunction::GetBlockId => Self::block_id as _,
+                RuntimeFunction::OnInstruction => Self::on_instruction as _,
+
                 RuntimeFunction::ReadI8 => Self::read_u8 as _,
                 RuntimeFunction::ReadI16 => Self::read_u16 as _,
                 RuntimeFunction::ReadI32 => Self::read_u32 as _,
                 RuntimeFunction::ReadI64 => Self::read_u64 as _,
+
                 RuntimeFunction::WriteI8 => Self::write_u8 as _,
                 RuntimeFunction::WriteI16 => Self::write_u16 as _,
                 RuntimeFunction::WriteI32 => Self::write_u32 as _,
@@ -126,14 +116,14 @@ where
     }
 
     pub fn attach_codegen(&self, codegen: CodeGen<'ctx>) {
-        *self.codegen.borrow_mut() = Some(codegen);
+        self.codegen.set(Some(codegen));
     }
 
     pub fn print_registers(&self) {
         println!("{:#?}", self.registers);
     }
 
-    fn translate_vaddr(&mut self, vaddr: u64) -> u64 {
+    fn virtual_to_physical_address(&mut self, vaddr: u64) -> u64 {
         self.tlb.translate(vaddr).unwrap_or_else(|| {
             self.print_registers();
             panic!("failed to generate paddr for vaddr {vaddr:#06x}");
@@ -144,99 +134,121 @@ where
         Runtime functions. These are not meant to be called directly, but rather by generated code.
     */
 
+    // TODO: split this up and prettify it a bit, it is rather unwieldly right now.
     unsafe extern "C" fn block_id(&mut self, vaddr: u64) -> u64 {
-        let paddr = self.translate_vaddr(vaddr);
+        let vaddr = vaddr & u32::MAX as u64;
 
-        println!("\nblock_id FOUND INSTRUCTIONS ({paddr:#x})\n");
-        for i in 0..10 {
-            let addr = paddr + (i * 4);
-            let instr = ParsedInstruction::try_from(self.memory.read_u32(addr)).unwrap();
-            let vaddr = vaddr + (i * 4);
-            println!("  {vaddr:06x}: {instr}");
-        }
-        println!();
+        // This is a closure so we can return early if we already a matching block compiled.
+        let func = || -> FunctionValue<'ctx> {
+            let paddr = self.virtual_to_physical_address(vaddr);
 
-        // TODO: This is not at all accurate, the physical address for a label could be anywhere.
-        // We should instead hash a block by its instructions and do a lookup in a hashmap.
-        let offset = ((paddr - 0x4000000) / 4) - 1;
-        if let Some(label_with_ctx) = self
-            .labels
-            .iter()
-            .find(|l| l.label.range().contains(&(offset as _)))
-        {
-            let start = label_with_ctx.label.start() as u64;
-            if offset == start {
-                // Already compiled a block for this address
-                println!("block_id({paddr:#x}) = {start:#x}");
-                return start;
+            // This is not accurate, just a hack consistent with label.rs.
+            let offset = (vaddr as usize - 0x0000_0000_A400_0040) / 4;
+
+            let codegen = &mut self.codegen.get_mut().as_mut().unwrap();
+
+            if let Some(existing) = codegen.labels.iter().find(|l| l.label.start() == offset) {
+                println!("  found existing block at {vaddr:#x} (offset={offset:#x})");
+                let name = existing.function.get_name().to_str().unwrap();
+                println!("  using existing function: '{name}'");
+                return existing.function;
             } else {
-                // The target instruction lies in the middle of an existing block
-                let target_block = start * 4;
-                let offset = offset * 4;
-                println!("ERROR: target block is {target_block:#x} but tried to jump to the middle ({paddr:#x}). offset={offset:#x}\n");
-                return start;
+                println!("  generating new block at {vaddr:#x} (offset={offset:#x})");
+            }
 
-                // panic!();
+            let bin = {
+                let mut addr = paddr;
+                let mut break_after = None;
+                let mut bin: Vec<u8> = Vec::new();
+                loop {
+                    let value = self.memory.read_u32(addr);
+                    if let Ok(instr) = ParsedInstruction::try_from(value) {
+                        if instr.has_delay_slot() {
+                            break_after = Some(2);
+                        } else if instr.ends_block() {
+                            println!("  {:#010x}: {instr}", addr);
+                            bin.extend_from_slice(&value.to_be_bytes());
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
 
-                let codegen = &mut self.codegen.borrow_mut();
-                let codegen = codegen.as_mut().unwrap();
+                    bin.extend_from_slice(&value.to_be_bytes());
 
-                codegen
-                    .dynamic_add_fn(|codegen, module| {
-                        let func = module.add_function(
-                            "dynamic_block",
-                            codegen.context.void_type().fn_type(&[], false),
-                            None,
+                    if let Some(break_after) = break_after.as_mut() {
+                        *break_after -= 1;
+                        if *break_after == 0 {
+                            break;
+                        }
+                    }
+
+                    addr += 4;
+                }
+
+                bin.into_boxed_slice()
+            };
+
+            let mut label_list = mips_decomp::LabelList::from(&*bin);
+            for label in label_list.iter_mut() {
+                // This is not accurate, just a hack consistent with label.rs.
+                let addr = (vaddr as usize - 0x0000_0000_A400_0040) / 4;
+                label.set_start(addr);
+            }
+
+            let lab = codegen
+                .add_dynamic_function(|codegen, module| {
+                    let mut lab =
+                        crate::label::generate_label_functions(label_list, codegen.context, module)
+                            .pop()
+                            .unwrap();
+
+                    if let Some(fallthrough) = codegen
+                        .labels
+                        .iter()
+                        .find(|l| l.label.start() == lab.label.end())
+                    {
+                        println!(
+                            "  found fallthrough block at {:#x}",
+                            fallthrough.label.start(),
                         );
 
-                        {
-                            // https://github.com/llvm/llvm-project/blob/29293e6f9d8d20464ffcb9f9401c968674c90ea2/llvm/lib/Transforms/Utils/CloneFunction.cpp
-                            for b in label_with_ctx.function.get_basic_blocks() {
-                                let new_block = codegen
-                                    .context
-                                    .append_basic_block(func, b.get_name().to_str().unwrap());
-                                codegen.builder.position_at_end(new_block);
-
-                                let mut instr = b.get_first_instruction().unwrap();
-                                println!("instr: {instr}");
-                                codegen.builder.insert_instruction(&instr.clone(), None);
-                                while let Some(next) = instr.get_next_instruction() {
-                                    println!("instr: {next}");
-                                    let name = next.get_name().map(|name| name.to_str().unwrap());
-                                    codegen.builder.insert_instruction(&next.clone(), name);
-                                    instr = next;
-                                }
-                            }
+                        // See the comment in `label.rs` for more context.
+                        if fallthrough.label.instructions.len() == 1 {
+                            lab.fallthrough_instr = Some(fallthrough.label.instructions[0].clone());
+                            lab.fallthrough_fn = fallthrough.fallthrough_fn;
+                        } else {
+                            lab.fallthrough_fn = Some(fallthrough.function);
                         }
+                    }
 
-                        func
-                    })
-                    .unwrap_or_else(|e| {
-                        codegen.module.print_to_file("test/gen.ll").unwrap();
-                        println!("failed to add dynamic block: {e}");
-                        panic!();
-                    });
+                    lab.compile(codegen);
+                    lab
+                })
+                .unwrap();
 
-                println!("called dynamic_block, recompiling...");
-                let block_fn: JitFunction<unsafe extern "C" fn()> = unsafe {
-                    codegen
-                        .execution_engine
-                        .get_function("dynamic_block")
-                        .unwrap()
-                };
-                block_fn.call();
-            }
-        } else {
-            println!("ERROR: no block contains offset {offset:#x}");
-        }
+            let func = lab.function;
+            codegen.labels.push(lab);
+            func
+        }();
+
+        let name = func.get_name().to_str().unwrap();
+        println!("  executing '{name}'");
+
+        self.codegen
+            .get_mut()
+            .as_mut()
+            .unwrap()
+            .execution_engine
+            .run_function(func, &[]);
 
         self.print_registers();
-        panic!("failed to find label for address {paddr:#x}");
+        unreachable!("block_id({vaddr:#x}) returned!");
     }
 
     unsafe extern "C" fn on_instruction(&mut self) {
         let pc_vaddr = self.registers[register::Special::Pc];
-        let pc_paddr = self.translate_vaddr(pc_vaddr);
+        let pc_paddr = self.virtual_to_physical_address(pc_vaddr);
 
         let instr = ParsedInstruction::try_from(self.memory.read_u32(pc_paddr)).unwrap();
         println!("{pc_vaddr:06x}: {instr}");
@@ -263,42 +275,42 @@ where
     }
 
     unsafe extern "C" fn read_u8(&mut self, vaddr: u64) -> u8 {
-        let paddr = self.translate_vaddr(vaddr);
+        let paddr = self.virtual_to_physical_address(vaddr);
         self.memory.read_u8(paddr)
     }
 
     unsafe extern "C" fn read_u16(&mut self, vaddr: u64) -> u16 {
-        let paddr = self.translate_vaddr(vaddr);
+        let paddr = self.virtual_to_physical_address(vaddr);
         self.memory.read_u16(paddr)
     }
 
     unsafe extern "C" fn read_u32(&mut self, vaddr: u64) -> u32 {
-        let paddr = self.translate_vaddr(vaddr);
+        let paddr = self.virtual_to_physical_address(vaddr);
         self.memory.read_u32(paddr)
     }
 
     unsafe extern "C" fn read_u64(&mut self, vaddr: u64) -> u64 {
-        let paddr = self.translate_vaddr(vaddr);
+        let paddr = self.virtual_to_physical_address(vaddr);
         self.memory.read_u64(paddr)
     }
 
     unsafe extern "C" fn write_u8(&mut self, vaddr: u64, value: u8) {
-        let paddr = self.translate_vaddr(vaddr);
+        let paddr = self.virtual_to_physical_address(vaddr);
         self.memory.write_u8(paddr, value)
     }
 
     unsafe extern "C" fn write_u16(&mut self, vaddr: u64, value: u16) {
-        let paddr = self.translate_vaddr(vaddr);
+        let paddr = self.virtual_to_physical_address(vaddr);
         self.memory.write_u16(paddr, value)
     }
 
     unsafe extern "C" fn write_u32(&mut self, vaddr: u64, value: u32) {
-        let paddr = self.translate_vaddr(vaddr);
+        let paddr = self.virtual_to_physical_address(vaddr);
         self.memory.write_u32(paddr, value)
     }
 
     unsafe extern "C" fn write_u64(&mut self, vaddr: u64, value: u64) {
-        let paddr = self.translate_vaddr(vaddr);
+        let paddr = self.virtual_to_physical_address(vaddr);
         self.memory.write_u64(paddr, value)
     }
 }
