@@ -203,6 +203,7 @@ where
                             .pop()
                             .unwrap();
 
+                    // TODO: generate the fallthrough label if none could be found.
                     if let Some(fallthrough) = codegen
                         .labels
                         .iter()

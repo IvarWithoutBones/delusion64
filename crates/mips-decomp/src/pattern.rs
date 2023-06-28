@@ -70,6 +70,8 @@ pub enum Operand {
     Coprocessor,
     Format,
     Condition,
+    CacheSubject,
+    CacheOpcode,
 }
 
 impl Operand {
@@ -85,6 +87,8 @@ impl Operand {
             'x' => Self::Coprocessor,
             'a' => Self::Format,
             'c' => Self::Condition,
+            'y' => Self::CacheOpcode,
+            'j' => Self::CacheSubject,
             _ => panic!("invalid operand"),
         }
     }

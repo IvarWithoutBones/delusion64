@@ -3,6 +3,7 @@ use crate::instruction::ParsedInstruction;
 pub mod instruction;
 mod label;
 mod pattern;
+pub mod cache;
 pub mod register;
 
 pub use crate::label::{Label, LabelList};

@@ -153,7 +153,9 @@ pub fn recompile_instruction<'ctx>(
 
         Mnenomic::Cache => {
             // Flush instruction or data cache at address (base + offset) to RAM
-            stub(codegen, "cache");
+
+            // There is no need to emulate the instruction/data cache, so we'll ignore it for now.
+            codegen.print_constant_string("STUB: cache instruction not executed\n", "cache_stub");
         }
 
         Mnenomic::Ldl => {

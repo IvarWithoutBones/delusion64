@@ -1,4 +1,5 @@
 use crate::{
+    cache::{CacheOpcode, CacheOperation, CacheSubject},
     pattern::{InstructionPattern, Operand},
     register, INSTRUCTION_SIZE,
 };
@@ -274,6 +275,12 @@ impl Instruction {
         }
     }
 
+    pub fn get_cache_operation(&self, raw: u32) -> Option<CacheOperation> {
+        let subject = CacheSubject::from_repr(self.pattern.get(Operand::CacheSubject, raw)? as _)?;
+        let opcode = CacheOpcode::from_repr(self.pattern.get(Operand::CacheOpcode, raw)? as _)?;
+        CacheOperation::new(subject, opcode)
+    }
+
     pub fn try_resolve_static_jump(&self, raw: u32, pc: u64) -> Option<u64> {
         if !self.mnenomic.is_branch() {
             return None;
@@ -300,20 +307,52 @@ impl Instruction {
         }
 
         let mut result = format!("{: <8}", self.mnenomic.name());
+
         for (i, (op, sign)) in self.operands.iter().enumerate() {
             let num = self
                 .pattern
                 .get(*op, raw)
                 .unwrap_or_else(|| panic!("failed to get operand {op:?} for {:?}", self.mnenomic));
 
-            if op.is_register() {
-                if self.mnenomic.uses_cp0_destination() && op == &Operand::Destination {
+            match op {
+                Operand::CacheOpcode => {
+                    let cache_op = self.get_cache_operation(raw).unwrap();
+                    result.push_str(&format!("{cache_op}"));
+                }
+
+                Operand::CacheSubject => {
+                    // Already covered by the `CacheOpcode`.
+                    continue;
+                }
+
+                Operand::Offset => {
+                    if let Some((next_op, _signed)) = self.operands.get(i + 1) {
+                        if next_op == &Operand::Base {
+                            let base = register::GeneralPurpose::name_from_index(
+                                self.pattern.get(*next_op, raw).unwrap_or_else(|| {
+                                    panic!("failed to get operand {op:?} for {:?}", self.mnenomic)
+                                }) as i16 as _,
+                            );
+
+                            result.push_str(&format!("{}({base})", sign.format(num)));
+                            break; // Always the last parameter
+                        } else {
+                            result.push_str(&sign.format(num))
+                        }
+                    } else {
+                        result.push_str(&sign.format(num))
+                    }
+                }
+
+                Operand::Destination if self.mnenomic.uses_cp0_destination() => {
                     result.push_str(register::Cp0::name_from_index(num as _));
-                } else {
+                }
+
+                _ if op.is_register() => {
                     result.push_str(register::GeneralPurpose::name_from_index(num as _));
                 }
-            } else {
-                result.push_str(&sign.format(num));
+
+                _ => result.push_str(&sign.format(num)),
             }
 
             if i < self.operands.len() - 1 {
@@ -427,6 +466,15 @@ impl ParsedInstruction {
             )
         })
     }
+
+    pub fn cache_operation(&self) -> CacheOperation {
+        self.instr.get_cache_operation(self.raw).unwrap_or_else(|| {
+            panic!(
+                "failed to get cache operation for instruction {:?}",
+                self.instr.mnenomic.name()
+            )
+        })
+    }
 }
 
 impl TryFrom<u32> for ParsedInstruction {
@@ -496,7 +544,7 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Bne,     "0001 01ss ssst tttt ffff ffff ffff ffff", (Source)(Target)(Offset, Signed16)),
     instr!(Bnel,    "0101 01ss ssst tttt ffff ffff ffff ffff", (Source)(Target)(Offset, Signed16)),
     instr!(Break,   "0000 00kk kkkk kkkk kkkk kkkk kk00 1101"),
-    instr!(Cache,   "1011 11bb bbbk kkkk ffff ffff ffff ffff", (Immediate)(Offset, Signed16)(Base)),
+    instr!(Cache,   "1011 11bb bbby yyjj ffff ffff ffff ffff", (CacheOpcode)(CacheSubject)(Offset, Signed16)(Base)),
     instr!(Cfcz,    "0100 xx00 010t tttt dddd d000 0000 0000", (Coprocessor)(Target)(Destination)),
     instr!(Copz,    "0100 xx1k kkkk kkkk kkkk kkkk kkkk kkkk", (Coprocessor)(Immediate)),
     instr!(Ctcz,    "0100 xx00 110t tttt dddd d000 0000 0000", (Coprocessor)(Target)(Destination)),
