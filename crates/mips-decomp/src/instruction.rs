@@ -316,8 +316,11 @@ impl Instruction {
 
             match op {
                 Operand::CacheOpcode => {
-                    let cache_op = self.get_cache_operation(raw).unwrap();
-                    result.push_str(&format!("{cache_op}"));
+                    if let Some(cache_op) = self.get_cache_operation(raw) {
+                        result.push_str(&cache_op.to_string());
+                    } else {
+                        result.push_str("???");
+                    }
                 }
 
                 Operand::CacheSubject => {

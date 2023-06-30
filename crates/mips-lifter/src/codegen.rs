@@ -146,6 +146,7 @@ impl<'ctx> CodeGen<'ctx> {
             .append_basic_block(self.label_not_found, "label_not_found");
         self.builder.position_at_end(label_not_found_block);
         self.print_constant_string("ERROR: unable to fetch label\n", "label_not_found_str");
+        env_call!(self, RuntimeFunction::Panic, []);
         self.builder.build_return(None);
     }
 
@@ -195,7 +196,14 @@ impl<'ctx> CodeGen<'ctx> {
         self.labels
             .iter()
             .find(|l| l.label.start() == (address as usize / mips_decomp::INSTRUCTION_SIZE))
-            .map_or_else(|| self.label_not_found, |l| l.function)
+            .map_or_else(
+                || {
+                    let addr = self.context.i64_type().const_int(address, false);
+                    self.build_dynamic_jump(addr);
+                    self.label_not_found
+                },
+                |l| l.function,
+            )
     }
 
     pub fn call_label(&self, label: FunctionValue<'ctx>) {

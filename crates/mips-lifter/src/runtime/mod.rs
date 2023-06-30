@@ -137,6 +137,7 @@ where
     // TODO: split this up and prettify it a bit, it is rather unwieldly right now.
     unsafe extern "C" fn block_id(&mut self, vaddr: u64) -> u64 {
         let vaddr = vaddr & u32::MAX as u64;
+        println!("block_id({vaddr:#x})");
 
         // This is a closure so we can return early if we already a matching block compiled.
         let func = || -> FunctionValue<'ctx> {
@@ -221,6 +222,28 @@ where
                         } else {
                             lab.fallthrough_fn = Some(fallthrough.function);
                         }
+                    } else {
+                        let fallthrough_func = codegen.module.add_function(
+                            "fallthrough",
+                            codegen.context.void_type().fn_type(&[], false),
+                            None,
+                        );
+
+                        let fallthrough_block = codegen
+                            .context
+                            .append_basic_block(fallthrough_func, "fallthrough_block");
+                        codegen.builder.position_at_end(fallthrough_block);
+
+                        let pc = codegen.read_special_reg(register::Special::Pc);
+                        let next = codegen.builder.build_int_add(
+                            pc.into_int_value(),
+                            codegen.context.i64_type().const_int(4, false),
+                            "next_block_addr",
+                        );
+
+                        codegen.build_dynamic_jump(next);
+                        codegen.builder.build_return(None);
+                        lab.fallthrough_fn = Some(fallthrough_func);
                     }
 
                     lab.compile(codegen);

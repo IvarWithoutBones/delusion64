@@ -86,7 +86,7 @@ pub struct TranslationLookasideBuffer {
 }
 
 impl TranslationLookasideBuffer {
-    fn load(&mut self, vaddr: u64) -> Option<u64> {
+    fn load(&self, vaddr: u64) -> Option<u64> {
         for entry in &self.entries {
             let mask: u32 = (entry.page_mask().mask() as u32 >> 1) | 0x0FFF;
             let page_size: u32 = mask + 1;
@@ -137,7 +137,7 @@ impl TranslationLookasideBuffer {
     }
 
     /// Translate a virtual address to a physical address.
-    pub fn translate(&mut self, vaddr: u64) -> Option<u64> {
+    pub fn translate(&self, vaddr: u64) -> Option<u64> {
         if let Some(paddr) = Self::translate_unmapped(vaddr) {
             Some(paddr)
         } else {

@@ -151,13 +151,6 @@ pub fn recompile_instruction<'ctx>(
             stub(codegen, "ldcz");
         }
 
-        Mnenomic::Cache => {
-            // Flush instruction or data cache at address (base + offset) to RAM
-
-            // There is no need to emulate the instruction/data cache, so we'll ignore it for now.
-            codegen.print_constant_string("STUB: cache instruction not executed\n", "cache_stub");
-        }
-
         Mnenomic::Ldl => {
             // Loads a portion of a doubleword beginning at memory address (base + offset), stores 1-8 bytes in high-order portion of rt
             stub(codegen, "ldl");
@@ -185,6 +178,13 @@ pub fn recompile_instruction<'ctx>(
 
         Mnenomic::Sync => {
             // Executed as NOP on the VR4300
+        }
+
+        Mnenomic::Cache => {
+            // Flush instruction or data cache at address (base + offset) to RAM
+
+            // There is no need to emulate the instruction/data cache, so we'll ignore it for now.
+            codegen.print_constant_string("STUB: cache instruction not executed\n", "cache_stub");
         }
 
         Mnenomic::Mtlo => {

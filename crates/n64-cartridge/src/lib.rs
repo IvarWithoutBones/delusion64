@@ -1,12 +1,13 @@
 use crate::header::Header;
-use binrw::{io::Cursor, BinRead, BinResult};
+use binrw::{binrw, io::Cursor, BinRead, BinResult, BinWrite};
 use std::fmt;
 
 mod header;
 
 pub const IPL3_BOOT_CODE_LEN: usize = 0xFC0;
 
-#[derive(BinRead)]
+#[binrw]
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub struct Cartridge {
     pub header: Header,
     pub ipl3_boot_code: Box<[u8; IPL3_BOOT_CODE_LEN]>,
@@ -18,6 +19,13 @@ impl Cartridge {
     pub fn new(bin: &[u8]) -> Result<Self, String> {
         let mut cursor = Cursor::new(bin);
         Self::read_be(&mut cursor).map_err(|e| e.to_string())
+    }
+
+    pub fn read(&self) -> Option<Vec<u8>> {
+        let mut buf = Vec::new();
+        let mut cursor = Cursor::new(&mut buf);
+        self.write_be(&mut cursor).ok()?;
+        Some(buf)
     }
 
     #[binrw::parser(reader, endian)]

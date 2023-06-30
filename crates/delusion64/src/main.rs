@@ -47,9 +47,8 @@ fn main() {
     });
     println!("{cart:#?}");
 
-    let mut rom = cart.ipl3_boot_code.to_vec();
-    rom.extend_from_slice(&cart.data);
-    let emulator = Emulator::new(rom.clone().into());
+    let rom = cart.read().unwrap();
+    let emulator = Emulator::new(rom.into());
 
     let maybe_gdb_stream = cli
         .gdb
@@ -57,7 +56,7 @@ fn main() {
 
     mips_lifter::run(
         emulator,
-        emu::CARTRIDGE_ROM.start..(emu::CARTRIDGE_ROM.start + bin.len() as u64 + 1),
+        emu::CARTRIDGE_ROM.start + 0x40..(emu::CARTRIDGE_ROM.start + bin.len() as u64),
         maybe_gdb_stream,
         cli.llvm_ir.as_deref(),
         cli.disassembly.as_deref(),

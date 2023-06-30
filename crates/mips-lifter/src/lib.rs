@@ -1,4 +1,4 @@
-use crate::codegen::CodeGen;
+use crate::{codegen::CodeGen, runtime::RuntimeFunction};
 use inkwell::{context::Context, execution_engine::JitFunction, OptimizationLevel};
 use mips_decomp::register;
 use std::{io::Write, net::TcpStream, ops::Range};
@@ -78,11 +78,11 @@ pub fn run<Mem>(
 
     // Set the bootup state, emulating the PIF ROM. TODO: move this to a downstream crate
 
-    for (i, byte) in bin[..0x1000 - 0x40].iter().enumerate() {
+    for (i, byte) in bin[..0x1000].iter().enumerate() {
         let addr = codegen
             .context
             .i64_type()
-            .const_int((i as u64 + 0x40) + 0x0000_0000_A400_0000, false);
+            .const_int(i as u64 + 0x0000_0000_A400_0040, false);
         let value = codegen
             .context
             .i8_type()
@@ -92,7 +92,7 @@ pub fn run<Mem>(
         codegen.write_memory(addr, value);
     }
 
-    codegen.write_general_reg(
+    codegen.write_special_reg(
         register::Special::Pc,
         i64_type.const_int(0x0000_0000_A400_0040, false).into(),
     );
@@ -112,11 +112,19 @@ pub fn run<Mem>(
         i64_type.const_int(0x0000_0000_0000_003F, false).into(),
     );
 
-    codegen.call_label(codegen.get_label(0));
+    codegen.build_dynamic_jump(
+        codegen
+            .read_special_reg(register::Special::Pc)
+            .into_int_value(),
+    );
+
+    codegen.print_constant_string("ERROR: main returned!", "main_returned_err");
+    env_call!(codegen, RuntimeFunction::Panic, []);
+    codegen.builder.build_unreachable();
 
     // Compile the generated functions.
     for (i, label) in codegen.labels.iter().enumerate() {
-        println!("compiling label {}/{}", i + 1, codegen.labels.len());
+        println!("compiling label {}/{}", i + 1, codegen.labels.len() - 1);
         label.compile(&codegen);
     }
 
