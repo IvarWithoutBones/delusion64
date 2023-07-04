@@ -111,7 +111,10 @@ impl<'ctx> LabelWithContext<'ctx> {
             if let Some(fallthrough_fn) = self.fallthrough_fn {
                 codegen.call_label(fallthrough_fn);
             } else {
-                codegen.builder.build_return(None);
+                let str = format!("ERROR: label {:#x} attempted to execute fallthrough block without one exisiting!\n", self.label.start() * 4);
+                codegen.print_constant_string(&str, "error_no_fallthrough");
+                env_call!(codegen, RuntimeFunction::Panic, []);
+                codegen.builder.build_unreachable();
             }
         }
     }
@@ -124,11 +127,8 @@ impl<'ctx> LabelWithContext<'ctx> {
     ) -> Option<BasicBlock<'ctx>> {
         let addr = ((self.label.start() + index) * INSTRUCTION_SIZE) as u64;
 
-        // Set the program counter to the current instruction.
-        // TODO: this is inaccurate, we should set PC based on the TLB.
-        let pc = codegen
-            .build_i64(addr + 0x0000_0000_A400_0040)
-            .into_int_value();
+        // Set the program counter to the current instruction, assumes the labels start corresponds to a virtual address.
+        let pc = codegen.build_i64(addr).into_int_value();
         codegen.write_special_reg(register::Special::Pc, pc.into());
 
         // Call the `on_instruction` callback from the environment, used for the debugger.
@@ -147,11 +147,7 @@ pub fn generate_label_functions<'ctx>(
     let mut result: Vec<LabelWithContext<'_>> = Vec::new();
 
     for (i, label) in labels.iter().enumerate() {
-        println!(
-            "generating function for label {}/{}",
-            i + 1,
-            labels.len() + 1
-        );
+        println!("generating function for label {}/{}", i + 1, labels.len());
 
         let existing_label = result
             .iter()

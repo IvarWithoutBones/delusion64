@@ -30,6 +30,7 @@ pub fn run<Mem>(
         .into_boxed_slice();
 
     let mut labels = mips_decomp::LabelList::from(&*bin);
+    labels.set_offset(0x0000_0000_A400_0040 / 4);
 
     // TODO: remove!
     labels.pop();
@@ -118,13 +119,11 @@ pub fn run<Mem>(
             .into_int_value(),
     );
 
-    codegen.print_constant_string("ERROR: main returned!", "main_returned_err");
-    env_call!(codegen, RuntimeFunction::Panic, []);
     codegen.builder.build_unreachable();
 
     // Compile the generated functions.
     for (i, label) in codegen.labels.iter().enumerate() {
-        println!("compiling label {}/{}", i + 1, codegen.labels.len() - 1);
+        println!("compiling label {}/{}", i + 1, codegen.labels.len());
         label.compile(&codegen);
     }
 

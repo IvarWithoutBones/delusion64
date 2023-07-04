@@ -144,8 +144,7 @@ where
             let paddr = self.virtual_to_physical_address(vaddr);
 
             // This is not accurate, just a hack consistent with label.rs.
-            let offset = (vaddr as usize - 0x0000_0000_A400_0040) / 4;
-
+            let offset = vaddr as usize / 4;
             let codegen = &mut self.codegen.get_mut().as_mut().unwrap();
 
             if let Some(existing) = codegen.labels.iter().find(|l| l.label.start() == offset) {
@@ -191,11 +190,7 @@ where
             };
 
             let mut label_list = mips_decomp::LabelList::from(&*bin);
-            for label in label_list.iter_mut() {
-                // This is not accurate, just a hack consistent with label.rs.
-                let addr = (vaddr as usize - 0x0000_0000_A400_0040) / 4;
-                label.set_start(addr);
-            }
+            label_list.set_offset(offset);
 
             let lab = codegen
                 .add_dynamic_function(|codegen, module| {

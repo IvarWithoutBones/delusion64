@@ -226,12 +226,21 @@ impl LabelList {
         self.labels.pop()
     }
 
-    pub fn get_within(&self, offset: usize) -> Option<&Label> {
-        self.labels.iter().find(|l| l.range().contains(&offset))
-    }
-
     pub fn get(&self, offset: usize) -> Option<&Label> {
         self.labels.iter().find(|l| l.start_offset == offset)
+    }
+
+    pub fn set_offset(&mut self, offset: usize) {
+        for label in self.iter_mut() {
+            label.set_start(offset + label.start());
+            for reference in label.referenced_from_offsets.iter_mut() {
+                *reference += offset;
+            }
+
+            if let Some(fallthrough) = label.fallthrough_offset.as_mut() {
+                *fallthrough += offset;
+            }
+        }
     }
 }
 

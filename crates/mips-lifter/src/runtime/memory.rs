@@ -95,7 +95,7 @@ impl TranslationLookasideBuffer {
             let vpn: u32 = (entry.entry_hi().0 & ((!tmp) as u32)) as _;
             let masked_vaddr: u32 = (vaddr & (vpn as u64)) as _;
 
-            println!("\nvaddr:        {vaddr:064b} ({vaddr:#x})\nmasked vaddr: {masked_vaddr:032b} ({masked_vaddr:#x})\nvpn:          {vpn:032b} ({vpn:#x})\npage size:    {page_size:032b} ({page_size:#x})");
+            // println!("\nvaddr:        {vaddr:064b} ({vaddr:#x})\nmasked vaddr: {masked_vaddr:032b} ({masked_vaddr:#x})\nvpn:          {vpn:032b} ({vpn:#x})\npage size:    {page_size:032b} ({page_size:#x})");
 
             if masked_vaddr != vpn {
                 println!("vpn mismatch");
@@ -112,7 +112,7 @@ impl TranslationLookasideBuffer {
                 };
 
                 if (entry_lo.0 & 0x02) == 0 {
-                    println!("invalid");
+                    println!("tlb entry invalid ({vaddr:#x})");
                     continue;
                 }
 
