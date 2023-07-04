@@ -1,5 +1,6 @@
 use crate::{label::LabelWithContext, runtime::RuntimeFunction, LLVM_CALLING_CONVENTION_FAST};
 use inkwell::{
+    attributes::{Attribute, AttributeLoc},
     basic_block::BasicBlock,
     builder::Builder,
     context::Context,
@@ -24,6 +25,19 @@ macro_rules! env_call {
         let args = &[$codegen.globals.env_ptr.as_pointer_value().into(), $($args.into()),*];
         $codegen.build_call($func.name(), args)
     }};
+}
+
+pub fn function_attributes(context: &Context) -> Vec<Attribute> {
+    // TODO: would `naked` make sense to skip the prologue/epilogue?
+    const ATTRIBUTE_NAMES: &[&str] = &["noreturn", "nounwind", "nosync", "nofree", "nocf_check"];
+
+    let mut attributes = Vec::new();
+    for attr_name in ATTRIBUTE_NAMES {
+        let kind_id = Attribute::get_named_enum_kind_id(attr_name);
+        let attr = context.create_enum_attribute(kind_id, 0);
+        attributes.push(attr);
+    }
+    attributes
 }
 
 #[derive(Debug)]
@@ -136,6 +150,10 @@ impl<'ctx> CodeGen<'ctx> {
     fn set_call_attrs(&self, callsite_value: CallSiteValue<'ctx>) {
         callsite_value.set_tail_call(true);
         callsite_value.set_call_convention(LLVM_CALLING_CONVENTION_FAST);
+
+        for attr in function_attributes(self.context) {
+            callsite_value.add_attribute(AttributeLoc::Function, attr);
+        }
     }
 
     /// Generate a dynamic jump to the given virtual address, ending the current basic block.
@@ -146,6 +164,7 @@ impl<'ctx> CodeGen<'ctx> {
         // Get a pointer to the host function at the given guest pointer, or JIT compile it if its not yet generated.
         let func_ptr_callsite = env_call!(self, RuntimeFunction::GetFunctionPtr, [address]);
         self.set_call_attrs(func_ptr_callsite);
+
         let raw_ptr = func_ptr_callsite
             .try_as_basic_value()
             .left()

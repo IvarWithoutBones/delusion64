@@ -1,8 +1,13 @@
 use crate::{
-    codegen::CodeGen, recompiler::recompile_instruction, runtime::RuntimeFunction,
+    codegen::{function_attributes, CodeGen},
+    recompiler::recompile_instruction,
+    runtime::RuntimeFunction,
     LLVM_CALLING_CONVENTION_FAST,
 };
-use inkwell::{basic_block::BasicBlock, context::Context, module::Module, values::FunctionValue};
+use inkwell::{
+    attributes::AttributeLoc, basic_block::BasicBlock, context::Context, module::Module,
+    values::FunctionValue,
+};
 use mips_decomp::{instruction::ParsedInstruction, register, Label, INSTRUCTION_SIZE};
 use std::sync::atomic::AtomicUsize;
 
@@ -37,6 +42,9 @@ impl<'ctx> LabelWithContext<'ctx> {
         let void_fn_type = context.void_type().fn_type(&[], false);
         let function = module.add_function(&name, void_fn_type, None);
         function.set_call_conventions(LLVM_CALLING_CONVENTION_FAST);
+        for attr in function_attributes(context) {
+            function.add_attribute(AttributeLoc::Function, attr);
+        }
 
         LabelWithContext {
             label: label.to_owned(),

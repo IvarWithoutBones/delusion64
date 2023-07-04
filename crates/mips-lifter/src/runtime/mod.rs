@@ -1,9 +1,13 @@
 //! The runtime environment which generated code can call into.
 
 use self::memory::TranslationLookasideBuffer;
-use crate::codegen::{self, CodeGen};
+use crate::{
+    codegen::{self, function_attributes, CodeGen},
+    LLVM_CALLING_CONVENTION_FAST,
+};
 use inkwell::{
-    execution_engine::ExecutionEngine, module::Module, values::FunctionValue, AddressSpace,
+    attributes::AttributeLoc, execution_engine::ExecutionEngine, module::Module,
+    values::FunctionValue, AddressSpace,
 };
 use mips_decomp::{instruction::ParsedInstruction, register};
 use std::{cell::Cell, fmt, net::TcpStream, pin::Pin};
@@ -223,7 +227,10 @@ where
                             codegen.context.void_type().fn_type(&[], false),
                             None,
                         );
-                        fallthrough_func.set_call_conventions(crate::LLVM_CALLING_CONVENTION_FAST);
+                        fallthrough_func.set_call_conventions(LLVM_CALLING_CONVENTION_FAST);
+                        for attr in function_attributes(codegen.context) {
+                            fallthrough_func.add_attribute(AttributeLoc::Function, attr);
+                        }
 
                         let fallthrough_block = codegen
                             .context
@@ -248,7 +255,6 @@ where
 
             let func = lab.function;
             codegen.labels.push(lab);
-
 
             codegen.module.print_to_file("test/a.ll").unwrap();
 
