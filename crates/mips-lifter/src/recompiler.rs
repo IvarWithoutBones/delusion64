@@ -286,7 +286,7 @@ pub fn recompile_instruction<'ctx>(
                 codegen.builder.build_or(target, delay_slot, "jal_addr")
             };
 
-            codegen.build_dynamic_jump(addr);
+            codegen.call_label_dynamic(addr);
         }
 
         Mnenomic::Jalr => {
@@ -326,10 +326,10 @@ pub fn recompile_instruction<'ctx>(
                 };
 
                 let target = i64_type.const_int((instr.immediate() as u64) << 2, true);
-                codegen.builder.build_or(target, delay_slot, "jal_addr")
+                codegen.builder.build_or(target, delay_slot, "j_addr")
             };
 
-            codegen.build_dynamic_jump(addr);
+            codegen.call_label_dynamic(addr);
         }
 
         Mnenomic::Sc => {

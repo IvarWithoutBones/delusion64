@@ -196,7 +196,7 @@ impl Mnenomic {
 
     pub const fn ends_block(&self) -> bool {
         self.is_branch()
-            | matches!(self, |Mnenomic::Break| Mnenomic::Eret
+            || matches!(self, |Mnenomic::Break| Mnenomic::Eret
                 | Mnenomic::J
                 | Mnenomic::Jal
                 | Mnenomic::Jalr

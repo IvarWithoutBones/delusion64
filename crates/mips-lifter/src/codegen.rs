@@ -1,4 +1,4 @@
-use crate::{label::LabelWithContext, runtime::RuntimeFunction};
+use crate::{label::LabelWithContext, runtime::RuntimeFunction, LLVM_CALLING_CONVENTION_FAST};
 use inkwell::{
     basic_block::BasicBlock,
     builder::Builder,
@@ -46,8 +46,6 @@ pub struct CodeGen<'ctx> {
     /// The generated labels, with associated functions.
     pub labels: Vec<LabelWithContext<'ctx>>,
 
-    pub dynamic_jump_to_id: FunctionValue<'ctx>,
-
     /// The function to jump to when a dynamic jump could not be resolved.
     pub label_not_found: FunctionValue<'ctx>,
 }
@@ -67,15 +65,7 @@ impl<'ctx> CodeGen<'ctx> {
             context.void_type().fn_type(&[], false),
             None,
         );
-        label_not_found.set_call_conventions(crate::LLVM_CALLING_CONVENTION_FAST);
-
-        let i64_type = context.i64_type();
-        let dynamic_jump_to_id = module.add_function(
-            "dynamic_jump_to_id",
-            context.void_type().fn_type(&[i64_type.into()], false),
-            None,
-        );
-        dynamic_jump_to_id.set_call_conventions(crate::LLVM_CALLING_CONVENTION_FAST);
+        label_not_found.set_call_conventions(LLVM_CALLING_CONVENTION_FAST);
 
         let codegen = Self {
             context,
@@ -85,58 +75,10 @@ impl<'ctx> CodeGen<'ctx> {
             globals,
             labels,
             label_not_found,
-            dynamic_jump_to_id,
         };
 
-        codegen.init_dynamic_jump_to_id();
         codegen.init_label_not_found();
         codegen
-    }
-
-    // Initialise the dynamic label lookup function.
-    fn init_dynamic_jump_to_id(&self) {
-        let main_block = self
-            .context
-            .append_basic_block(self.dynamic_jump_to_id, "main");
-
-        let error_block = self
-            .context
-            .append_basic_block(self.dynamic_jump_to_id, "error");
-        self.builder.position_at_end(error_block);
-        self.print_constant_string(
-            "ERROR: unable to fetch label for dynamic jump\n",
-            "label_not_found_dynamic_jump_str",
-        );
-        env_call!(self, RuntimeFunction::Panic, []);
-        self.builder.build_return(None);
-
-        let cases = {
-            let i64_type = self.context.i64_type();
-            let mut cases = Vec::with_capacity(self.labels.len());
-            for label in &self.labels {
-                let label_id = label.label.start() as u64;
-                let name = format!("case_{label_id:06x}",);
-
-                let block = self
-                    .context
-                    .append_basic_block(self.dynamic_jump_to_id, &name);
-                self.builder.position_at_end(block);
-                self.call_label(label.function);
-
-                cases.push((i64_type.const_int(label_id, false), block));
-            }
-            cases
-        };
-
-        self.builder.position_at_end(main_block);
-        self.builder.build_switch(
-            self.dynamic_jump_to_id
-                .get_first_param()
-                .unwrap()
-                .into_int_value(),
-            error_block,
-            &cases,
-        );
     }
 
     /// Initializes the error case that occurs when attempting to jump to a label that wasnt found.
@@ -191,26 +133,61 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(lab)
     }
 
-    /// Get the label associated with the given address, or the error function if it doesn't exist.
-    pub fn get_label(&self, address: u64) -> FunctionValue<'ctx> {
-        self.labels
-            .iter()
-            .find(|l| l.label.start() == (address as usize / mips_decomp::INSTRUCTION_SIZE))
-            .map_or_else(
-                || {
-                    let addr = self.context.i64_type().const_int(address, false);
-                    self.build_dynamic_jump(addr);
-                    self.label_not_found
-                },
-                |l| l.function,
-            )
+    fn set_call_attrs(&self, callsite_value: CallSiteValue<'ctx>) {
+        callsite_value.set_tail_call(true);
+        callsite_value.set_call_convention(LLVM_CALLING_CONVENTION_FAST);
     }
 
-    pub fn call_label(&self, label: FunctionValue<'ctx>) {
-        let callsite_value = self.builder.build_call(label, &[], "");
-        callsite_value.set_tail_call(true);
-        callsite_value.set_call_convention(crate::LLVM_CALLING_CONVENTION_FAST);
-        self.builder.build_return(None);
+    /// Generate a dynamic jump to the given virtual address, ending the current basic block.
+    pub fn call_label_dynamic(&self, address: IntValue<'ctx>) -> CallSiteValue<'ctx> {
+        let fn_ty = self.context.void_type().fn_type(&[], false);
+        let ptr_ty = fn_ty.ptr_type(Default::default());
+
+        // Get a pointer to the host function at the given guest pointer, or JIT compile it if its not yet generated.
+        let func_ptr_callsite = env_call!(self, RuntimeFunction::GetFunctionPtr, [address]);
+        self.set_call_attrs(func_ptr_callsite);
+        let raw_ptr = func_ptr_callsite
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_int_value();
+
+        // Build an indirect call to the function pointer.
+        let ptr = self.builder.build_int_to_ptr(raw_ptr, ptr_ty, "fn_ptr");
+        self.builder
+            .build_indirect_call(fn_ty, ptr, &[], "call_fn_ptr")
+    }
+
+    /// Generate a jump to the given virtual address, ending the current basic block.
+    /// If the label at the given address has already been compiled, it will be called directly.
+    /// Otherwise, it will be JIT compiled and indirectly called.
+    pub fn build_jump(&self, address: u64) {
+        let callsite_value = if let Some(lab) = self
+            .labels
+            .iter()
+            .find(|l| l.label.start() == (address as usize / INSTRUCTION_SIZE))
+        {
+            self.builder.build_call(lab.function, &[], "call_fn")
+        } else {
+            let addr = self.context.i64_type().const_int(address, false);
+            self.call_label_dynamic(addr)
+        };
+
+        self.set_call_attrs(callsite_value);
+        self.builder.build_unreachable();
+    }
+
+    /// Generate a dynamic jump to the given virtual address, ending the current basic block.
+    /// If the label at the given address has already been compiled, it will be called directly.
+    /// Otherwise, it will be JIT compiled and indirectly called.
+    pub fn build_dynamic_jump(&self, address: IntValue<'ctx>) {
+        self.set_call_attrs(self.call_label_dynamic(address));
+        self.builder.build_unreachable();
+    }
+
+    pub fn call_function(&self, func: FunctionValue<'ctx>) {
+        self.set_call_attrs(self.builder.build_call(func, &[], "call_fn"));
+        self.builder.build_unreachable();
     }
 
     pub fn get_function<F>(&self, name: &str) -> Option<JitFunction<F>>
@@ -317,7 +294,7 @@ impl<'ctx> CodeGen<'ctx> {
             };
 
             self.write_general_reg(register::GeneralPurpose::Ra, next_instr_pc.into());
-            self.call_label(self.get_label(target_pc));
+            self.build_jump(target_pc);
         }
 
         self.builder.position_at_end(else_block);
@@ -343,27 +320,11 @@ impl<'ctx> CodeGen<'ctx> {
             .build_conditional_branch(cmp, then_block, else_block);
 
         self.builder.position_at_end(then_block);
-        self.call_label(self.get_label(target_pc));
+        self.build_jump(target_pc);
 
         self.builder.position_at_end(else_block);
 
         then_block
-    }
-
-    /// Generate a dynamic jump to the given address, ending the current basic block.
-    /// Ends execution if no label matching the address could be found.
-    pub fn build_dynamic_jump(&self, address: IntValue<'ctx>) {
-        let label_id = {
-            let result = env_call!(self, RuntimeFunction::GetBlockId, [address]);
-            result.try_as_basic_value().left().unwrap().into_int_value()
-        };
-
-        // Build a switch statement with all possible labels.
-        let callsite_value =
-            self.builder
-                .build_call(self.dynamic_jump_to_id, &[label_id.into()], "dynamic_jump");
-        callsite_value.set_tail_call(true);
-        callsite_value.set_call_convention(crate::LLVM_CALLING_CONVENTION_FAST);
     }
 
     pub fn build_i64<T>(&self, value: T) -> BasicMetadataValueEnum<'ctx>

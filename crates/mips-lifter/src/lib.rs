@@ -1,4 +1,4 @@
-use crate::{codegen::CodeGen, runtime::RuntimeFunction};
+use crate::codegen::CodeGen;
 use inkwell::{context::Context, execution_engine::JitFunction, OptimizationLevel};
 use mips_decomp::register;
 use std::{io::Write, net::TcpStream, ops::Range};
@@ -118,8 +118,6 @@ pub fn run<Mem>(
             .read_special_reg(register::Special::Pc)
             .into_int_value(),
     );
-
-    codegen.builder.build_unreachable();
 
     // Compile the generated functions.
     for (i, label) in codegen.labels.iter().enumerate() {

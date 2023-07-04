@@ -12,7 +12,7 @@ pub enum RuntimeFunction {
     PrintString,
     Panic,
 
-    GetBlockId,
+    GetFunctionPtr,
     OnInstruction,
 
     ReadI8,
@@ -60,8 +60,8 @@ impl RuntimeFunction {
             // `Environment::panic(&mut self)`
             Self::Panic => sig!(void_type, []),
 
-            // `Environment::block_id(&mut self, vaddr: u64) -> u64`
-            Self::GetBlockId => sig!(i64_type, [vaddr: i64_type]),
+            // `Environment::get_function_ptr(&mut self, vaddr: u64) -> u64
+            Self::GetFunctionPtr => sig!(i64_type, [vaddr: i64_type]),
             // `Environment::on_instruction(&mut self)`
             Self::OnInstruction => sig!(void_type, []),
 

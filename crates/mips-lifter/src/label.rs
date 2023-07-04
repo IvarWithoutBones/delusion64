@@ -109,7 +109,7 @@ impl<'ctx> LabelWithContext<'ctx> {
             .is_none()
         {
             if let Some(fallthrough_fn) = self.fallthrough_fn {
-                codegen.call_label(fallthrough_fn);
+                codegen.call_function(fallthrough_fn);
             } else {
                 let str = format!("ERROR: label {:#x} attempted to execute fallthrough block without one exisiting!\n", self.label.start() * 4);
                 codegen.print_constant_string(&str, "error_no_fallthrough");

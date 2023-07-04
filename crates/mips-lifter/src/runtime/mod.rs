@@ -90,7 +90,7 @@ where
                 RuntimeFunction::PrintString => Self::print_string as _,
                 RuntimeFunction::Panic => Self::panic as _,
 
-                RuntimeFunction::GetBlockId => Self::block_id as _,
+                RuntimeFunction::GetFunctionPtr => Self::get_function_ptr as _,
                 RuntimeFunction::OnInstruction => Self::on_instruction as _,
 
                 RuntimeFunction::ReadI8 => Self::read_u8 as _,
@@ -135,7 +135,7 @@ where
     */
 
     // TODO: split this up and prettify it a bit, it is rather unwieldly right now.
-    unsafe extern "C" fn block_id(&mut self, vaddr: u64) -> u64 {
+    unsafe extern "C" fn get_function_ptr(&mut self, vaddr: u64) -> u64 {
         let vaddr = vaddr & u32::MAX as u64;
         println!("block_id({vaddr:#x})");
 
@@ -223,6 +223,7 @@ where
                             codegen.context.void_type().fn_type(&[], false),
                             None,
                         );
+                        fallthrough_func.set_call_conventions(crate::LLVM_CALLING_CONVENTION_FAST);
 
                         let fallthrough_block = codegen
                             .context
@@ -237,7 +238,6 @@ where
                         );
 
                         codegen.build_dynamic_jump(next);
-                        codegen.builder.build_return(None);
                         lab.fallthrough_fn = Some(fallthrough_func);
                     }
 
@@ -248,6 +248,10 @@ where
 
             let func = lab.function;
             codegen.labels.push(lab);
+
+
+            codegen.module.print_to_file("test/a.ll").unwrap();
+
             func
         }();
 
@@ -259,10 +263,8 @@ where
             .as_mut()
             .unwrap()
             .execution_engine
-            .run_function(func, &[]);
-
-        self.print_registers();
-        unreachable!("block_id({vaddr:#x}) returned!");
+            .get_function_address(name)
+            .unwrap() as _
     }
 
     unsafe extern "C" fn on_instruction(&mut self) {
