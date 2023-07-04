@@ -88,6 +88,12 @@ where
         let cp0_regs = module.add_global(cp0_regs_ty, None, "cp0_regs");
         execution_engine.add_global_mapping(&cp0_regs, self.registers.cp0.as_ptr() as _);
 
+        // Add a mapping to the host stack frame pointer.
+        let stack_frame = module.add_global(ptr_type, None, "host_stack_frame");
+        let stack_frame_storage = Box::new(0); // See the `globals` struct for why this is managed by the runtime.
+        execution_engine
+            .add_global_mapping(&stack_frame, stack_frame_storage.as_ref() as *const _ as _);
+
         // Add mappings to the runtime functions
         for func in RuntimeFunction::iter() {
             let ptr: *const u8 = match func {
@@ -116,6 +122,7 @@ where
             general_purpose_regs,
             special_regs,
             cp0_regs,
+            stack_frame: (stack_frame, stack_frame_storage),
         }
     }
 

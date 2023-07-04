@@ -113,6 +113,10 @@ pub fn run<Mem>(
         i64_type.const_int(0x0000_0000_0000_003F, false).into(),
     );
 
+    // Save the current stack frame, will be restored on every block to ensure no stack overflows occur.
+    // Its a rather bruteforce approach, but it works :)
+    codegen.save_host_stack();
+
     codegen.build_dynamic_jump(
         codegen
             .read_special_reg(register::Special::Pc)

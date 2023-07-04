@@ -9,9 +9,6 @@ use inkwell::{
     values::FunctionValue,
 };
 use mips_decomp::{instruction::ParsedInstruction, register, Label, INSTRUCTION_SIZE};
-use std::sync::atomic::AtomicUsize;
-
-static FUNCTION_ID: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LabelWithContext<'ctx> {
@@ -35,8 +32,7 @@ impl<'ctx> LabelWithContext<'ctx> {
     ) -> LabelWithContext<'ctx> {
         let name = {
             let start = label.start() * INSTRUCTION_SIZE;
-            let id = FUNCTION_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            format!("function_{start:06x}.{id}")
+            format!("function_{start:06x}")
         };
 
         let void_fn_type = context.void_type().fn_type(&[], false);
@@ -58,6 +54,10 @@ impl<'ctx> LabelWithContext<'ctx> {
         let name = format!("block_{:06x}", self.label.start() * INSTRUCTION_SIZE);
         let basic_block = codegen.context.append_basic_block(self.function, &name);
         codegen.builder.position_at_end(basic_block);
+
+        // Ensure we never overflow the stack with return addresses of recursive calls.
+        // In theory we should be able to avoid storing the return address in the first place, but this works for now.
+        unsafe { codegen.restore_host_stack() };
 
         let len = self.label.instructions.len();
         let second_last = len.saturating_sub(2);
@@ -90,16 +90,18 @@ impl<'ctx> LabelWithContext<'ctx> {
                     self.compile_instruction(i + 1, next_instr, codegen);
                     self.compile_instruction(i, instr, codegen);
                 } else {
-                    // The block taken when the branch was
+                    // The block taken when the branch was successful.
                     let then_block = self.compile_instruction(i, instr, codegen).unwrap();
-                    let current_block = codegen.builder.get_insert_block().unwrap();
 
-                    codegen
-                        .builder
-                        .position_before(&then_block.get_first_instruction().unwrap());
-                    self.compile_instruction(i + 1, next_instr, codegen);
-
-                    codegen.builder.position_at_end(current_block);
+                    // Two instructions that end a block in a row are undefined behavior, just ignore it.
+                    if !next_instr.ends_block() {
+                        let current_block = codegen.builder.get_insert_block().unwrap();
+                        codegen
+                            .builder
+                            .position_before(&then_block.get_first_instruction().unwrap());
+                        self.compile_instruction(i + 1, next_instr, codegen);
+                        codegen.builder.position_at_end(current_block);
+                    }
                 }
 
                 break;

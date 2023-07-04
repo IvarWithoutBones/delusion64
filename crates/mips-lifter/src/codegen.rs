@@ -5,6 +5,7 @@ use inkwell::{
     builder::Builder,
     context::Context,
     execution_engine::{ExecutionEngine, JitFunction, UnsafeFunctionPointer},
+    intrinsics::Intrinsic,
     module::Module,
     types::IntType,
     values::{
@@ -46,8 +47,12 @@ pub struct Globals<'ctx> {
     pub general_purpose_regs: GlobalValue<'ctx>,
     pub special_regs: GlobalValue<'ctx>,
     pub cp0_regs: GlobalValue<'ctx>,
+
+    // NOTE: The backing memory must be externally managed, so that the pointer remains valid across module reloads.
+    pub stack_frame: (GlobalValue<'ctx>, Box<u64>),
 }
 
+#[derive(Debug)]
 pub struct CodeGen<'ctx> {
     pub context: &'ctx Context,
     pub module: Module<'ctx>,
@@ -93,6 +98,43 @@ impl<'ctx> CodeGen<'ctx> {
 
         codegen.init_label_not_found();
         codegen
+    }
+
+    /// Saves the host stack frame to a global pointer, so that it can be restored later.
+    pub fn save_host_stack(&self) {
+        let stack_save_fn = {
+            let intrinsic = Intrinsic::find("llvm.stacksave").unwrap();
+            intrinsic.get_declaration(&self.module, &[]).unwrap()
+        };
+
+        let stack_ptr = self
+            .builder
+            .build_call(stack_save_fn, &[], "stack_save")
+            .try_as_basic_value()
+            .left()
+            .unwrap();
+
+        self.builder
+            .build_store(self.globals.stack_frame.0.as_pointer_value(), stack_ptr);
+    }
+
+    /// Restores the host stack frame from a global pointer.
+    /// Note: This must be called after `save_host_stack`, otherwise a null pointer will be dereferenced.
+    pub unsafe fn restore_host_stack(&self) {
+        let stack_restore_fn = {
+            let intrinsic = Intrinsic::find("llvm.stackrestore").unwrap();
+            intrinsic.get_declaration(&self.module, &[]).unwrap()
+        };
+
+        let ptr_type = self.context.i64_type().ptr_type(Default::default());
+        let stack_ptr = self.builder.build_load(
+            ptr_type,
+            self.globals.stack_frame.0.as_pointer_value(),
+            "stack_ptr",
+        );
+
+        self.builder
+            .build_call(stack_restore_fn, &[stack_ptr.into()], "stack_restore");
     }
 
     /// Initializes the error case that occurs when attempting to jump to a label that wasnt found.
