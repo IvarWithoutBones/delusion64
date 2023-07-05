@@ -1,4 +1,4 @@
-use crate::emu::Emulator;
+use crate::bus::{location::MemoryRegion, Bus};
 use clap::Parser;
 use n64_cartridge::Cartridge;
 use std::{
@@ -6,7 +6,7 @@ use std::{
     net::{TcpListener, TcpStream},
 };
 
-mod emu;
+mod bus;
 
 const DEFAULT_GDB_PORT: u16 = 9001;
 
@@ -48,15 +48,18 @@ fn main() {
     println!("{cart:#?}");
 
     let rom = cart.read().unwrap();
-    let emulator = Emulator::new(rom.into());
+    let emulator = Bus::new(rom.into());
 
     let maybe_gdb_stream = cli
         .gdb
         .map(|port| wait_for_gdb_connection(port).expect("failed to wait for GDB connection"));
 
+    let rom_range = (MemoryRegion::CartridgeRom.start() + 0x40)
+        ..(MemoryRegion::CartridgeRom.start() + bin.len() as u64);
+
     mips_lifter::run(
         emulator,
-        emu::CARTRIDGE_ROM.start + 0x40..(emu::CARTRIDGE_ROM.start + bin.len() as u64),
+        rom_range,
         maybe_gdb_stream,
         cli.llvm_ir.as_deref(),
         cli.disassembly.as_deref(),

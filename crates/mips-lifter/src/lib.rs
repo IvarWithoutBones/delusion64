@@ -77,8 +77,9 @@ pub fn run<Mem>(
     // Build the main function.
     codegen.builder.position_at_end(entry_block);
 
-    // Set the bootup state, emulating the PIF ROM. TODO: move this to a downstream crate
+    // Set the initial CPU state, emulating the PIF ROM (IPL1+IPL2). TODO: move this to a downstream crate
 
+    // Copy IPL3 into memory
     for (i, byte) in bin[..0x1000].iter().enumerate() {
         let addr = codegen
             .context

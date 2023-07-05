@@ -175,6 +175,7 @@ dependencies = [
  "clap",
  "mips-lifter",
  "n64-cartridge",
+ "strum",
 ]
 
 [[package]]
