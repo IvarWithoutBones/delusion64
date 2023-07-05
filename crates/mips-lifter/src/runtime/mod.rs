@@ -288,7 +288,7 @@ where
         println!("{pc_vaddr:06x}: {instr}");
 
         if self.debugger.is_some() {
-            self.debugger.as_mut().unwrap().on_instruction(pc_paddr);
+            self.debugger.as_mut().unwrap().on_instruction(pc_vaddr);
             self.update_debugger();
             while self.debugger.as_ref().unwrap().is_paused() {
                 // Block until the debugger tells us to continue

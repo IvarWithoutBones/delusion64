@@ -167,20 +167,28 @@ where
 {
     fn add_sw_breakpoint(
         &mut self,
-        addr: <Self::Arch as gdbstub::arch::Arch>::Usize,
+        vaddr: <Self::Arch as gdbstub::arch::Arch>::Usize,
         _kind: <Self::Arch as gdbstub::arch::Arch>::BreakpointKind,
     ) -> TargetResult<bool, Self> {
-        let paddr = self.virtual_to_physical_address(addr as _);
-        Ok(self.debugger.as_mut().unwrap().breakpoints.insert(paddr))
+        Ok(self
+            .debugger
+            .as_mut()
+            .unwrap()
+            .breakpoints
+            .insert(vaddr as _))
     }
 
     fn remove_sw_breakpoint(
         &mut self,
-        addr: <Self::Arch as gdbstub::arch::Arch>::Usize,
+        vaddr: <Self::Arch as gdbstub::arch::Arch>::Usize,
         _kind: <Self::Arch as gdbstub::arch::Arch>::BreakpointKind,
     ) -> TargetResult<bool, Self> {
-        let paddr = self.virtual_to_physical_address(addr as _);
-        Ok(self.debugger.as_mut().unwrap().breakpoints.remove(&paddr))
+        Ok(self
+            .debugger
+            .as_mut()
+            .unwrap()
+            .breakpoints
+            .remove(&(vaddr as _)))
     }
 }
 

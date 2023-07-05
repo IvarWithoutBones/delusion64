@@ -151,7 +151,7 @@ impl fmt::Debug for Header {
             .field("boot_address", &format_args!("{:#08X}", self.boot_address))
             .field("libultra_version", &self.libultra_version)
             .field(
-                "ipl3_check_code",
+                "ipl3_checksum",
                 &format_args!("{:#016X}", self.ipl3_checksum),
             )
             .field("title", &self.title)
