@@ -413,7 +413,7 @@ pub fn recompile_instruction<'ctx>(
             // Loads word stored at memory address (base + offset), stores sign-extended word in rt, and sets the LL bit to 1
             let addr = codegen.base_plus_offset(instr, "ll_addr");
             let value = codegen.read_memory(i32_type, addr).into_int_value();
-            let sign_extended = codegen.sign_extend_to_i64(value);
+            let sign_extended = codegen.sign_extend_to(i32_type, value);
             codegen.write_general_reg(instr.rt(), sign_extended.into());
 
             let one = i64_type.const_int(1, false).into();
@@ -440,7 +440,7 @@ pub fn recompile_instruction<'ctx>(
             // XOR rs with zero-extended immediate, store result in rd
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
             let immediate =
-                codegen.zero_extend_to_i64(i16_type.const_int(instr.immediate() as _, false));
+                codegen.zero_extend_to(i32_type, i16_type.const_int(instr.immediate() as _, false));
 
             let result = codegen.builder.build_xor(source, immediate, "xori_res");
             codegen.write_general_reg(instr.rt(), result.into());
@@ -458,7 +458,7 @@ pub fn recompile_instruction<'ctx>(
             // Add sign-extended 16bit immediate and rs, store result in rt
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
             let immediate =
-                codegen.sign_extend_to_i64(i16_type.const_int(instr.immediate() as _, false));
+                codegen.sign_extend_to(i32_type, i16_type.const_int(instr.immediate() as _, false));
             let result = codegen
                 .builder
                 .build_int_add(source, immediate, "daddi_res");
@@ -591,7 +591,7 @@ pub fn recompile_instruction<'ctx>(
 
         Mnenomic::Sll => {
             // Shift rt left by sa bits, store result in rd (32-bits)
-            let shift = i64_type.const_int(instr.sa() as _, false);
+            let shift = i32_type.const_int(instr.sa() as _, false);
             let target = codegen.read_general_reg(instr.rt()).into_int_value();
             let result = codegen.builder.build_left_shift(target, shift, "sll_shift");
 
@@ -689,7 +689,7 @@ pub fn recompile_instruction<'ctx>(
         Mnenomic::Srl => {
             // Shift rt right by sa bits, store sign-extended result in rd
             let target = codegen.read_general_reg(instr.rt()).into_int_value();
-            let shift = i64_type.const_int(instr.sa() as _, false);
+            let shift = i32_type.const_int(instr.sa() as _, false);
             let result = codegen
                 .builder
                 .build_right_shift(target, shift, false, "srl_shift");
@@ -730,18 +730,15 @@ pub fn recompile_instruction<'ctx>(
 
         Mnenomic::Dmult => {
             // Multiply signed rs with signed rt, store low-order doubleword in LO, and high-order doubleword to HI
-            let source = {
-                let source = codegen.read_general_reg(instr.rs()).into_int_value();
-                codegen
-                    .builder
-                    .build_int_s_extend(source, i128_type, "dmult_source")
-            };
-            let target = {
-                let target = codegen.read_general_reg(instr.rt()).into_int_value();
-                codegen
-                    .builder
-                    .build_int_s_extend(target, i128_type, "dmult_target")
-            };
+            let source = codegen.zero_extend_to(
+                i128_type,
+                codegen.read_general_reg(instr.rs()).into_int_value(),
+            );
+
+            let target = codegen.zero_extend_to(
+                i128_type,
+                codegen.read_general_reg(instr.rt()).into_int_value(),
+            );
 
             let result = codegen
                 .builder
@@ -768,18 +765,15 @@ pub fn recompile_instruction<'ctx>(
 
         Mnenomic::Dmultu => {
             // Multiply unsigned rs with unsigned rt, store low-order doubleword in LO, and high-order doubleword to HI
-            let source = {
-                let source = codegen.read_general_reg(instr.rs()).into_int_value();
-                codegen
-                    .builder
-                    .build_int_z_extend(source, i128_type, "dmultu_source")
-            };
-            let target = {
-                let target = codegen.read_general_reg(instr.rt()).into_int_value();
-                codegen
-                    .builder
-                    .build_int_z_extend(target, i128_type, "dmultu_target")
-            };
+            let source = codegen.zero_extend_to(
+                i128_type,
+                codegen.read_general_reg(instr.rs()).into_int_value(),
+            );
+
+            let target = codegen.zero_extend_to(
+                i128_type,
+                codegen.read_general_reg(instr.rt()).into_int_value(),
+            );
 
             let result = codegen.builder.build_int_mul(source, target, "dmultu_res");
 
@@ -804,15 +798,22 @@ pub fn recompile_instruction<'ctx>(
 
         Mnenomic::Multu => {
             // Multiply unsigned rs by unsigned rt, store low-order word of result in register LO and high-order word in HI
-            let source = codegen.read_general_reg(instr.rs()).into_int_value();
-            let target = codegen.read_general_reg(instr.rt()).into_int_value();
+            let source = codegen.sign_extend_to(
+                i64_type,
+                codegen.read_general_reg(instr.rs()).into_int_value(),
+            );
+
+            let target = codegen.sign_extend_to(
+                i64_type,
+                codegen.read_general_reg(instr.rt()).into_int_value(),
+            );
 
             let result = codegen.builder.build_int_mul(source, target, "multu_res");
 
             // Store the low-order word in LO.
             let lo = codegen
                 .builder
-                .build_int_truncate(result, i32_type, "multu_lo");
+                .build_int_truncate(result, i64_type, "multu_lo");
             codegen.write_special_reg(register::Special::Lo, lo.into());
 
             // Store the high-order word in HI.
@@ -1024,7 +1025,7 @@ pub fn recompile_instruction<'ctx>(
             let address = codegen.base_plus_offset(instr, "lbu_addr");
             let value = {
                 let value = codegen.read_memory(i8_type, address);
-                codegen.zero_extend_to_i64(value.into_int_value())
+                codegen.zero_extend_to(i32_type, value.into_int_value())
             };
 
             codegen.write_general_reg(instr.rt(), value.into());
@@ -1035,7 +1036,7 @@ pub fn recompile_instruction<'ctx>(
             let address = codegen.base_plus_offset(instr, "lb_addr");
             let value = {
                 let value = codegen.read_memory(i8_type, address);
-                codegen.sign_extend_to_i64(value.into_int_value())
+                codegen.sign_extend_to(i32_type, value.into_int_value())
             };
             codegen.write_general_reg(instr.rt(), value.into());
         }
@@ -1045,7 +1046,7 @@ pub fn recompile_instruction<'ctx>(
             let address = codegen.base_plus_offset(instr, "lw_addr");
             let value = {
                 let value = codegen.read_memory(i32_type, address);
-                codegen.sign_extend_to_i64(value.into_int_value())
+                codegen.sign_extend_to(i32_type, value.into_int_value())
             };
             codegen.write_general_reg(instr.rt(), value.into());
         }
@@ -1055,7 +1056,7 @@ pub fn recompile_instruction<'ctx>(
             let address = codegen.base_plus_offset(instr, "lwu_addr");
             let value = {
                 let value = codegen.read_memory(i32_type, address);
-                codegen.zero_extend_to_i64(value.into_int_value())
+                codegen.zero_extend_to(i32_type, value.into_int_value())
             };
             codegen.write_general_reg(instr.rt(), value.into());
         }
@@ -1065,7 +1066,7 @@ pub fn recompile_instruction<'ctx>(
             let address = codegen.base_plus_offset(instr, "lh_addr");
             let value = {
                 let value = codegen.read_memory(i16_type, address);
-                codegen.sign_extend_to_i64(value.into_int_value())
+                codegen.sign_extend_to(i32_type, value.into_int_value())
             };
             codegen.write_general_reg(instr.rt(), value.into());
         }
@@ -1075,7 +1076,7 @@ pub fn recompile_instruction<'ctx>(
             let address = codegen.base_plus_offset(instr, "lhu_addr");
             let value = {
                 let value = codegen.read_memory(i32_type, address);
-                codegen.zero_extend_to_i64(value.into_int_value())
+                codegen.zero_extend_to(i32_type, value.into_int_value())
             };
             codegen.write_general_reg(instr.rt(), value.into());
         }
@@ -1083,7 +1084,7 @@ pub fn recompile_instruction<'ctx>(
         Mnenomic::Lui => {
             // 16-bit immediate is shifted left 16 bits using trailing zeros, result placed in rt
             let immediate =
-                codegen.zero_extend_to_i64(i16_type.const_int(instr.immediate() as _, false));
+                codegen.zero_extend_to(i32_type, i16_type.const_int(instr.immediate() as _, false));
             let shift_amount = i64_type.const_int(16, false);
             let result = codegen
                 .builder
@@ -1094,7 +1095,7 @@ pub fn recompile_instruction<'ctx>(
         Mnenomic::Addiu => {
             // Add sign-extended 16bit immediate and rs, store result in rt
             let immediate =
-                codegen.sign_extend_to_i64(i16_type.const_int(instr.immediate() as _, false));
+                codegen.sign_extend_to(i32_type, i16_type.const_int(instr.immediate() as _, false));
 
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
             let result = codegen
@@ -1111,7 +1112,7 @@ pub fn recompile_instruction<'ctx>(
         Mnenomic::Addi => {
             // Add sign-extended 16bit immediate and rs, store result in rt
             let immediate =
-                codegen.sign_extend_to_i64(i16_type.const_int(instr.immediate() as _, true));
+                codegen.sign_extend_to(i32_type, i16_type.const_int(instr.immediate() as _, true));
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
             let result = codegen.builder.build_int_add(source, immediate, "addi_res");
             codegen.write_general_reg(instr.rt(), result.into());
@@ -1129,7 +1130,7 @@ pub fn recompile_instruction<'ctx>(
             // AND rs with zero-extended immediate, store result in rt
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
             let immediate =
-                codegen.zero_extend_to_i64(i16_type.const_int(instr.immediate() as _, false));
+                codegen.zero_extend_to(i32_type, i16_type.const_int(instr.immediate() as _, false));
             let result = codegen.builder.build_and(source, immediate, "andi_res");
             codegen.write_general_reg(instr.rt(), result.into());
         }
@@ -1138,7 +1139,7 @@ pub fn recompile_instruction<'ctx>(
             // OR rs and zero-extended immediate, store result in rt
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
             let immediate =
-                codegen.zero_extend_to_i64(i16_type.const_int(instr.immediate() as _, false));
+                codegen.zero_extend_to(i32_type, i16_type.const_int(instr.immediate() as _, false));
             let result = codegen.builder.build_or(source, immediate, "ori_res");
             codegen.write_general_reg(instr.rt(), result.into());
         }
@@ -1154,7 +1155,7 @@ pub fn recompile_instruction<'ctx>(
         Mnenomic::Daddiu => {
             // Add sign-extended 16bit immediate and rs, store result in rt
             let immediate =
-                codegen.sign_extend_to_i64(i16_type.const_int(instr.immediate() as _, true));
+                codegen.sign_extend_to(i64_type, i16_type.const_int(instr.immediate() as _, true));
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
             let result = codegen
                 .builder
@@ -1204,7 +1205,7 @@ pub fn recompile_instruction<'ctx>(
         Mnenomic::Sltiu => {
             // If unsigned rs is less than sign-extended immediate, store one in rt, otherwise store zero
             let immediate =
-                codegen.sign_extend_to_i64(i16_type.const_int(instr.immediate() as _, true));
+                codegen.sign_extend_to(i32_type, i16_type.const_int(instr.immediate() as _, true));
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
 
             let result = codegen.build_int_compare_as_i64(
@@ -1263,7 +1264,7 @@ pub fn recompile_instruction<'ctx>(
         Mnenomic::Bltz => {
             // If rs is less than zero, branch to address (delay slot + offset)
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
-            let zero = i64_type.const_zero();
+            let zero = i32_type.const_zero();
             let cmp =
                 codegen
                     .builder
@@ -1276,7 +1277,7 @@ pub fn recompile_instruction<'ctx>(
         Mnenomic::Bltzl => {
             // If rs is less than zero, branch to address (delay slot + offset), otherwise discard delay slot instruction
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
-            let zero = i64_type.const_zero();
+            let zero = i32_type.const_zero();
             let cmp =
                 codegen
                     .builder
@@ -1304,7 +1305,7 @@ pub fn recompile_instruction<'ctx>(
         Mnenomic::Bgezal => {
             // If rs is greater than or equal to zero, branch to address (delay slot + offset) and store next address to r31 (ra)
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
-            let zero = i64_type.const_zero();
+            let zero = i32_type.const_zero();
             let cmp =
                 codegen
                     .builder
@@ -1318,7 +1319,7 @@ pub fn recompile_instruction<'ctx>(
         Mnenomic::Bgezall => {
             // If rs is greater than or equal to zero, branch to address (delay slot + offset) and store next address to r31, otherwise discard delay slot instruction
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
-            let zero = i64_type.const_zero();
+            let zero = i32_type.const_zero();
             let cmp =
                 codegen
                     .builder
@@ -1332,7 +1333,7 @@ pub fn recompile_instruction<'ctx>(
         Mnenomic::Bltzal => {
             // If rs is less than zero, branch to address (delay slot + offset) and store next address to r31 (ra)
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
-            let zero = i64_type.const_zero();
+            let zero = i32_type.const_zero();
             let cmp =
                 codegen
                     .builder
@@ -1346,7 +1347,7 @@ pub fn recompile_instruction<'ctx>(
         Mnenomic::Bltzall => {
             // If rs is less than zero, branch to address (delay slot + offset) and store next address to r31, otherwise discard delay slot instruction
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
-            let zero = i64_type.const_zero();
+            let zero = i32_type.const_zero();
             let cmp =
                 codegen
                     .builder
@@ -1374,7 +1375,7 @@ pub fn recompile_instruction<'ctx>(
         Mnenomic::Blez => {
             // If rs is less than or equal to zero, branch to address (delay slot + offset)
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
-            let zero = i64_type.const_zero();
+            let zero = i32_type.const_zero();
             let cmp =
                 codegen
                     .builder
@@ -1387,7 +1388,7 @@ pub fn recompile_instruction<'ctx>(
         Mnenomic::Blezl => {
             // If rs is less than or equal to zero, branch to address (delay slot + offset), otherwise discard delay slot instruction
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
-            let zero = i64_type.const_zero();
+            let zero = i32_type.const_zero();
             let cmp =
                 codegen
                     .builder
@@ -1401,7 +1402,7 @@ pub fn recompile_instruction<'ctx>(
         Mnenomic::Bgezl => {
             // If rs is greater than or equal to zero, branch to address (delay slot + offset), otherwise discard delay slot instruction
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
-            let zero = i64_type.const_zero();
+            let zero = i32_type.const_zero();
             let cmp =
                 codegen
                     .builder
@@ -1415,7 +1416,7 @@ pub fn recompile_instruction<'ctx>(
         Mnenomic::Bgez => {
             // If rs is greater than or equal to zero, branch to address (delay slot + offset)
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
-            let zero = i64_type.const_zero();
+            let zero = i32_type.const_zero();
             let cmp =
                 codegen
                     .builder
@@ -1428,7 +1429,7 @@ pub fn recompile_instruction<'ctx>(
         Mnenomic::Bgtz => {
             // If rs is greater than zero, branch to address (delay slot + offset)
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
-            let zero = i64_type.const_zero();
+            let zero = i32_type.const_zero();
             let cmp =
                 codegen
                     .builder
@@ -1441,7 +1442,7 @@ pub fn recompile_instruction<'ctx>(
         Mnenomic::Bgtzl => {
             // If rs is greater than zero, branch to address (delay slot + offset), otherwise discard delay slot instruction
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
-            let zero = i64_type.const_zero();
+            let zero = i32_type.const_zero();
             let cmp =
                 codegen
                     .builder

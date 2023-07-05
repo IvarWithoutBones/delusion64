@@ -242,6 +242,7 @@ impl<'ctx> CodeGen<'ctx> {
     /// If the label at the given address has already been compiled, it will be called directly.
     /// Otherwise, it will be JIT compiled and indirectly called.
     pub fn build_dynamic_jump(&self, address: IntValue<'ctx>) {
+        let address = self.zero_extend_to(self.context.i64_type(), address);
         self.set_call_attrs(self.call_label_dynamic(address));
         self.builder.build_unreachable();
     }
@@ -398,21 +399,20 @@ impl<'ctx> CodeGen<'ctx> {
             .into()
     }
 
-    pub fn sign_extend_to_i64(&self, value: IntValue<'ctx>) -> IntValue<'ctx> {
-        let i64_type = self.context.i64_type();
-        self.builder
-            .build_int_s_extend(value, i64_type, "sign_ext_to_i64")
+    pub fn sign_extend_to(&self, ty: IntType<'ctx>, value: IntValue<'ctx>) -> IntValue<'ctx> {
+        let name = format!("sign_ext_to_i{}", ty.get_bit_width());
+        self.builder.build_int_s_extend(value, ty, &name)
     }
 
-    pub fn zero_extend_to_i64(&self, value: IntValue<'ctx>) -> IntValue<'ctx> {
-        let i64_type = self.context.i64_type();
-        self.builder
-            .build_int_z_extend(value, i64_type, "zero_ext_to_i64")
+    pub fn zero_extend_to(&self, ty: IntType<'ctx>, value: IntValue<'ctx>) -> IntValue<'ctx> {
+        let name = format!("zero_ext_to_i{}", ty.get_bit_width());
+        self.builder.build_int_z_extend(value, ty, &name)
     }
 
     pub fn base_plus_offset(&self, instr: &ParsedInstruction, name: &str) -> IntValue<'ctx> {
         // TODO: Dont assume 32-bit mode
         let i32_type = self.context.i32_type();
+        let i64_type = self.context.i64_type();
 
         let base = {
             let value = self.read_general_reg(instr.base()).into_int_value();
@@ -421,7 +421,7 @@ impl<'ctx> CodeGen<'ctx> {
         let offset = i32_type.const_int(instr.offset() as _, false);
 
         let result = self.builder.build_int_add(base, offset, name);
-        self.zero_extend_to_i64(result)
+        self.zero_extend_to(i64_type, result)
     }
 
     #[inline]
@@ -477,15 +477,16 @@ impl<'ctx> CodeGen<'ctx> {
     where
         T: Into<u64>,
     {
+        // TODO: dont hardcode 32-bit register width
+        let reg_ty = self.context.i32_type();
         let reg = register::GeneralPurpose::from_repr(index.into() as _).unwrap();
         if reg == register::GeneralPurpose::Zero {
             // Register zero is always zero
-            self.context.i64_type().const_zero().into()
+            reg_ty.const_zero().into()
         } else {
-            let i64_type = self.context.i64_type();
-            let register = self.register_pointer(reg);
-            self.builder
-                .build_load(i64_type, register, &format!("{}_", reg.name()))
+            let name = format!("{}_", reg.name());
+            let reg_ptr = self.register_pointer(reg);
+            self.builder.build_load(reg_ty, reg_ptr, &name)
         }
     }
 
