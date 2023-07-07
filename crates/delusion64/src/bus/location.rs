@@ -22,7 +22,7 @@ impl MemoryType {
     }
 
     pub fn read_from(&self, slice: &[u8], offset: usize) -> MemoryValue {
-        // This is safe because we can gurrantee that the slice is the correct length, the offset will still be boundary checked.
+        // This is safe because we can guarantee that the slice is the correct length, the offset will still be boundary checked.
         unsafe {
             match self {
                 Self::U8 => slice[offset].into(),
@@ -208,6 +208,7 @@ impl MemoryRegion {
         self.range().end
     }
 
+    #[allow(clippy::len_without_is_empty)] // Would always be false.
     pub const fn len(&self) -> usize {
         (self.end() - self.start()) as usize
     }

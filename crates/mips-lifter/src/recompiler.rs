@@ -265,9 +265,12 @@ pub fn recompile_instruction<'ctx>(
             // Jump to target address, stores return address in r31 (ra)
             let return_address = {
                 let offset = i64_type.const_int(INSTRUCTION_SIZE as _, false);
-                let pc = codegen
-                    .read_special_reg(register::Special::Pc)
-                    .into_int_value();
+                let pc = codegen.zero_extend_to(
+                    i64_type,
+                    codegen
+                        .read_special_reg(register::Special::Pc)
+                        .into_int_value(),
+                );
                 codegen.builder.build_int_add(pc, offset, "return_addr")
             };
 
@@ -295,9 +298,12 @@ pub fn recompile_instruction<'ctx>(
 
             let return_addr = {
                 let instr_size = i64_type.const_int(INSTRUCTION_SIZE as _, false);
-                let pc = codegen
-                    .read_special_reg(register::Special::Pc)
-                    .into_int_value();
+                let pc = codegen.zero_extend_to(
+                    i64_type,
+                    codegen
+                        .read_special_reg(register::Special::Pc)
+                        .into_int_value(),
+                );
                 codegen.builder.build_int_add(pc, instr_size, "return_addr")
             };
 
@@ -311,10 +317,15 @@ pub fn recompile_instruction<'ctx>(
             // The 26-bit target is shifted left two bits and combined with the high-order four bits of the address of the delay slot
             let addr = {
                 let delay_slot = {
-                    let instr_size = i64_type.const_int(4, false);
-                    let pc = codegen
-                        .read_special_reg(register::Special::Pc)
-                        .into_int_value();
+                    let instr_size = i64_type.const_int(INSTRUCTION_SIZE as _, false);
+
+                    let pc = codegen.zero_extend_to(
+                        i64_type,
+                        codegen
+                            .read_special_reg(register::Special::Pc)
+                            .into_int_value(),
+                    );
+
                     let delay_slot = codegen
                         .builder
                         .build_int_add(pc, instr_size, "delay_slot_pc");
@@ -564,6 +575,7 @@ pub fn recompile_instruction<'ctx>(
             let result = codegen.builder.build_or(source, target, "or_res");
             codegen.write_general_reg(instr.rd(), result.into());
         }
+
         Mnenomic::Dsll => {
             // Shift rt left by sa bits, store result in rd (64-bits)
             let shift = i64_type.const_int(instr.sa() as _, false);
@@ -585,7 +597,7 @@ pub fn recompile_instruction<'ctx>(
             // Convert the comparison to a numeric value.
             let result = codegen
                 .builder
-                .build_int_z_extend(cmp, i64_type, "sltu_res");
+                .build_int_z_extend(cmp, i32_type, "sltu_res");
             codegen.write_general_reg(instr.rd(), result.into());
         }
 
@@ -605,8 +617,8 @@ pub fn recompile_instruction<'ctx>(
 
         Mnenomic::Sllv => {
             // Shift rt left by rs (limited to 31), store result in rd
-            let target = codegen.read_general_reg(instr.rt()).into_int_value();
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
+            let target = codegen.read_general_reg(instr.rt()).into_int_value();
 
             let result = codegen
                 .builder
@@ -698,12 +710,12 @@ pub fn recompile_instruction<'ctx>(
 
         Mnenomic::Srlv => {
             // Shift rt right by rs (limited to 31), store sign-extended result in rd
-            let target = codegen.read_general_reg(instr.rt()).into_int_value();
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
+            let target = codegen.read_general_reg(instr.rt()).into_int_value();
 
             let result = codegen
                 .builder
-                .build_right_shift(target, source, false, "srlv_shift");
+                .build_right_shift(target, source, true, "srlv_shift");
             codegen.write_general_reg(instr.rd(), result.into());
         }
 
@@ -1095,18 +1107,12 @@ pub fn recompile_instruction<'ctx>(
         Mnenomic::Addiu => {
             // Add sign-extended 16bit immediate and rs, store result in rt
             let immediate =
-                codegen.sign_extend_to(i32_type, i16_type.const_int(instr.immediate() as _, false));
-
+                codegen.sign_extend_to(i32_type, i16_type.const_int(instr.immediate() as _, true));
             let source = codegen.read_general_reg(instr.rs()).into_int_value();
             let result = codegen
                 .builder
                 .build_int_add(source, immediate, "addiu_res");
-
-            let truncated = codegen
-                .builder
-                .build_int_truncate(result, i32_type, "addiu_trunc");
-
-            codegen.write_general_reg(instr.rt(), truncated.into());
+            codegen.write_general_reg(instr.rt(), result.into());
         }
 
         Mnenomic::Addi => {

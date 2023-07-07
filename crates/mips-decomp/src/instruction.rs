@@ -302,7 +302,7 @@ impl Instruction {
 
     pub fn format(&self, raw: u32) -> String {
         if raw == 0 {
-            // Psuedo instruction
+            // Pseudo instruction
             return "nop".to_string();
         }
 

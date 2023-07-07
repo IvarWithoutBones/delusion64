@@ -176,6 +176,7 @@ dependencies = [
  "mips-lifter",
  "n64-cartridge",
  "strum",
+ "tartan-bitfield",
 ]
 
 [[package]]

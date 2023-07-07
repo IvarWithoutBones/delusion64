@@ -1,0 +1,52 @@
+Algorithm: https://github.com/PeterLemon/N64/blob/master/BOOTCODE/BOOTCODE.asm#L486
+Can assume everything works up until line 517
+
+- Data loaded from cartridge header is correct
+- Infinite loop is correct
+- 1st checksum word is correct
+- 2nd checksum word is incorrect, S0 = 0x30761a80
+
+0x80000130   Begin checksum calculation loop
+0x800001ac   1st checksum word check, A3 (calculated) != T0 (header), correct = 0x9ec650d4
+0x800001b8   2nd checksum word check, S0 (calculated) != T0 (header), correct = 0x5d1d2038
+0x800001cc   Infinite loop, either check failed
+
+A40005F0:
+  // V0 = *T1 (Next Word In Program Code To Checksum)
+  lw v0,0(t1) // V0 = WORD[Boot Address Offset]
+  addu v1,a3,v0 // V1 = A3 + V0                         A3 + V0 + V1 = trusted
+  sltu at,v1,a3
+  beqz at,A4000608 // IF (V1 < A3) GOTO $608
+  or a1,v1,r0 // A1 = V1 (Delay Slot)                   V1 + A1 = trusted
+
+  addiu t2,1 // T2++
+
+  A4000608:
+    andi v1,v0,$1F // V1 = V0 & $1F
+    subu t7,t5,v1 // T7 = T5 - V1
+    srlv t8,v0,t7 // T8 = V0 >> T7
+    sllv t6,v0,v1 // T6 = V0 << V1
+    or a0,t6,t8 // A0 = T6 | T8
+
+    sltu at,a2,v0
+    or a3,a1,r0 // A3 = A1                              A1 + A3 = trusted
+    xor t3,v0 // T3 ^= V0
+    beqz at,A400063C // IF (A2 < V0) GOTO $63C
+
+    addu s0,a0 // S0 += A0 (Delay Slot)                 PRODUCES INCORRECT RESULT
+
+    // T9 = trusted
+    xor t9,a3,v0 // T9 = A3 ^ V0
+
+    b A4000640 // GOTO $640
+    xor a2,t9,a2 // A2 = T9 ^ A2 (Delay Slot)
+
+    A400063C:
+      xor a2,a0 // A2 ^= A0
+
+  A4000640:
+    addiu t0,4 // T0 += 4
+    xor t7,v0,s0 // T7 = V0 ^ S0
+    addiu t1,4 // T1 += 4
+    bne t0,ra,A40005F0 // IF (T0 != RA) GOTO $5F0
+    addu t4,t7,t4 // T4 += T7 (Delay Slot)

@@ -6,7 +6,9 @@ use std::{
     net::{TcpListener, TcpStream},
 };
 
-mod bus;
+pub mod bus;
+// TODO: move this to a separate crate
+pub mod pi;
 
 const DEFAULT_GDB_PORT: u16 = 9001;
 
@@ -27,6 +29,9 @@ struct CommandLineInterface {
     #[clap(short, long)]
     rom: String,
 
+    #[clap(short, long)]
+    show_cartridge: bool,
+
     #[clap(short, long, value_name = "path")]
     llvm_ir: Option<String>,
 
@@ -46,6 +51,10 @@ fn main() {
         std::process::exit(1);
     });
     println!("{cart:#?}");
+
+    if cli.show_cartridge {
+        std::process::exit(0);
+    }
 
     let rom = cart.read().unwrap();
     let emulator = Bus::new(rom.into());

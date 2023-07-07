@@ -137,7 +137,7 @@ impl<'ctx> CodeGen<'ctx> {
             .build_call(stack_restore_fn, &[stack_ptr.into()], "stack_restore");
     }
 
-    /// Initializes the error case that occurs when attempting to jump to a label that wasnt found.
+    /// Initializes the error case that occurs when attempting to jump to a label that wasn't found.
     fn init_label_not_found(&self) {
         let label_not_found_block = self
             .context
@@ -409,17 +409,19 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.build_int_z_extend(value, ty, &name)
     }
 
+    pub fn truncate_to(&self, ty: IntType<'ctx>, value: IntValue<'ctx>) -> IntValue<'ctx> {
+        let name = format!("trunc_to_i{}", ty.get_bit_width());
+        self.builder.build_int_truncate(value, ty, &name)
+    }
+
     pub fn base_plus_offset(&self, instr: &ParsedInstruction, name: &str) -> IntValue<'ctx> {
         // TODO: Dont assume 32-bit mode
+        let i16_type = self.context.i16_type();
         let i32_type = self.context.i32_type();
         let i64_type = self.context.i64_type();
 
-        let base = {
-            let value = self.read_general_reg(instr.base()).into_int_value();
-            self.builder.build_int_truncate(value, i32_type, "base")
-        };
-        let offset = i32_type.const_int(instr.offset() as _, false);
-
+        let base = self.read_general_reg(instr.base()).into_int_value();
+        let offset = self.sign_extend_to(i32_type, i16_type.const_int(instr.offset() as _, true));
         let result = self.builder.build_int_add(base, offset, name);
         self.zero_extend_to(i64_type, result)
     }
@@ -506,11 +508,12 @@ impl<'ctx> CodeGen<'ctx> {
     where
         T: Into<u64>,
     {
+        // TODO: dont hardcode 32-bit register width
+        let reg_ty = self.context.i32_type();
         let reg = register::Cp0::from_repr(index.into() as _).unwrap();
-        let i64_type = self.context.i64_type();
         let register = self.register_pointer(reg);
         self.builder
-            .build_load(i64_type, register, &format!("{}_", reg.name()))
+            .build_load(reg_ty, register, &format!("{}_", reg.name()))
     }
 
     pub fn write_cp0_reg<T>(&self, index: T, value: BasicValueEnum<'ctx>)
@@ -523,10 +526,11 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     pub fn read_special_reg(&self, reg: register::Special) -> BasicValueEnum<'ctx> {
-        let i64_type = self.context.i64_type();
+        // TODO: dont hardcode 32-bit register width
+        let reg_ty = self.context.i32_type();
         let register = self.register_pointer(reg);
         self.builder
-            .build_load(i64_type, register, &format!("{}_", reg.name()))
+            .build_load(reg_ty, register, &format!("{}_", reg.name()))
     }
 
     pub fn write_special_reg(&self, reg: register::Special, value: BasicValueEnum<'ctx>) {

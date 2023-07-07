@@ -145,7 +145,7 @@ where
         Runtime functions. These are not meant to be called directly, but rather by generated code.
     */
 
-    // TODO: split this up and prettify it a bit, it is rather unwieldly right now.
+    // TODO: split this up and prettify it a bit, it is rather unwieldy right now.
     unsafe extern "C" fn get_function_ptr(&mut self, vaddr: u64) -> u64 {
         let vaddr = vaddr & u32::MAX as u64;
         println!("block_id({vaddr:#x})");
@@ -247,7 +247,7 @@ where
                         let pc = codegen.read_special_reg(register::Special::Pc);
                         let next = codegen.builder.build_int_add(
                             pc.into_int_value(),
-                            codegen.context.i64_type().const_int(4, false),
+                            codegen.context.i32_type().const_int(4, false),
                             "next_block_addr",
                         );
 

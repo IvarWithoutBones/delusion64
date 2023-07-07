@@ -10,5 +10,6 @@ debug-print = []
 [dependencies]
 clap = { version = "4.3.0", features = ["derive"] }
 strum = { version = "0.24.1", features = ["derive"] }
+tartan-bitfield = "1.2.0"
 mips-lifter = { path = "../mips-lifter", default-features = false }
 n64-cartridge = { path = "../n64-cartridge" }
