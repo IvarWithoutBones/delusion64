@@ -11,6 +11,6 @@ debug-print = []
 inkwell = { version = "0.2.0", features = ["llvm15-0"] }
 gdbstub = "0.6.6"
 gdbstub_arch = "0.2.4"
-mips-decomp = { path = "../mips-decomp" }
-strum = { version = "0.24.1", features = ["derive"] }
+strum = { version = "0.25.0", features = ["derive"] }
 tartan-bitfield = "1.2.0"
+mips-decomp = { path = "../mips-decomp" }
