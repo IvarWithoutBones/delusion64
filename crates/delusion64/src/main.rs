@@ -63,8 +63,8 @@ fn main() {
         .gdb
         .map(|port| wait_for_gdb_connection(port).expect("failed to wait for GDB connection"));
 
-    let rom_range = (MemoryRegion::CartridgeRom.start() + 0x40)
-        ..(MemoryRegion::CartridgeRom.start() + bin.len() as u64);
+    let rom_range =
+        MemoryRegion::CartridgeRom.start()..(MemoryRegion::CartridgeRom.start() + bin.len() as u64);
 
     mips_lifter::run(
         emulator,

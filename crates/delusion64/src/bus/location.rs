@@ -21,32 +21,41 @@ impl MemoryType {
         }
     }
 
-    pub fn read_from(&self, slice: &[u8], offset: usize) -> MemoryValue {
+    pub fn read_from(&self, slice: &[u8], offset: usize) -> Option<MemoryValue> {
         // This is safe because we can guarantee that the slice is the correct length, the offset will still be boundary checked.
         unsafe {
             match self {
-                Self::U8 => slice[offset].into(),
+                Self::U8 => Some((*slice.get(offset)?).into()),
 
-                Self::U16 => u16::from_be_bytes(
-                    slice[offset..offset + size_of::<u16>()]
-                        .try_into()
-                        .unwrap_unchecked(),
-                )
-                .into(),
+                Self::U16 => Some(
+                    u16::from_be_bytes(
+                        slice
+                            .get(offset..offset + size_of::<u16>())?
+                            .try_into()
+                            .unwrap_unchecked(),
+                    )
+                    .into(),
+                ),
 
-                Self::U32 => u32::from_be_bytes(
-                    slice[offset..offset + size_of::<u32>()]
-                        .try_into()
-                        .unwrap_unchecked(),
-                )
-                .into(),
+                Self::U32 => Some(
+                    u32::from_be_bytes(
+                        slice
+                            .get(offset..offset + size_of::<u32>())?
+                            .try_into()
+                            .unwrap_unchecked(),
+                    )
+                    .into(),
+                ),
 
-                Self::U64 => u64::from_be_bytes(
-                    slice[offset..offset + size_of::<u64>()]
-                        .try_into()
-                        .unwrap_unchecked(),
-                )
-                .into(),
+                Self::U64 => Some(
+                    u64::from_be_bytes(
+                        slice
+                            .get(offset..offset + size_of::<u64>())?
+                            .try_into()
+                            .unwrap_unchecked(),
+                    )
+                    .into(),
+                ),
             }
         }
     }

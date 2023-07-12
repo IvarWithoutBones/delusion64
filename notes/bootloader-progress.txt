@@ -1,4 +1,4 @@
-Algorithm: https://github.com/PeterLemon/N64/blob/master/BOOTCODE/BOOTCODE.asm#L486
+Algorithm: https://github.com/PeterLemon/N64/blob/master/BOOTCODE/BOOTCODE.asm#L486, http://n64dev.org/n64crc.html
 Can assume everything works up until line 517
 
 - Data loaded from cartridge header is correct
@@ -33,7 +33,7 @@ A40005F0:
     xor t3,v0 // T3 ^= V0
     beqz at,A400063C // IF (A2 < V0) GOTO $63C
 
-    addu s0,a0 // S0 += A0 (Delay Slot)                 PRODUCES INCORRECT RESULT
+    addu s0,a0 // S0 += A0 (Delay Slot)                 INCORRECT RESULT
 
     // T9 = trusted
     xor t9,a3,v0 // T9 = A3 ^ V0

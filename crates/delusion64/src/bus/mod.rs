@@ -70,10 +70,14 @@ impl Bus {
         let region = location.region;
         let offset = location.offset;
         match region {
-            MemoryRegion::CartridgeRom => ty.read_from(&self.cartridge_rom, offset),
-            MemoryRegion::RdramMemory => ty.read_from(self.rdram.as_slice(), offset),
-            MemoryRegion::RspDMemory => ty.read_from(self.rsp_dmem.as_slice(), offset),
-            MemoryRegion::RspIMemory => ty.read_from(self.rsp_imem.as_slice(), offset),
+            MemoryRegion::RdramMemory => ty.read_from(self.rdram.as_slice(), offset).unwrap(),
+            MemoryRegion::RspDMemory => ty.read_from(self.rsp_dmem.as_slice(), offset).unwrap(),
+            MemoryRegion::RspIMemory => ty.read_from(self.rsp_imem.as_slice(), offset).unwrap(),
+
+            // An address not within the cartridge ROM range should return zero.
+            MemoryRegion::CartridgeRom => ty
+                .read_from(&self.cartridge_rom, offset)
+                .unwrap_or(ty.zero()),
 
             MemoryRegion::RdramRegistersWriteOnly => {
                 panic!("write-only {region:?} read at offset {offset:#x}");

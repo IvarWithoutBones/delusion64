@@ -30,7 +30,7 @@ pub fn run<Mem>(
         .into_boxed_slice();
 
     let mut labels = mips_decomp::LabelList::from(&*bin);
-    labels.set_offset(0x0000_0000_A400_0040 / 4);
+    labels.set_offset(0x0000_0000_A400_0000 / 4);
 
     // TODO: remove!
     labels.pop();
@@ -57,9 +57,12 @@ pub fn run<Mem>(
     let main = module.add_function("main", fn_type, None);
     let entry_block = context.append_basic_block(main, "entry");
 
-    // Create our own compilation/runtime environment.
-    let labels_with_context = label::generate_label_functions(labels, &context, &module);
+    // TODO: Calling `generate_label_functions` here will precompile everything,
+    // but as blocks are purely looked up by vaddr this only slows us down for now.
+    let labels_with_context = vec![];
+    // let labels_with_context = label::generate_label_functions(labels, &context, &module);
 
+    // Create our own compilation/runtime environment.
     let (env, globals) = {
         let env = runtime::Environment::new(mem, gdb_stream);
         let globals = env.map_into(&module, &execution_engine);
@@ -84,7 +87,7 @@ pub fn run<Mem>(
         let addr = codegen
             .context
             .i64_type()
-            .const_int(i as u64 + 0x0000_0000_A400_0040, false);
+            .const_int(i as u64 + 0x0000_0000_A400_0000, false);
         let value = codegen
             .context
             .i8_type()
@@ -94,14 +97,14 @@ pub fn run<Mem>(
         codegen.write_memory(addr, value);
     }
 
-    codegen.write_special_reg(
-        register::Special::Pc,
-        i64_type.const_int(0x0000_0000_A400_0040, false).into(),
+    codegen.write_general_reg(
+        register::GeneralPurpose::Sp,
+        i64_type.const_int(0xFFFF_FFFF_A400_1FF0, false).into(),
     );
 
     codegen.write_general_reg(
-        register::GeneralPurpose::Sp,
-        i64_type.const_int(0x0000_0000_A400_1FF0, false).into(),
+        register::GeneralPurpose::T3,
+        i64_type.const_int(0xFFFF_FFFF_A400_0040, false).into(),
     );
 
     codegen.write_general_reg(
@@ -112,6 +115,31 @@ pub fn run<Mem>(
     codegen.write_general_reg(
         register::GeneralPurpose::S6,
         i64_type.const_int(0x0000_0000_0000_003F, false).into(),
+    );
+
+    codegen.write_cp0_reg(
+        register::Cp0::Random,
+        i64_type.const_int(0x0000_001F, false).into(),
+    );
+
+    codegen.write_cp0_reg(
+        register::Cp0::Status,
+        i64_type.const_int(0x3400_0000, false).into(),
+    );
+
+    codegen.write_cp0_reg(
+        register::Cp0::PRId,
+        i64_type.const_int(0x0000_0B00, false).into(),
+    );
+
+    codegen.write_cp0_reg(
+        register::Cp0::Config,
+        i64_type.const_int(0x0006_E463, false).into(),
+    );
+
+    codegen.write_special_reg(
+        register::Special::Pc,
+        i64_type.const_int(0x0000_0000_A400_0040, false).into(),
     );
 
     // Save the current stack frame, will be restored on every block to ensure no stack overflows occur.

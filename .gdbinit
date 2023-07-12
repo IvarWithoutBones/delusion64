@@ -22,5 +22,6 @@ define lasm
     layout asm
 end
 
+set remotetimeout 9999
 echo connecting to localhost:9001\n
 target remote localhost:9001
