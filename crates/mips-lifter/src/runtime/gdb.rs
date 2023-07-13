@@ -202,9 +202,12 @@ where
         data: &mut [u8],
     ) -> TargetResult<(), Self> {
         for i in (0..data.len()).step_by(4) {
-            let paddr = self.virtual_to_physical_address(start_addr as u64 + i as u64);
-            let word = self.memory.read_u32(paddr);
-            data[i..i + 4].copy_from_slice(&word.to_le_bytes());
+            let end = data.len().min(i + 4);
+            let word = {
+                let paddr = self.virtual_to_physical_address(start_addr as u64 + i as u64);
+                self.memory.read_u32(paddr)
+            };
+            data[i..end].copy_from_slice(&word.to_le_bytes()[..end - i]);
         }
 
         Ok(())
@@ -216,8 +219,9 @@ where
         data: &[u8],
     ) -> TargetResult<(), Self> {
         for i in (0..data.len()).step_by(4) {
+            let end = data.len().min(i + 4);
             let paddr = self.virtual_to_physical_address(start_addr as u64 + i as u64);
-            let word = u32::from_le_bytes(data[i..i + 4].try_into().unwrap());
+            let word = u32::from_le_bytes(data[i..end].try_into().unwrap());
             self.memory.write_u32(paddr, word);
         }
 

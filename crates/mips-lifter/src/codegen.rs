@@ -9,8 +9,7 @@ use inkwell::{
     module::Module,
     types::IntType,
     values::{
-        BasicMetadataValueEnum, BasicValueEnum, CallSiteValue, FunctionValue, GlobalValue,
-        IntValue, PointerValue,
+        BasicMetadataValueEnum, CallSiteValue, FunctionValue, GlobalValue, IntValue, PointerValue,
     },
     IntPredicate,
 };
@@ -28,8 +27,11 @@ macro_rules! env_call {
     }};
 }
 
+// TODO: replace this with `LazyCell` once its stabilized, see:
+// https://github.com/rust-lang/rust/issues/109736
 pub fn function_attributes(context: &Context) -> Vec<Attribute> {
     // TODO: would `naked` make sense to skip the prologue/epilogue?
+    // `nounwind` here makes panics look a bit funky, but its proobably fine.
     const ATTRIBUTE_NAMES: &[&str] = &["noreturn", "nounwind", "nosync", "nofree", "nocf_check"];
 
     let mut attributes = Vec::new();
@@ -100,6 +102,17 @@ impl<'ctx> CodeGen<'ctx> {
         codegen
     }
 
+    /// Initializes the error case that occurs when attempting to jump to a label that wasn't found.
+    fn init_label_not_found(&self) {
+        let label_not_found_block = self
+            .context
+            .append_basic_block(self.label_not_found, "label_not_found");
+        self.builder.position_at_end(label_not_found_block);
+        self.print_constant_string("ERROR: unable to fetch label\n", "label_not_found_str");
+        env_call!(self, RuntimeFunction::Panic, []);
+        self.builder.build_return(None);
+    }
+
     /// Saves the host stack frame to a global pointer, so that it can be restored later.
     pub fn save_host_stack(&self) {
         let stack_save_fn = {
@@ -135,17 +148,6 @@ impl<'ctx> CodeGen<'ctx> {
 
         self.builder
             .build_call(stack_restore_fn, &[stack_ptr.into()], "stack_restore");
-    }
-
-    /// Initializes the error case that occurs when attempting to jump to a label that wasn't found.
-    fn init_label_not_found(&self) {
-        let label_not_found_block = self
-            .context
-            .append_basic_block(self.label_not_found, "label_not_found");
-        self.builder.position_at_end(label_not_found_block);
-        self.print_constant_string("ERROR: unable to fetch label\n", "label_not_found_str");
-        env_call!(self, RuntimeFunction::Panic, []);
-        self.builder.build_return(None);
     }
 
     /// Verify our module is valid.
@@ -277,18 +279,18 @@ impl<'ctx> CodeGen<'ctx> {
         env_call!(self, RuntimeFunction::PrintString, [ptr, len]);
     }
 
-    /// Performs a comparisons between two integers, returning the result as an i64.
-    pub fn build_int_compare_as_i64(
+    /// Performs a comparisons between two integers, returning the result as an i32.
+    pub fn build_compare_as_i32(
         &self,
         op: IntPredicate,
         lhs: IntValue<'ctx>,
         rhs: IntValue<'ctx>,
         cmp_name: &str,
-        i64_name: &str,
     ) -> IntValue<'ctx> {
-        let cmp = self.builder.build_int_compare(op, lhs, rhs, cmp_name);
-        self.builder
-            .build_int_z_extend(cmp, self.context.i64_type(), i64_name)
+        self.zero_extend_to(
+            self.context.i32_type(),
+            self.builder.build_int_compare(op, lhs, rhs, cmp_name),
+        )
     }
 
     /// Generate a basic block that calls the given function, then falls through to the next block.
@@ -349,13 +351,11 @@ impl<'ctx> CodeGen<'ctx> {
                     i64_type.const_int(value as u64, false)
                 };
 
-                let pc = self
-                    .read_special_reg(register::Special::Pc)
-                    .into_int_value();
+                let pc = self.read_special_reg(register::Special::Pc);
                 self.builder.build_int_add(pc, offset, "next_instr_pc")
             };
 
-            self.write_general_reg(register::GeneralPurpose::Ra, next_instr_pc.into());
+            self.write_general_reg(register::GeneralPurpose::Ra, next_instr_pc);
             self.build_jump(target_pc);
         }
 
@@ -399,35 +399,55 @@ impl<'ctx> CodeGen<'ctx> {
             .into()
     }
 
+    /// Sign-extends the given value to the given type.
     pub fn sign_extend_to(&self, ty: IntType<'ctx>, value: IntValue<'ctx>) -> IntValue<'ctx> {
         let name = format!("sign_ext_to_i{}", ty.get_bit_width());
         self.builder.build_int_s_extend(value, ty, &name)
     }
 
+    /// Zero-extends the given value to the given type.
     pub fn zero_extend_to(&self, ty: IntType<'ctx>, value: IntValue<'ctx>) -> IntValue<'ctx> {
         let name = format!("zero_ext_to_i{}", ty.get_bit_width());
         self.builder.build_int_z_extend(value, ty, &name)
     }
 
+    /// Truncates the given value to the given type.
     pub fn truncate_to(&self, ty: IntType<'ctx>, value: IntValue<'ctx>) -> IntValue<'ctx> {
         let name = format!("trunc_to_i{}", ty.get_bit_width());
         self.builder.build_int_truncate(value, ty, &name)
     }
 
-    pub fn base_plus_offset(&self, instr: &ParsedInstruction, name: &str) -> IntValue<'ctx> {
+    /// Gets the address of the instruction after the current one,
+    /// by adding the instruction size to the program counter (PC).
+    pub fn next_instruction_address(&self) -> IntValue<'ctx> {
+        let pc = self.read_special_reg(register::Special::Pc);
+        let instr_size = self
+            .context
+            .i32_type()
+            .const_int(INSTRUCTION_SIZE as _, false);
+        let next_pc = self
+            .builder
+            .build_int_add(pc, instr_size, "next_instr_addr");
+        self.zero_extend_to(self.context.i64_type(), next_pc)
+    }
+
+    pub fn base_plus_offset(&self, instr: &ParsedInstruction, add_name: &str) -> IntValue<'ctx> {
         // TODO: Dont assume 32-bit mode
         let i16_type = self.context.i16_type();
         let i32_type = self.context.i32_type();
         let i64_type = self.context.i64_type();
 
-        let base = self.read_general_reg(instr.base()).into_int_value();
+        let base = self.read_general_reg(instr.base());
         let offset = self.sign_extend_to(i32_type, i16_type.const_int(instr.offset() as _, true));
-        let result = self.builder.build_int_add(base, offset, name);
+        let result = self.builder.build_int_add(base, offset, add_name);
         self.zero_extend_to(i64_type, result)
     }
 
     #[inline]
-    fn register_pointer<T: Into<Register>>(&self, reg: T) -> PointerValue<'ctx> {
+    fn register_pointer<T>(&self, reg: T) -> PointerValue<'ctx>
+    where
+        T: Into<Register>,
+    {
         let reg = reg.into();
         let i64_type = self.context.i64_type();
 
@@ -447,7 +467,96 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
-    pub fn read_memory(&self, ty: IntType<'ctx>, address: IntValue<'ctx>) -> BasicValueEnum<'ctx> {
+    pub fn read_cp0_reg<T>(&self, index: T) -> IntValue<'ctx>
+    where
+        T: Into<u64>,
+    {
+        // TODO: dont hardcode 32-bit register width
+        let reg_ty = self.context.i32_type();
+        let reg = register::Cp0::from_repr(index.into() as _).unwrap();
+        let register = self.register_pointer(reg);
+        self.builder
+            .build_load(reg_ty, register, &format!("{}_", reg.name()))
+            .into_int_value()
+    }
+
+    pub fn read_special_reg(&self, reg: register::Special) -> IntValue<'ctx> {
+        // TODO: dont hardcode 32-bit register width
+        let reg_ty = self.context.i32_type();
+        let register = self.register_pointer(reg);
+        self.builder
+            .build_load(reg_ty, register, &format!("{}_", reg.name()))
+            .into_int_value()
+    }
+
+    pub fn read_general_reg<T>(&self, index: T) -> IntValue<'ctx>
+    where
+        T: Into<u64>,
+    {
+        // TODO: dont hardcode 32-bit register width
+        let reg_ty = self.context.i32_type();
+        let reg = register::GeneralPurpose::from_repr(index.into() as _).unwrap();
+        if reg == register::GeneralPurpose::Zero {
+            // Register zero is always zero
+            reg_ty.const_zero()
+        } else {
+            let name = format!("{}_", reg.name());
+            let reg_ptr = self.register_pointer(reg);
+            self.builder
+                .build_load(reg_ty, reg_ptr, &name)
+                .into_int_value()
+        }
+    }
+
+    pub fn read_register<T>(&self, reg: T) -> IntValue<'ctx>
+    where
+        T: Into<Register>,
+    {
+        match reg.into() {
+            Register::GeneralPurpose(reg) => self.read_general_reg(reg),
+            Register::Special(reg) => self.read_special_reg(reg),
+            Register::Cp0(reg) => self.read_cp0_reg(reg),
+        }
+    }
+
+    pub fn write_general_reg<T>(&self, index: T, value: IntValue<'ctx>)
+    where
+        T: Into<u64>,
+    {
+        let reg = register::GeneralPurpose::from_repr(index.into() as _).unwrap();
+        if reg != register::GeneralPurpose::Zero {
+            // Register zero is read-only
+            let register = self.register_pointer(reg);
+            self.builder.build_store(register, value);
+        }
+    }
+
+    pub fn write_cp0_reg<T>(&self, index: T, value: IntValue<'ctx>)
+    where
+        T: Into<u64>,
+    {
+        let reg = register::Cp0::from_repr(index.into() as _).unwrap();
+        let reg_ptr = self.register_pointer(reg);
+        self.builder.build_store(reg_ptr, value);
+    }
+
+    pub fn write_special_reg(&self, reg: register::Special, value: IntValue<'ctx>) {
+        let register = self.register_pointer(reg);
+        self.builder.build_store(register, value);
+    }
+
+    pub fn write_register<T>(&self, reg: T, value: IntValue<'ctx>)
+    where
+        T: Into<Register>,
+    {
+        match reg.into() {
+            Register::GeneralPurpose(reg) => self.write_general_reg(reg, value),
+            Register::Special(reg) => self.write_special_reg(reg, value),
+            Register::Cp0(reg) => self.write_cp0_reg(reg, value),
+        }
+    }
+
+    pub fn read_memory(&self, ty: IntType<'ctx>, address: IntValue<'ctx>) -> IntValue<'ctx> {
         let func = match ty.get_bit_width() {
             8 => RuntimeFunction::ReadI8,
             16 => RuntimeFunction::ReadI16,
@@ -460,10 +569,11 @@ impl<'ctx> CodeGen<'ctx> {
             .try_as_basic_value()
             .left()
             .unwrap()
+            .into_int_value()
     }
 
-    pub fn write_memory(&self, address: IntValue<'ctx>, value: BasicValueEnum<'ctx>) {
-        let ty = value.get_type().into_int_type();
+    pub fn write_memory(&self, address: IntValue<'ctx>, value: IntValue<'ctx>) {
+        let ty = value.get_type();
         let func = match ty.get_bit_width() {
             8 => RuntimeFunction::WriteI8,
             16 => RuntimeFunction::WriteI16,
@@ -473,68 +583,5 @@ impl<'ctx> CodeGen<'ctx> {
         };
 
         env_call!(self, func, [address, value]);
-    }
-
-    pub fn read_general_reg<T>(&self, index: T) -> BasicValueEnum<'ctx>
-    where
-        T: Into<u64>,
-    {
-        // TODO: dont hardcode 32-bit register width
-        let reg_ty = self.context.i32_type();
-        let reg = register::GeneralPurpose::from_repr(index.into() as _).unwrap();
-        if reg == register::GeneralPurpose::Zero {
-            // Register zero is always zero
-            reg_ty.const_zero().into()
-        } else {
-            let name = format!("{}_", reg.name());
-            let reg_ptr = self.register_pointer(reg);
-            self.builder.build_load(reg_ty, reg_ptr, &name)
-        }
-    }
-
-    pub fn write_general_reg<T>(&self, index: T, value: BasicValueEnum<'ctx>)
-    where
-        T: Into<u64>,
-    {
-        let reg = register::GeneralPurpose::from_repr(index.into() as _).unwrap();
-        if reg != register::GeneralPurpose::Zero {
-            // Register zero is read-only
-            let register = self.register_pointer(reg);
-            self.builder.build_store(register, value);
-        }
-    }
-
-    pub fn read_cp0_reg<T>(&self, index: T) -> BasicValueEnum<'ctx>
-    where
-        T: Into<u64>,
-    {
-        // TODO: dont hardcode 32-bit register width
-        let reg_ty = self.context.i32_type();
-        let reg = register::Cp0::from_repr(index.into() as _).unwrap();
-        let register = self.register_pointer(reg);
-        self.builder
-            .build_load(reg_ty, register, &format!("{}_", reg.name()))
-    }
-
-    pub fn write_cp0_reg<T>(&self, index: T, value: BasicValueEnum<'ctx>)
-    where
-        T: Into<u64>,
-    {
-        let reg = register::Cp0::from_repr(index.into() as _).unwrap();
-        let reg_ptr = self.register_pointer(reg);
-        self.builder.build_store(reg_ptr, value);
-    }
-
-    pub fn read_special_reg(&self, reg: register::Special) -> BasicValueEnum<'ctx> {
-        // TODO: dont hardcode 32-bit register width
-        let reg_ty = self.context.i32_type();
-        let register = self.register_pointer(reg);
-        self.builder
-            .build_load(reg_ty, register, &format!("{}_", reg.name()))
-    }
-
-    pub fn write_special_reg(&self, reg: register::Special, value: BasicValueEnum<'ctx>) {
-        let register = self.register_pointer(reg);
-        self.builder.build_store(register, value);
     }
 }

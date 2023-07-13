@@ -246,7 +246,7 @@ where
 
                         let pc = codegen.read_special_reg(register::Special::Pc);
                         let next = codegen.builder.build_int_add(
-                            pc.into_int_value(),
+                            pc,
                             codegen.context.i32_type().const_int(4, false),
                             "next_block_addr",
                         );

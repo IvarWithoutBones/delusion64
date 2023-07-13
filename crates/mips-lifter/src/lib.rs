@@ -88,69 +88,57 @@ pub fn run<Mem>(
             .context
             .i64_type()
             .const_int(i as u64 + 0x0000_0000_A400_0000, false);
-        let value = codegen
-            .context
-            .i8_type()
-            .const_int(*byte as _, false)
-            .into();
-
+        let value = codegen.context.i8_type().const_int(*byte as _, false);
         codegen.write_memory(addr, value);
     }
 
-    codegen.write_general_reg(
+    codegen.write_register(
         register::GeneralPurpose::Sp,
-        i64_type.const_int(0xFFFF_FFFF_A400_1FF0, false).into(),
+        i64_type.const_int(0xFFFF_FFFF_A400_1FF0, false),
     );
 
-    codegen.write_general_reg(
+    codegen.write_register(
         register::GeneralPurpose::T3,
-        i64_type.const_int(0xFFFF_FFFF_A400_0040, false).into(),
+        i64_type.const_int(0xFFFF_FFFF_A400_0040, false),
     );
 
-    codegen.write_general_reg(
+    codegen.write_register(
         register::GeneralPurpose::S4,
-        i64_type.const_int(0x0000_0000_0000_0001, false).into(),
+        i64_type.const_int(0x0000_0000_0000_0001, false),
     );
 
-    codegen.write_general_reg(
+    codegen.write_register(
         register::GeneralPurpose::S6,
-        i64_type.const_int(0x0000_0000_0000_003F, false).into(),
+        i64_type.const_int(0x0000_0000_0000_003F, false),
     );
 
-    codegen.write_cp0_reg(
+    codegen.write_register(
         register::Cp0::Random,
-        i64_type.const_int(0x0000_001F, false).into(),
+        i64_type.const_int(0x0000_001F, false),
     );
 
-    codegen.write_cp0_reg(
+    codegen.write_register(
         register::Cp0::Status,
-        i64_type.const_int(0x3400_0000, false).into(),
+        i64_type.const_int(0x3400_0000, false),
     );
 
-    codegen.write_cp0_reg(
-        register::Cp0::PRId,
-        i64_type.const_int(0x0000_0B00, false).into(),
-    );
+    codegen.write_register(register::Cp0::PRId, i64_type.const_int(0x0000_0B00, false));
 
-    codegen.write_cp0_reg(
+    codegen.write_register(
         register::Cp0::Config,
-        i64_type.const_int(0x0006_E463, false).into(),
+        i64_type.const_int(0x0006_E463, false),
     );
 
-    codegen.write_special_reg(
+    codegen.write_register(
         register::Special::Pc,
-        i64_type.const_int(0x0000_0000_A400_0040, false).into(),
+        i64_type.const_int(0x0000_0000_A400_0040, false),
     );
 
     // Save the current stack frame, will be restored on every block to ensure no stack overflows occur.
     // Its a rather bruteforce approach, but it works :)
     codegen.save_host_stack();
 
-    codegen.build_dynamic_jump(
-        codegen
-            .read_special_reg(register::Special::Pc)
-            .into_int_value(),
-    );
+    codegen.build_dynamic_jump(codegen.read_special_reg(register::Special::Pc));
 
     // Compile the generated functions.
     for (i, label) in codegen.labels.iter().enumerate() {

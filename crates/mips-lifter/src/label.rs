@@ -121,7 +121,7 @@ impl<'ctx> LabelWithContext<'ctx> {
             if let Some(fallthrough_fn) = self.fallthrough_fn {
                 codegen.call_function(fallthrough_fn);
             } else {
-                let str = format!("ERROR: label {:#x} attempted to execute fallthrough block without one exisiting!\n", self.label.start() * 4);
+                let str = format!("ERROR: label {:#x} attempted to execute fallthrough block without one existing!\n", self.label.start() * 4);
                 codegen.print_constant_string(&str, "error_no_fallthrough");
                 env_call!(codegen, RuntimeFunction::Panic, []);
                 codegen.builder.build_unreachable();
@@ -139,7 +139,7 @@ impl<'ctx> LabelWithContext<'ctx> {
 
         // Set the program counter to the current instruction, assumes the labels start corresponds to a virtual address.
         let pc = codegen.build_i64(addr).into_int_value();
-        codegen.write_special_reg(register::Special::Pc, pc.into());
+        codegen.write_special_reg(register::Special::Pc, pc);
 
         // Call the `on_instruction` callback from the environment, used for the debugger.
         env_call!(codegen, RuntimeFunction::OnInstruction, []);
