@@ -1,7 +1,9 @@
 DONE:
 - addu
 - and
-
+- srlv
+- sllv
+- xor
 
 Algorithm: https://github.com/PeterLemon/N64/blob/master/BOOTCODE/BOOTCODE.asm#L486, http://n64dev.org/n64crc.html
 Can assume everything works up until line 517

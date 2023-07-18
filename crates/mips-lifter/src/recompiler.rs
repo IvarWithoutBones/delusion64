@@ -545,14 +545,6 @@ pub fn recompile_instruction<'ctx>(
             codegen.write_general_reg(instr.rd(), result);
         }
 
-        Mnenomic::Sltu => {
-            // If unsigned rs is less than unsigned rt, store one in rd, otherwise store zero.
-            let source = codegen.read_general_reg(instr.rs());
-            let target = codegen.read_general_reg(instr.rt());
-            let cmp = codegen.build_compare_as_i32(IntPredicate::ULT, source, target, "sltu_cmp");
-            codegen.write_general_reg(instr.rd(), cmp);
-        }
-
         Mnenomic::Sll => {
             // Shift rt left by sa bits, store result in rd (32-bits)
             let shift = i32_type.const_int(instr.sa() as _, false);
@@ -659,24 +651,24 @@ pub fn recompile_instruction<'ctx>(
         }
 
         Mnenomic::Srlv => {
-            // Shift rt right by the low-order five bits of rs (limited to 31), store sign-extended result in rd
-            let source = {
-                let raw = codegen.read_general_reg(instr.rs());
-                let mask = i32_type.const_int(0b11111, false);
-                codegen.builder.build_and(raw, mask, "srlv_rs_mask")
-            };
-
+            // Shift rt right by the low-order five bits of rs, store sign-extended result in rd
             let target = codegen.read_general_reg(instr.rt());
+            let source = {
+                let value = codegen.read_general_reg(instr.rs());
+                let mask = i32_type.const_int(0b11111, false);
+                codegen.builder.build_and(value, mask, "srlv_rs_mask")
+            };
 
             let result = codegen
                 .builder
                 .build_right_shift(target, source, false, "srlv_shift");
+            let result = codegen.sign_extend_to(i64_type, result);
             codegen.write_general_reg(instr.rd(), result);
         }
 
         Mnenomic::Sra => {
             // Shift rt right by sa bits, store sign-extended result in rd
-            let target = codegen.read_general_reg(instr.rt());
+            let target = codegen.read_general_reg_i64(instr.rt());
             let shift = i64_type.const_int(instr.sa() as _, false);
             let result = codegen
                 .builder
@@ -685,9 +677,13 @@ pub fn recompile_instruction<'ctx>(
         }
 
         Mnenomic::Srav => {
-            // Shift rt right by rs (limited to 31), store sign-extended result in rd
-            let target = codegen.read_general_reg(instr.rt());
-            let source = codegen.read_general_reg(instr.rs());
+            // Shift rt right by the low-order five bits of rs, store sign-extended result in rd
+            let target = codegen.read_general_reg_i64(instr.rt());
+            let source = {
+                let value = codegen.read_general_reg_i64(instr.rs());
+                let mask = i64_type.const_int(0b11111, false);
+                codegen.builder.build_and(value, mask, "srav_rs_mask")
+            };
 
             let result = codegen
                 .builder
@@ -1008,9 +1004,12 @@ pub fn recompile_instruction<'ctx>(
             let immediate =
                 codegen.sign_extend_to(i32_type, i16_type.const_int(instr.immediate() as _, true));
             let source = codegen.read_general_reg(instr.rs());
-            let result = codegen
-                .builder
-                .build_int_add(source, immediate, "addiu_res");
+            let result = codegen.sign_extend_to(
+                i64_type,
+                codegen
+                    .builder
+                    .build_int_add(source, immediate, "addiu_res"),
+            );
             codegen.write_general_reg(instr.rt(), result);
         }
 
@@ -1071,31 +1070,35 @@ pub fn recompile_instruction<'ctx>(
 
         Mnenomic::Slt => {
             // If signed rs is less than signed rt, store one in rd, otherwise store zero
-            let source = codegen.read_general_reg(instr.rs());
-            let target = codegen.read_general_reg(instr.rt());
+            let source = codegen.read_general_reg_i64(instr.rs());
+            let target = codegen.read_general_reg_i64(instr.rt());
             let cmp = codegen.build_compare_as_i32(IntPredicate::SLT, source, target, "slt_cmp");
             codegen.write_general_reg(instr.rd(), cmp);
         }
 
         Mnenomic::Slti => {
             // If signed rs is less than sign-extended 16-bit immediate, store one in rd, otherwise store zero
-            let immediate =
+            let imm =
                 codegen.sign_extend_to(i32_type, i16_type.const_int(instr.immediate() as _, true));
             let source = codegen.read_general_reg(instr.rs());
-            let cmp =
-                codegen.build_compare_as_i32(IntPredicate::SLT, source, immediate, "slti_cmp");
-
+            let cmp = codegen.build_compare_as_i32(IntPredicate::SLT, source, imm, "slti_cmp");
             codegen.write_general_reg(instr.rt(), cmp);
+        }
+
+        Mnenomic::Sltu => {
+            // If unsigned rs is less than unsigned rt, store one in rd, otherwise store zero.
+            let source = codegen.read_general_reg_i64(instr.rs());
+            let target = codegen.read_general_reg_i64(instr.rt());
+            let cmp = codegen.build_compare_as_i32(IntPredicate::ULT, source, target, "sltu_cmp");
+            codegen.write_general_reg(instr.rd(), cmp);
         }
 
         Mnenomic::Sltiu => {
             // If unsigned rs is less than sign-extended 16-bit immediate, store one in rt, otherwise store zero
-            let immediate =
+            let imm =
                 codegen.sign_extend_to(i32_type, i16_type.const_int(instr.immediate() as _, true));
             let source = codegen.read_general_reg(instr.rs());
-            let cmp =
-                codegen.build_compare_as_i32(IntPredicate::ULT, source, immediate, "sltiu_cmp");
-
+            let cmp = codegen.build_compare_as_i32(IntPredicate::ULT, source, imm, "sltiu_cmp");
             codegen.write_general_reg(instr.rt(), cmp);
         }
 
@@ -1111,7 +1114,7 @@ pub fn recompile_instruction<'ctx>(
             // Subtract rt from rs, store result in rd
             let source = codegen.read_general_reg(instr.rs());
             let target = codegen.read_general_reg(instr.rt());
-            let result = codegen.builder.build_int_sub(target, source, "subu_res");
+            let result = codegen.builder.build_int_sub(source, target, "subu_res");
             codegen.write_general_reg(instr.rd(), result);
         }
 

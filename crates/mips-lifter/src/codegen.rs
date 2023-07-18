@@ -467,6 +467,46 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
+    pub fn read_general_reg<T>(&self, index: T) -> IntValue<'ctx>
+    where
+        T: Into<u64>,
+    {
+        // TODO: dont hardcode 32-bit register width
+        let reg_ty = self.context.i32_type();
+        let reg = register::GeneralPurpose::from_repr(index.into() as _).unwrap();
+        if reg == register::GeneralPurpose::Zero {
+            // Register zero is always zero
+            reg_ty.const_zero()
+        } else {
+            let name = format!("{}_", reg.name());
+            let reg_ptr = self.register_pointer(reg);
+            self.builder
+                .build_load(reg_ty, reg_ptr, &name)
+                .into_int_value()
+        }
+    }
+
+    // TODO: Duplicating this function from `read_general_reg` sucks. Merge them.
+    pub fn read_general_reg_i64<T>(&self, index: T) -> IntValue<'ctx>
+    where
+        T: Into<u64>,
+    {
+        // TODO: dont hardcode 64-bit register width
+        let reg_ty = self.context.i64_type();
+        let reg = register::GeneralPurpose::from_repr(index.into() as _).unwrap();
+        if reg == register::GeneralPurpose::Zero {
+            // Register zero is always zero
+            reg_ty.const_zero()
+        } else {
+            let name = format!("{}_", reg.name());
+            let reg_ptr = self.register_pointer(reg);
+            self.builder
+                .build_load(reg_ty, reg_ptr, &name)
+                .into_int_value()
+        }
+    }
+
+
     pub fn read_cp0_reg<T>(&self, index: T) -> IntValue<'ctx>
     where
         T: Into<u64>,
@@ -487,25 +527,6 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder
             .build_load(reg_ty, register, &format!("{}_", reg.name()))
             .into_int_value()
-    }
-
-    pub fn read_general_reg<T>(&self, index: T) -> IntValue<'ctx>
-    where
-        T: Into<u64>,
-    {
-        // TODO: dont hardcode 32-bit register width
-        let reg_ty = self.context.i32_type();
-        let reg = register::GeneralPurpose::from_repr(index.into() as _).unwrap();
-        if reg == register::GeneralPurpose::Zero {
-            // Register zero is always zero
-            reg_ty.const_zero()
-        } else {
-            let name = format!("{}_", reg.name());
-            let reg_ptr = self.register_pointer(reg);
-            self.builder
-                .build_load(reg_ty, reg_ptr, &name)
-                .into_int_value()
-        }
     }
 
     pub fn read_register<T>(&self, reg: T) -> IntValue<'ctx>
