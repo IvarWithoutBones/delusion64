@@ -4,6 +4,7 @@ set print asm-demangle on
 set print pretty on
 set print array on
 
+set history save on
 set max-value-size unlimited
 set pagination off
 set confirm off

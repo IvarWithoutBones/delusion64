@@ -1,12 +1,14 @@
 use super::{Environment, Memory};
 use gdbstub::{
     conn::ConnectionExt,
+    outputln,
     stub::{state_machine::GdbStubStateMachine, GdbStub, SingleThreadStopReason},
     target::{
         self,
         ext::{
             base::singlethread::{SingleThreadBase, SingleThreadResume, SingleThreadSingleStep},
             breakpoints::{Breakpoints, SwBreakpoint},
+            monitor_cmd::MonitorCmd,
         },
         Target, TargetResult,
     },
@@ -126,7 +128,8 @@ impl<Mem> Target for Environment<'_, Mem>
 where
     Mem: Memory,
 {
-    // TODO: this is 32-bits
+    // TODO: this is 32-bits, the 64-bit version is giving trouble because of the following issue:
+    // https://github.com/daniel5151/gdbstub/issues/97
     type Arch = gdbstub_arch::mips::Mips;
     type Error = &'static str;
 
@@ -139,6 +142,11 @@ where
     fn support_breakpoints(
         &mut self,
     ) -> Option<target::ext::breakpoints::BreakpointsOps<'_, Self>> {
+        Some(self)
+    }
+
+    #[inline(always)]
+    fn support_monitor_cmd(&mut self) -> Option<target::ext::monitor_cmd::MonitorCmdOps<'_, Self>> {
         Some(self)
     }
 
@@ -302,6 +310,36 @@ where
     fn step(&mut self, signal: Option<gdbstub::common::Signal>) -> Result<(), Self::Error> {
         assert!(signal.is_none(), "gdb: step with signal is not supported");
         self.debugger.as_mut().unwrap().state = State::SingleStep;
+        Ok(())
+    }
+}
+
+impl<Mem> MonitorCmd for Environment<'_, Mem>
+where
+    Mem: Memory,
+{
+    fn handle_monitor_cmd(
+        &mut self,
+        cmd: &[u8],
+        mut out: target::ext::monitor_cmd::ConsoleOutput<'_>,
+    ) -> Result<(), Self::Error> {
+        // This is a closure so that we can early-return using `?`.
+        let mut real = || -> Result<(), ()> {
+            let cmd = std::str::from_utf8(cmd).map_err(|_| {
+                const ERROR_MSG: &str = "monitor command is not valid UTF-8";
+                outputln!(out, "{ERROR_MSG}");
+            })?;
+
+            // Could be much more elegant, but this works fine for now.
+            match cmd {
+                "registers" | "regs" | "r" => outputln!(out, "{:?}", self.registers),
+                _ => outputln!(out, "unrecognized command: '{cmd}'"),
+            };
+
+            Ok(())
+        };
+
+        let _ = real();
         Ok(())
     }
 }
