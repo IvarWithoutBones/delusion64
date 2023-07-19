@@ -71,6 +71,13 @@ where
             State::Paused | State::Running => {}
         }
     }
+
+    pub fn set_panicked(&mut self) {
+        self.state = State::Paused;
+        self.stop_reason = Some(SingleThreadStopReason::Signal(
+            gdbstub::common::Signal::SIGTERM,
+        ));
+    }
 }
 
 impl<Mem> Environment<'_, Mem>
@@ -213,7 +220,7 @@ where
             let end = data.len().min(i + 4);
             let word = {
                 let paddr = self.virtual_to_physical_address(start_addr as u64 + i as u64);
-                self.memory.read_u32(paddr)
+                self.memory.read_u32(paddr).ok_or(())?
             };
             data[i..end].copy_from_slice(&word.to_le_bytes()[..end - i]);
         }
@@ -230,7 +237,7 @@ where
             let end = data.len().min(i + 4);
             let paddr = self.virtual_to_physical_address(start_addr as u64 + i as u64);
             let word = u32::from_le_bytes(data[i..end].try_into().unwrap());
-            self.memory.write_u32(paddr, word);
+            self.memory.write_u32(paddr, word).ok_or(())?;
         }
 
         Ok(())

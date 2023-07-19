@@ -70,19 +70,21 @@ pub enum MemoryValue {
 }
 
 impl MemoryValue {
-    pub fn write_into(&self, slice: &mut [u8], offset: usize) {
+    pub fn write_into(&self, slice: &mut [u8], offset: usize) -> Option<()> {
         match self {
-            Self::U8(value) => slice[offset] = *value,
-            Self::U16(value) => {
-                slice[offset..offset + size_of::<u16>()].copy_from_slice(&value.to_be_bytes())
-            }
-            Self::U32(value) => {
-                slice[offset..offset + size_of::<u32>()].copy_from_slice(&value.to_be_bytes())
-            }
-            Self::U64(value) => {
-                slice[offset..offset + size_of::<u64>()].copy_from_slice(&value.to_be_bytes())
-            }
+            Self::U8(value) => *slice.get_mut(offset)? = *value,
+            Self::U16(value) => slice
+                .get_mut(offset..offset + size_of::<u16>())?
+                .copy_from_slice(&value.to_be_bytes()),
+            Self::U32(value) => slice
+                .get_mut(offset..offset + size_of::<u32>())?
+                .copy_from_slice(&value.to_be_bytes()),
+            Self::U64(value) => slice
+                .get_mut(offset..offset + size_of::<u64>())?
+                .copy_from_slice(&value.to_be_bytes()),
         }
+
+        Some(())
     }
 }
 

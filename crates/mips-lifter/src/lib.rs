@@ -25,7 +25,7 @@ pub fn run<Mem>(
     Mem: runtime::Memory,
 {
     let bin = binary_range
-        .map(|addr| mem.read_u8(addr))
+        .map(|addr| mem.read_u8(addr).unwrap())
         .collect::<Vec<_>>()
         .into_boxed_slice();
 

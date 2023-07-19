@@ -32,7 +32,7 @@ impl Bus {
         }
     }
 
-    fn write<MemVal>(&mut self, location: MemoryLocation, raw_value: MemVal)
+    fn write<MemVal>(&mut self, location: MemoryLocation, raw_value: MemVal) -> Option<()>
     where
         MemVal: Into<MemoryValue>,
     {
@@ -50,34 +50,36 @@ impl Bus {
             }
 
             MemoryRegion::PeripheralInterface => {
-                self.pi.write(
+                let ret = self.pi.write(
                     offset,
                     value.try_into().unwrap(),
                     self.rdram.as_mut_slice(),
                     self.cartridge_rom.as_mut(),
                 );
-
                 println!("{:#x?}", self.pi);
+                ret
             }
 
             _ => {
                 println!("stub: {region:?} write at offset {offset:#x} = {value:?}");
+                Some(())
             }
         }
     }
 
-    fn read(&self, location: MemoryLocation, ty: MemoryType) -> MemoryValue {
+    fn read(&self, location: MemoryLocation, ty: MemoryType) -> Option<MemoryValue> {
         let region = location.region;
         let offset = location.offset;
         match region {
-            MemoryRegion::RdramMemory => ty.read_from(self.rdram.as_slice(), offset).unwrap(),
-            MemoryRegion::RspDMemory => ty.read_from(self.rsp_dmem.as_slice(), offset).unwrap(),
-            MemoryRegion::RspIMemory => ty.read_from(self.rsp_imem.as_slice(), offset).unwrap(),
+            MemoryRegion::RdramMemory => ty.read_from(self.rdram.as_slice(), offset),
+            MemoryRegion::RspDMemory => ty.read_from(self.rsp_dmem.as_slice(), offset),
+            MemoryRegion::RspIMemory => ty.read_from(self.rsp_imem.as_slice(), offset),
 
-            // An address not within the cartridge ROM range should return zero.
-            MemoryRegion::CartridgeRom => ty
-                .read_from(&self.cartridge_rom, offset)
-                .unwrap_or(ty.zero()),
+            // An address not within the mapped cartridge ROM range should return zero.
+            MemoryRegion::CartridgeRom => Some(
+                ty.read_from(&self.cartridge_rom, offset)
+                    .unwrap_or(ty.zero()),
+            ),
 
             MemoryRegion::RdramRegistersWriteOnly => {
                 panic!("write-only {region:?} read at offset {offset:#x}");
@@ -85,12 +87,12 @@ impl Bus {
 
             MemoryRegion::PeripheralInterface => {
                 println!("{:#x?}", self.pi);
-                self.pi.read(offset).unwrap().into()
+                self.pi.read(offset).map(|value| value.into())
             }
 
             _ => {
                 println!("stub: {region:?} read at offset {offset:#x}");
-                ty.zero()
+                Some(ty.zero())
             }
         }
     }
@@ -99,74 +101,58 @@ impl Bus {
 // TODO: move usage MemoryType/MemoryValue into the Memory trait, unify these functions
 impl Memory for Bus {
     #[inline]
-    fn read_u8(&self, addr: u64) -> u8 {
-        let location = addr
-            .try_into()
-            .unwrap_or_else(|_| panic!("invalid memory read at address {addr:#x}"));
-        let result = self.read(location, MemoryType::U8).try_into();
-        // This is safe because we're sure the returned value matches the MemoryType.
-        unsafe { result.unwrap_unchecked() }
+    fn read_u8(&self, addr: u64) -> Option<u8> {
+        let location = addr.try_into().ok()?;
+        self.read(location, MemoryType::U8).map(|value| {
+            // This is safe because we're sure the returned value matches the MemoryType.
+            unsafe { value.try_into().unwrap_unchecked() }
+        })
     }
 
     #[inline]
-    fn read_u16(&self, addr: u64) -> u16 {
-        let location = addr
-            .try_into()
-            .unwrap_or_else(|_| panic!("invalid memory read at address {addr:#x}"));
-        let result = self.read(location, MemoryType::U16).try_into();
-        // This is safe because we're sure the returned value matches the MemoryType.
-        unsafe { result.unwrap_unchecked() }
+    fn read_u16(&self, addr: u64) -> Option<u16> {
+        let location = addr.try_into().ok()?;
+        self.read(location, MemoryType::U16).map(|value| {
+            // This is safe because we're sure the returned value matches the MemoryType.
+            unsafe { value.try_into().unwrap_unchecked() }
+        })
     }
 
     #[inline]
-    fn read_u32(&self, addr: u64) -> u32 {
-        let location = addr
-            .try_into()
-            .unwrap_or_else(|_| panic!("invalid memory read at address {addr:#x}"));
-        let result = self.read(location, MemoryType::U32).try_into();
-        // This is safe because we're sure the returned value matches the MemoryType.
-        unsafe { result.unwrap_unchecked() }
+    fn read_u32(&self, addr: u64) -> Option<u32> {
+        let location = addr.try_into().ok()?;
+        self.read(location, MemoryType::U32).map(|value| {
+            // This is safe because we're sure the returned value matches the MemoryType.
+            unsafe { value.try_into().unwrap_unchecked() }
+        })
     }
 
     #[inline]
-    fn read_u64(&self, addr: u64) -> u64 {
-        let location = addr
-            .try_into()
-            .unwrap_or_else(|_| panic!("invalid memory read at address {addr:#x}"));
-        let result = self.read(location, MemoryType::U64).try_into();
-        // This is safe because we're sure the returned value matches the MemoryType.
-        unsafe { result.unwrap_unchecked() }
+    fn read_u64(&self, addr: u64) -> Option<u64> {
+        let location = addr.try_into().ok()?;
+        self.read(location, MemoryType::U64).map(|value| {
+            // This is safe because we're sure the returned value matches the MemoryType.
+            unsafe { value.try_into().unwrap_unchecked() }
+        })
     }
 
     #[inline]
-    fn write_u8(&mut self, addr: u64, value: u8) {
-        let location = addr
-            .try_into()
-            .unwrap_or_else(|_| panic!("invalid memory write at address {addr:#x}"));
-        self.write(location, value)
+    fn write_u8(&mut self, addr: u64, value: u8) -> Option<()> {
+        self.write(addr.try_into().ok()?, value)
     }
 
     #[inline]
-    fn write_u16(&mut self, addr: u64, value: u16) {
-        let location = addr
-            .try_into()
-            .unwrap_or_else(|_| panic!("invalid memory write at address {addr:#x}"));
-        self.write(location, value)
+    fn write_u16(&mut self, addr: u64, value: u16) -> Option<()> {
+        self.write(addr.try_into().ok()?, value)
     }
 
     #[inline]
-    fn write_u32(&mut self, addr: u64, value: u32) {
-        let location = addr
-            .try_into()
-            .unwrap_or_else(|_| panic!("invalid memory write at address {addr:#x}"));
-        self.write(location, value)
+    fn write_u32(&mut self, addr: u64, value: u32) -> Option<()> {
+        self.write(addr.try_into().ok()?, value)
     }
 
     #[inline]
-    fn write_u64(&mut self, addr: u64, value: u64) {
-        let location = addr
-            .try_into()
-            .unwrap_or_else(|_| panic!("invalid memory write at address {addr:#x}"));
-        self.write(location, value)
+    fn write_u64(&mut self, addr: u64, value: u64) -> Option<()> {
+        self.write(addr.try_into().ok()?, value)
     }
 }
