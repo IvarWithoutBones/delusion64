@@ -402,8 +402,8 @@ pub fn recompile_instruction<'ctx>(
 
         Mnenomic::Xor => {
             // XOR rs with rt, store result in rd
-            let source = codegen.read_general_reg(instr.rs());
-            let target = codegen.read_general_reg(instr.rt());
+            let source = codegen.read_general_reg_i64(instr.rs());
+            let target = codegen.read_general_reg_i64(instr.rt());
             let result = codegen.builder.build_xor(source, target, "xor_res");
             codegen.write_general_reg(instr.rd(), result);
         }
@@ -422,7 +422,12 @@ pub fn recompile_instruction<'ctx>(
             // Add rs and rt, store result in rd
             let source = codegen.read_general_reg(instr.rs());
             let target = codegen.read_general_reg(instr.rt());
-            let result = codegen.builder.build_int_add(source, target, "addu_res");
+
+            let result = codegen.sign_extend_to(
+                i64_type,
+                codegen.builder.build_int_add(source, target, "addu_res"),
+            );
+
             codegen.write_general_reg(instr.rd(), result);
         }
 
@@ -531,8 +536,8 @@ pub fn recompile_instruction<'ctx>(
 
         Mnenomic::Or => {
             // OR rs and rt, store result in rd
-            let source = codegen.read_general_reg(instr.rs());
-            let target = codegen.read_general_reg(instr.rt());
+            let source = codegen.read_general_reg_i64(instr.rs());
+            let target = codegen.read_general_reg_i64(instr.rt());
             let result = codegen.builder.build_or(source, target, "or_res");
             codegen.write_general_reg(instr.rd(), result);
         }
@@ -562,9 +567,13 @@ pub fn recompile_instruction<'ctx>(
             };
             let target = codegen.read_general_reg(instr.rt());
 
-            let result = codegen
-                .builder
-                .build_left_shift(target, source, "sllv_shift");
+            let result = codegen.sign_extend_to(
+                i64_type,
+                codegen
+                    .builder
+                    .build_left_shift(target, source, "sllv_shift"),
+            );
+
             codegen.write_general_reg(instr.rd(), result);
         }
 
@@ -750,7 +759,6 @@ pub fn recompile_instruction<'ctx>(
         Mnenomic::Multu => {
             // Multiply unsigned rs by unsigned rt, store low-order word of result in register LO and high-order word in HI
             let source = codegen.zero_extend_to(i64_type, codegen.read_general_reg(instr.rs()));
-
             let target = codegen.zero_extend_to(i64_type, codegen.read_general_reg(instr.rt()));
 
             let result = codegen.builder.build_int_mul(source, target, "multu_res");
@@ -967,14 +975,14 @@ pub fn recompile_instruction<'ctx>(
         Mnenomic::Lw => {
             // Loads word stored at memory address (base + offset), stores sign-extended word in rt
             let address = codegen.base_plus_offset(instr, "lw_addr");
-            let value = codegen.read_memory(i32_type, address);
+            let value = codegen.sign_extend_to(i64_type, codegen.read_memory(i32_type, address));
             codegen.write_general_reg(instr.rt(), value);
         }
 
         Mnenomic::Lwu => {
             // Loads word stored at memory address (base + offset), stores zero-extended word in rt
             let address = codegen.base_plus_offset(instr, "lwu_addr");
-            let value = codegen.read_memory(i32_type, address);
+            let value = codegen.zero_extend_to(i64_type, codegen.read_memory(i32_type, address));
             codegen.write_general_reg(instr.rt(), value);
         }
 
@@ -995,7 +1003,8 @@ pub fn recompile_instruction<'ctx>(
         Mnenomic::Lui => {
             // 16-bit immediate is shifted left 16 bits using trailing zeros, result placed in rt
             let immediate = instr.immediate() << 16;
-            let result = i32_type.const_int(immediate as _, false);
+            let result =
+                codegen.sign_extend_to(i64_type, i32_type.const_int(immediate as _, false));
             codegen.write_general_reg(instr.rt(), result);
         }
 
@@ -1004,12 +1013,14 @@ pub fn recompile_instruction<'ctx>(
             let immediate =
                 codegen.sign_extend_to(i32_type, i16_type.const_int(instr.immediate() as _, true));
             let source = codegen.read_general_reg(instr.rs());
+
             let result = codegen.sign_extend_to(
                 i64_type,
                 codegen
                     .builder
                     .build_int_add(source, immediate, "addiu_res"),
             );
+
             codegen.write_general_reg(instr.rt(), result);
         }
 
@@ -1026,24 +1037,29 @@ pub fn recompile_instruction<'ctx>(
             // Add rs and rt, store result in rd
             let source = codegen.read_general_reg(instr.rs());
             let target = codegen.read_general_reg(instr.rt());
-            let result = codegen.builder.build_int_add(source, target, "add_res");
+
+            let result = codegen.sign_extend_to(
+                i64_type,
+                codegen.builder.build_int_add(source, target, "add_res"),
+            );
+
             codegen.write_general_reg(instr.rd(), result);
         }
 
         Mnenomic::Andi => {
             // AND rs with zero-extended 16-bit immediate, store result in rt
-            let source = codegen.read_general_reg(instr.rs());
             let immediate =
-                codegen.zero_extend_to(i32_type, i16_type.const_int(instr.immediate() as _, false));
+                codegen.zero_extend_to(i64_type, i16_type.const_int(instr.immediate() as _, false));
+            let source = codegen.read_general_reg_i64(instr.rs());
             let result = codegen.builder.build_and(source, immediate, "andi_res");
             codegen.write_general_reg(instr.rt(), result);
         }
 
         Mnenomic::Ori => {
             // OR rs and zero-extended 16-bit immediate, store result in rt
-            let source = codegen.read_general_reg(instr.rs());
             let immediate =
-                codegen.zero_extend_to(i32_type, i16_type.const_int(instr.immediate() as _, false));
+                codegen.zero_extend_to(i64_type, i16_type.const_int(instr.immediate() as _, false));
+            let source = codegen.read_general_reg_i64(instr.rs());
             let result = codegen.builder.build_or(source, immediate, "ori_res");
             codegen.write_general_reg(instr.rt(), result);
         }
@@ -1089,7 +1105,14 @@ pub fn recompile_instruction<'ctx>(
             // If unsigned rs is less than unsigned rt, store one in rd, otherwise store zero.
             let source = codegen.read_general_reg_i64(instr.rs());
             let target = codegen.read_general_reg_i64(instr.rt());
-            let cmp = codegen.build_compare_as_i32(IntPredicate::ULT, source, target, "sltu_cmp");
+
+            let cmp = codegen.zero_extend_to(
+                i64_type,
+                codegen
+                    .builder
+                    .build_int_compare(IntPredicate::ULT, source, target, "sltu_cmp"),
+            );
+
             codegen.write_general_reg(instr.rd(), cmp);
         }
 
@@ -1114,14 +1137,19 @@ pub fn recompile_instruction<'ctx>(
             // Subtract rt from rs, store result in rd
             let source = codegen.read_general_reg(instr.rs());
             let target = codegen.read_general_reg(instr.rt());
-            let result = codegen.builder.build_int_sub(source, target, "subu_res");
+
+            let result = codegen.sign_extend_to(
+                i64_type,
+                codegen.builder.build_int_sub(source, target, "subu_res"),
+            );
+
             codegen.write_general_reg(instr.rd(), result);
         }
 
         Mnenomic::Beq => {
             // If rs equals rt, branch to address
-            let source = codegen.read_general_reg(instr.rs());
-            let target = codegen.read_general_reg(instr.rt());
+            let source = codegen.read_general_reg_i64(instr.rs());
+            let target = codegen.read_general_reg_i64(instr.rt());
             let cmp =
                 codegen
                     .builder

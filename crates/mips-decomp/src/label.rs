@@ -150,7 +150,7 @@ fn generate_labels(instrs: &[MaybeInstruction], targets: &[JumpTarget]) -> Vec<L
         for i in start_offset..end_offset {
             if let Some(instr) = instrs.get(i) {
                 // Since we split blocks before at all jumps/branches getting an invalid instruction
-                // in the middle of a block invalidates the entire block, theres no way not to execute it.
+                // in the middle of a block invalidates the entire block, there's no way not to execute it.
                 if !instr.is_valid() {
                     clear_fallthrough(&mut labels, &mut prev_fallthrough);
                     continue 'outer;

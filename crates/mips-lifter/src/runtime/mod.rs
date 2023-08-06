@@ -9,7 +9,7 @@ use inkwell::{
     attributes::AttributeLoc, execution_engine::ExecutionEngine, module::Module,
     values::FunctionValue, AddressSpace,
 };
-use mips_decomp::{instruction::ParsedInstruction, register};
+use mips_decomp::{instruction::ParsedInstruction, register, INSTRUCTION_SIZE};
 use std::{cell::Cell, fmt, net::TcpStream, pin::Pin};
 use strum::IntoEnumIterator;
 
@@ -276,11 +276,30 @@ where
                         codegen.builder.position_at_end(fallthrough_block);
 
                         let pc = codegen.read_special_reg(register::Special::Pc);
-                        let next = codegen.builder.build_int_add(
-                            pc,
-                            codegen.context.i32_type().const_int(4, false),
-                            "next_block_addr",
-                        );
+                        let next = {
+                            // If the second-last instruction has a delay slot, we've already executed the last instruction.
+                            // In this case we need to skip over it, in order to avoid executing it twice.
+                            let offset = if let Some(second_last) =
+                                lab.label.instructions.iter().nth_back(1)
+                            {
+                                if second_last.has_delay_slot() {
+                                    2
+                                } else {
+                                    1
+                                }
+                            } else {
+                                1
+                            };
+
+                            codegen.builder.build_int_add(
+                                pc,
+                                codegen
+                                    .context
+                                    .i32_type()
+                                    .const_int(offset * (INSTRUCTION_SIZE as u64), false),
+                                "next_block_addr",
+                            )
+                        };
 
                         codegen.build_dynamic_jump(next);
                         lab.fallthrough_fn = Some(fallthrough_func);

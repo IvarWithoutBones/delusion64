@@ -29,19 +29,15 @@ pub fn run<Mem>(
         .collect::<Vec<_>>()
         .into_boxed_slice();
 
-    let mut labels = mips_decomp::LabelList::from(&*bin);
-    labels.set_offset(0x0000_0000_A400_0000 / 4);
-
-    // TODO: remove!
-    labels.pop();
-
-    let labels_str = format!("{labels:#?}");
-    println!("{labels_str}");
-
     if let Some(path) = disassembly_path {
+        let mut labels = mips_decomp::LabelList::from(&*bin);
+        labels.set_offset(0x0000_0000_A400_0000 / 4);
+        let labels_str = format!("{labels:#?}");
+
         let mut file = std::fs::File::create(path).unwrap();
         writeln!(file, "{labels_str}").unwrap();
         println!("wrote disassembly to {path}");
+        return;
     }
 
     // Create the compiler context.

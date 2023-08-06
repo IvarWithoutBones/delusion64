@@ -506,7 +506,6 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
-
     pub fn read_cp0_reg<T>(&self, index: T) -> IntValue<'ctx>
     where
         T: Into<u64>,
