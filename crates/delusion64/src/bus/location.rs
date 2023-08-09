@@ -173,6 +173,13 @@ impl MemoryRegion {
         Self::iter().find(|&region| region.contains(addr))
     }
 
+    /// Returns true for regions that can safely ignore writes, and return zero when read from.
+    /// This is used for regions that are not emulated, such as the RdramRegisters.
+    pub const fn safe_to_stub(&self) -> bool {
+        // TODO: Dont just stub everything
+        true
+    }
+
     pub const fn range(&self) -> Range<u64> {
         // See https://n64brew.dev/wiki/Memory_map#Physical_Memory_Map.
         match self {

@@ -4,11 +4,11 @@ use mips_lifter::runtime::Memory;
 
 pub mod location;
 
-/// Allocates a boxed slice of a given length.
+/// Allocates a fixed-sized boxed slice of a given length.
 fn boxed_slice<const LEN: usize>() -> Box<[u8; LEN]> {
-    // Use `vec!` to avoid stack allocations, which may overflow.
+    // Use a Vec to allocate directly onto the heap. Using an array will allocate on the stack,
+    // which can cause a stack overflow. SAFETY: We're sure the input size matches the output size.
     let result = vec![0; LEN].into_boxed_slice();
-    // This is safe because we're sure the input length matches the output length.
     unsafe { result.try_into().unwrap_unchecked() }
 }
 
@@ -45,24 +45,20 @@ impl Bus {
             MemoryRegion::RspDMemory => value.write_into(self.rsp_dmem.as_mut_slice(), offset),
             MemoryRegion::RspIMemory => value.write_into(self.rsp_imem.as_mut_slice(), offset),
 
+            MemoryRegion::PeripheralInterface => self.pi.write(
+                offset,
+                value.try_into().unwrap(),
+                self.rdram.as_mut_slice(),
+                self.cartridge_rom.as_mut(),
+            ),
+
             MemoryRegion::CartridgeRom | MemoryRegion::DiskDriveIpl4Rom | MemoryRegion::PifRom => {
                 panic!("read-only {region:?} write at offset {offset:#x} = {value:?}")
             }
 
-            MemoryRegion::PeripheralInterface => {
-                let ret = self.pi.write(
-                    offset,
-                    value.try_into().unwrap(),
-                    self.rdram.as_mut_slice(),
-                    self.cartridge_rom.as_mut(),
-                );
-                println!("{:#x?}", self.pi);
-                ret
-            }
-
             _ => {
                 println!("stub: {region:?} write at offset {offset:#x} = {value:?}");
-                Some(())
+                region.safe_to_stub().then_some(())
             }
         }
     }
@@ -70,13 +66,15 @@ impl Bus {
     fn read(&self, location: MemoryLocation, ty: MemoryType) -> Option<MemoryValue> {
         let region = location.region;
         let offset = location.offset;
+
         match region {
             MemoryRegion::RdramMemory => ty.read_from(self.rdram.as_slice(), offset),
             MemoryRegion::RspDMemory => ty.read_from(self.rsp_dmem.as_slice(), offset),
             MemoryRegion::RspIMemory => ty.read_from(self.rsp_imem.as_slice(), offset),
+            MemoryRegion::PeripheralInterface => self.pi.read(offset).map(|value| value.into()),
 
-            // An address not within the mapped cartridge ROM range should return zero.
             MemoryRegion::CartridgeRom => Some(
+                // An address not within the mapped cartridge ROM range should return zero.
                 ty.read_from(&self.cartridge_rom, offset)
                     .unwrap_or(ty.zero()),
             ),
@@ -85,14 +83,9 @@ impl Bus {
                 panic!("write-only {region:?} read at offset {offset:#x}");
             }
 
-            MemoryRegion::PeripheralInterface => {
-                println!("{:#x?}", self.pi);
-                self.pi.read(offset).map(|value| value.into())
-            }
-
             _ => {
                 println!("stub: {region:?} read at offset {offset:#x}");
-                Some(ty.zero())
+                region.safe_to_stub().then_some(ty.zero())
             }
         }
     }
