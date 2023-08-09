@@ -389,16 +389,6 @@ impl<'ctx> CodeGen<'ctx> {
         then_block
     }
 
-    pub fn build_i64<T>(&self, value: T) -> BasicMetadataValueEnum<'ctx>
-    where
-        T: Into<u64>,
-    {
-        self.context
-            .i64_type()
-            .const_int(value.into(), false)
-            .into()
-    }
-
     /// Sign-extends the given value to the given type.
     pub fn sign_extend_to(&self, ty: IntType<'ctx>, value: IntValue<'ctx>) -> IntValue<'ctx> {
         let name = format!("sign_ext_to_i{}", ty.get_bit_width());
@@ -437,7 +427,7 @@ impl<'ctx> CodeGen<'ctx> {
         let i32_type = self.context.i32_type();
         let i64_type = self.context.i64_type();
 
-        let base = self.read_general_reg(instr.base());
+        let base = self.read_general_register(i32_type, instr.base());
         let offset = self.sign_extend_to(i32_type, i16_type.const_int(instr.offset() as _, true));
         let result = self.builder.build_int_add(base, offset, add_name);
         self.zero_extend_to(i64_type, result)
@@ -467,42 +457,22 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
-    pub fn read_general_reg<T>(&self, index: T) -> IntValue<'ctx>
+    /// Read the general-purpose register (GPR) at the given index.
+    /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits will be returned.
+    pub fn read_general_register<T>(&self, ty: IntType<'ctx>, index: T) -> IntValue<'ctx>
     where
         T: Into<u64>,
     {
-        // TODO: dont hardcode 32-bit register width
-        let reg_ty = self.context.i32_type();
+        debug_assert!(ty.get_bit_width() == 32 || ty.get_bit_width() == 64);
         let reg = register::GeneralPurpose::from_repr(index.into() as _).unwrap();
-        if reg == register::GeneralPurpose::Zero {
-            // Register zero is always zero
-            reg_ty.const_zero()
-        } else {
-            let name = format!("{}_", reg.name());
-            let reg_ptr = self.register_pointer(reg);
-            self.builder
-                .build_load(reg_ty, reg_ptr, &name)
-                .into_int_value()
-        }
-    }
-
-    // TODO: Duplicating this function from `read_general_reg` sucks. Merge them.
-    pub fn read_general_reg_i64<T>(&self, index: T) -> IntValue<'ctx>
-    where
-        T: Into<u64>,
-    {
-        // TODO: dont hardcode 64-bit register width
-        let reg_ty = self.context.i64_type();
-        let reg = register::GeneralPurpose::from_repr(index.into() as _).unwrap();
-        if reg == register::GeneralPurpose::Zero {
-            // Register zero is always zero
-            reg_ty.const_zero()
-        } else {
-            let name = format!("{}_", reg.name());
-            let reg_ptr = self.register_pointer(reg);
-            self.builder
-                .build_load(reg_ty, reg_ptr, &name)
-                .into_int_value()
+        match reg {
+            // Register zero is hardcoded to zero.
+            register::GeneralPurpose::Zero => ty.const_zero(),
+            _ => {
+                let name = format!("{}_", reg.name());
+                let reg_ptr = self.register_pointer(reg);
+                self.builder.build_load(ty, reg_ptr, &name).into_int_value()
+            }
         }
     }
 
@@ -528,12 +498,12 @@ impl<'ctx> CodeGen<'ctx> {
             .into_int_value()
     }
 
-    pub fn read_register<T>(&self, reg: T) -> IntValue<'ctx>
+    pub fn read_register<T>(&self, ty: IntType<'ctx>, reg: T) -> IntValue<'ctx>
     where
         T: Into<Register>,
     {
         match reg.into() {
-            Register::GeneralPurpose(reg) => self.read_general_reg(reg),
+            Register::GeneralPurpose(reg) => self.read_general_register(ty, reg),
             Register::Special(reg) => self.read_special_reg(reg),
             Register::Cp0(reg) => self.read_cp0_reg(reg),
         }

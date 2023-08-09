@@ -135,11 +135,10 @@ impl<'ctx> LabelWithContext<'ctx> {
         instr: &ParsedInstruction,
         codegen: &CodeGen<'ctx>,
     ) -> Option<BasicBlock<'ctx>> {
-        let addr = ((self.label.start() + index) * INSTRUCTION_SIZE) as u64;
-
         // Set the program counter to the current instruction, assumes the labels start corresponds to a virtual address.
-        let pc = codegen.build_i64(addr).into_int_value();
-        codegen.write_special_reg(register::Special::Pc, pc);
+        let addr = ((self.label.start() + index) * INSTRUCTION_SIZE) as u64;
+        let addr_const = codegen.context.i64_type().const_int(addr, false);
+        codegen.write_special_reg(register::Special::Pc, addr_const);
 
         // Call the `on_instruction` callback from the environment, used for the debugger.
         env_call!(codegen, RuntimeFunction::OnInstruction, []);

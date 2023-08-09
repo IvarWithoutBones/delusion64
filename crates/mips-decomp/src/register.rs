@@ -4,24 +4,30 @@ use strum::{EnumCount, EnumVariantNames, FromRepr, VariantNames};
 macro_rules! impl_reg {
     ($enum:ident) => {
         impl $enum {
-            /// Returns the number of registers.
-            pub const fn count() -> usize {
-                Self::COUNT
+            /// Returns the register at the given index, or panics if the index is out of bounds.
+            /// If you want to handle out of bounds indices, use `from_repr` instead.
+            pub fn new(index: usize) -> Self {
+                Self::from_repr(index as _).unwrap()
             }
 
-            /// Returns the register number.
-            pub const fn to_repr(self) -> u8 {
-                self as u8
+            /// Returns the index of the register.
+            pub const fn to_repr(self) -> usize {
+                self as usize
             }
 
-            /// Returns the name of the register at the given index.
-            pub const fn name_from_index(index: u8) -> &'static str {
-                Self::VARIANTS[index as usize]
-            }
-
-            /// Returns the name of the register.
+            /// Returns the name of the register as a static string slice.
             pub const fn name(&self) -> &'static str {
                 Self::name_from_index(self.to_repr())
+            }
+
+            /// Returns the name of the register at the given index, or panics if the index is out of bounds.
+            pub const fn name_from_index(index: usize) -> &'static str {
+                Self::VARIANTS[index]
+            }
+
+            /// Returns the total number of registers.
+            pub const fn count() -> usize {
+                Self::COUNT
             }
         }
 
@@ -63,6 +69,14 @@ macro_rules! impl_reg {
             }
         }
 
+        impl TryFrom<u128> for $enum {
+            type Error = ();
+
+            fn try_from(v: u128) -> Result<Self, Self::Error> {
+                Self::from_repr(v as _).ok_or(())
+            }
+        }
+
         impl TryFrom<usize> for $enum {
             type Error = ();
 
@@ -73,31 +87,37 @@ macro_rules! impl_reg {
 
         impl From<$enum> for u8 {
             fn from(v: $enum) -> Self {
-                v.to_repr()
+                v.to_repr() as _
             }
         }
 
         impl From<$enum> for u16 {
             fn from(v: $enum) -> Self {
-                v.to_repr().into()
+                v.to_repr() as _
             }
         }
 
         impl From<$enum> for u32 {
             fn from(v: $enum) -> Self {
-                v.to_repr().into()
+                v.to_repr() as _
             }
         }
 
         impl From<$enum> for u64 {
             fn from(v: $enum) -> Self {
-                v.to_repr().into()
+                v.to_repr() as _
+            }
+        }
+
+        impl From<$enum> for u128 {
+            fn from(v: $enum) -> Self {
+                v.to_repr() as _
             }
         }
 
         impl From<$enum> for usize {
             fn from(v: $enum) -> Self {
-                v.to_repr().into()
+                v.to_repr()
             }
         }
     };
@@ -228,8 +248,21 @@ pub enum Cp0 {
     TagHi,
     /// Error Exception Program Counter
     ErrorEPC,
-    /// for future use
-    Reserved,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved31,
+}
+
+impl Cp0 {
+    /// Returns whether the register is reserved for future use, and thus should not be used.
+    pub const fn is_reserved(&self) -> bool {
+        matches!(self, |Self::Reserved7| Self::Reserved21
+            | Self::Reserved22
+            | Self::Reserved23
+            | Self::Reserved24
+            | Self::Reserved25
+            | Self::Reserved31)
+    }
 }
 
 impl_reg!(Cp0);
@@ -251,7 +284,7 @@ impl Register {
         }
     }
 
-    pub const fn to_repr(self) -> u8 {
+    pub const fn to_repr(self) -> usize {
         match self {
             Self::GeneralPurpose(v) => v.to_repr(),
             Self::Special(v) => v.to_repr(),
