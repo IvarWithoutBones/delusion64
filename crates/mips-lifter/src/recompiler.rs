@@ -119,9 +119,14 @@ pub fn recompile_instruction<'ctx>(
             stub(codegen, "break");
         }
 
-        Mnenomic::Copz => {
-            // Perform coprocessor operation
-            stub(codegen, "copz");
+        Mnenomic::Cop1 => {
+            // Perform a CP1 operation
+            stub(codegen, "cop1");
+        }
+
+        Mnenomic::Cop2 => {
+            // Perform a CP2 operation
+            stub(codegen, "cop2");
         }
 
         Mnenomic::Bczf => {
@@ -134,19 +139,24 @@ pub fn recompile_instruction<'ctx>(
             stub(codegen, "bczt");
         }
 
-        Mnenomic::Swcz => {
-            // Copies word from CPz, to memory address (base + offset)
-            stub(codegen, "swcz");
+        Mnenomic::Swc1 => {
+            // Copies word from CP1, to memory address (base + offset)
+            stub(codegen, "swc1");
         }
 
-        Mnenomic::Sdcz => {
-            // Copies doubleword from CPz, to memory address (base + offset)
-            stub(codegen, "sdcz");
+        Mnenomic::Swc2 => {
+            // Copies word from CP1, to memory address (base + offset)
+            stub(codegen, "swc2");
         }
 
-        Mnenomic::Ldcz => {
-            // Copies doubleword stored at memory address (base + offset), to CPz
-            stub(codegen, "ldcz");
+        Mnenomic::Sdc1 => {
+            // Copies doubleword from CP1, to memory address (base + offset)
+            stub(codegen, "sdc1");
+        }
+
+        Mnenomic::Ldc1 => {
+            // Copies doubleword stored at memory address (base + offset), to CP1
+            stub(codegen, "ldc1");
         }
 
         Mnenomic::Ldl => {
@@ -174,29 +184,39 @@ pub fn recompile_instruction<'ctx>(
             stub(codegen, "lwl");
         }
 
-        Mnenomic::Cfcz => {
-            // Copy contents of CPz control register rd, to GPR rt
-            stub(codegen, "cfcz");
+        Mnenomic::Cfc1 => {
+            // Copy contents of CP1's control register rd, to GPR rt
+            stub(codegen, "cfc1");
         }
 
-        Mnenomic::Ctcz => {
-            // Copy contents of GPR rt, to CPz control register rd
-            stub(codegen, "ctcz");
+        Mnenomic::Ctc1 => {
+            // Copy contents of GPR rt, to CP1's control register rd
+            stub(codegen, "ctc1");
         }
 
-        Mnenomic::Mfcz => {
-            // Copy contents of CPz's coprocessor register rd, to GPR rt
-            stub(codegen, "mfcz");
+        Mnenomic::Ctc2 => {
+            // Copy contents of GPR rt, to CP2's control register rd
+            stub(codegen, "ctc2");
         }
 
-        Mnenomic::Mtcz => {
-            // Copy contents of GPR rt, to CPz's coprocessor register rd
-            stub(codegen, "mtcz");
+        Mnenomic::Mfc2 => {
+            // Copy contents of CP2's coprocessor register rd, to GPR rt
+            stub(codegen, "mfc2");
         }
 
-        Mnenomic::Lwcz => {
-            // Copies word stored at memory address (base + offset), to CPz register rt
-            stub(codegen, "lwcz");
+        Mnenomic::Mtc2 => {
+            // Copy contents of GPR rt, to CP2's coprocessor register rd
+            stub(codegen, "mtc2");
+        }
+
+        Mnenomic::Lwc1 => {
+            // Copies word stored at memory address (base + offset), to CP1's register rt
+            stub(codegen, "lwc1");
+        }
+
+        Mnenomic::Lwc2 => {
+            // Copies word stored at memory address (base + offset), to CP2's register rt
+            stub(codegen, "lwc2");
         }
 
         Mnenomic::Bczfl => {

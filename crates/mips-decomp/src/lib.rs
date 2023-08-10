@@ -18,13 +18,23 @@ pub enum MaybeInstruction {
 }
 
 impl MaybeInstruction {
-    pub fn try_resolve_static_jump(&self, pc: u64) -> Option<u64> {
+    pub const fn new(raw: u32) -> Self {
+        if let Some(parsed) = ParsedInstruction::new(raw) {
+            Self::Instruction(parsed)
+        } else {
+            Self::Invalid(raw)
+        }
+    }
+
+    #[inline]
+    pub const fn try_resolve_static_jump(&self, pc: u64) -> Option<u64> {
         match self {
             Self::Instruction(instr) => instr.try_resolve_static_jump(pc),
             Self::Invalid(_) => None,
         }
     }
 
+    #[inline]
     pub const fn ends_block(&self) -> bool {
         match self {
             Self::Instruction(instr) => instr.ends_block(),
@@ -32,6 +42,7 @@ impl MaybeInstruction {
         }
     }
 
+    #[inline]
     pub const fn has_delay_slot(&self) -> bool {
         match self {
             Self::Instruction(instr) => instr.has_delay_slot(),
@@ -39,6 +50,7 @@ impl MaybeInstruction {
         }
     }
 
+    #[inline]
     pub const fn discards_delay_slot(&self) -> bool {
         match self {
             Self::Instruction(instr) => instr.discards_delay_slot(),
@@ -46,6 +58,7 @@ impl MaybeInstruction {
         }
     }
 
+    #[inline]
     pub const fn is_valid(&self) -> bool {
         match self {
             Self::Instruction(_) => true,
@@ -54,10 +67,10 @@ impl MaybeInstruction {
     }
 
     #[inline]
-    pub fn unwrap(self) -> ParsedInstruction {
+    pub const fn unwrap(self) -> ParsedInstruction {
         match self {
             Self::Instruction(instr) => instr,
-            Self::Invalid(value) => panic!("tried to unwrap invalid instruction: {value:#034b}"),
+            Self::Invalid(_) => panic!("tried to unwrap invalid instruction"),
         }
     }
 }
@@ -128,12 +141,11 @@ impl<'a> Decompiler<'a> {
     fn read_u32(&self, from_pos: usize) -> Option<u32> {
         debug_assert!(from_pos % INSTRUCTION_SIZE == 0);
 
-        let data = [
-            *self.bin.get(from_pos)?,
-            *self.bin.get(from_pos + 1)?,
-            *self.bin.get(from_pos + 2)?,
-            *self.bin.get(from_pos + 3)?,
-        ];
+        let data = {
+            let slice = self.bin.get(from_pos..from_pos + INSTRUCTION_SIZE)?;
+            // SAFETY: We already checked that the slice is the correct length.
+            unsafe { slice.try_into().unwrap_unchecked() }
+        };
 
         Some(match self.endian {
             Endian::Big => u32::from_be_bytes(data),

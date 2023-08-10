@@ -1,7 +1,23 @@
-use std::ops::Range;
+// The functions in this module are unfortunately all rather ugly because of the limitations of const fn's :/
+
+use std::ops::RangeInclusive;
 
 const MAX_COMPONENTS: usize = 16;
 
+/// Extracts an inclusive range of bits from a number, where zero is the least significant bit.
+pub const fn bit_range(num: u32, range: &RangeInclusive<u32>) -> u32 {
+    assert!(*range.start() <= u32::BITS);
+    assert!(*range.end() <= u32::BITS);
+    let mask = 2_usize.pow(*range.end() - *range.start()) - 1;
+    (num >> *range.start()) & mask as u32
+}
+
+/// Checks if a number is a binary digit (1 or 0), in ASCII.
+const fn is_binary_char(c: u8) -> bool {
+    c == b'0' || c == b'1'
+}
+
+/// Removes all ASCII spaces from a string.
 const fn remove_spaces(s: &str) -> [u8; u32::BITS as usize] {
     let raw = s.as_bytes();
     let mut result = [0; u32::BITS as usize];
@@ -18,40 +34,32 @@ const fn remove_spaces(s: &str) -> [u8; u32::BITS as usize] {
     result
 }
 
-const fn is_binary_char(c: u8) -> bool {
-    c == b'0' || c == b'1'
-}
-
-const fn parse_binary_string(input: &[u8], start: usize, len: usize) -> usize {
+/// Parses a binary string into a number.
+const fn parse_binary_string(input: &[u8], start: usize, end: usize) -> usize {
     let mut result = 0;
     let mut i = start;
-    while i < len {
+    while i < end {
         let x = input[i];
         assert!(is_binary_char(x));
 
         let num = x - b'0';
-        result += (num as usize) << (len - i - 1);
+        result += (num as usize) << ((end - i) - 1);
         i += 1;
     }
     result
 }
 
-pub const fn bit_range(num: u32, range: &Range<u32>) -> u32 {
-    assert!(range.start <= u32::BITS);
-    assert!(range.end <= u32::BITS);
-    let mask = 2_usize.pow(range.end - range.start) - 1;
-    (num >> range.start) & mask as u32
-}
-
+/// Parses a binary string into a number, returns the number of bytes parsed and the result.
 const fn parse_binary(input: &[u8], start: usize) -> (usize, usize) {
-    let mut i = start;
-    while i < input.len() && is_binary_char(input[i]) {
-        i += 1;
+    let mut end = start;
+    while end < input.len() && is_binary_char(input[end]) {
+        end += 1;
     }
-    (i - start, parse_binary_string(input, start, i))
+    (end - start, parse_binary_string(input, start, end))
 }
 
-const fn parse_repeated(input: &[u8], start: usize, pattern: u8) -> usize {
+/// Counts the amount of consecutive bytes that match the given pattern.
+const fn count_repeated(input: &[u8], start: usize, pattern: u8) -> usize {
     let mut i = start;
     while i < input.len() && input[i] == pattern {
         i += 1;
@@ -99,6 +107,12 @@ impl Operand {
             Self::Source | Self::Destination | Self::Target | Self::Base
         )
     }
+
+    // Questionable workaround for the equality operator not being allowed in const fn's.
+    // See https://github.com/rust-lang/rust/issues/92827.
+    pub const fn equals(self, other: Self) -> bool {
+        self as usize == other as usize
+    }
 }
 
 impl From<char> for Operand {
@@ -115,7 +129,7 @@ pub enum PatternValue {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PatternComponent {
-    pub range: Range<u32>,
+    pub range: RangeInclusive<u32>,
     pub value: PatternValue,
 }
 
@@ -127,17 +141,17 @@ impl PatternComponent {
             let remainder = u32::BITS - start as u32;
 
             PatternComponent {
-                range: remainder..remainder + len as u32,
+                range: remainder..=(remainder + len as u32),
                 value: PatternValue::Constant(num as _),
             }
         } else {
             let pattern = input[start];
-            let len = parse_repeated(input, start, pattern);
+            let len = count_repeated(input, start, pattern);
             let remainder = u32::BITS - start as u32;
             start += len;
 
             PatternComponent {
-                range: (remainder - len as u32)..remainder,
+                range: (remainder - len as u32)..=remainder,
                 value: PatternValue::Variable(Operand::from_char(pattern as char)),
             }
         };
@@ -181,28 +195,54 @@ impl InstructionPattern {
         Self { patterns }
     }
 
-    pub fn matches(&self, num: u32) -> bool {
-        self.iter().all(|p| p.matches(num))
+    pub const fn matches(&self, num: u32) -> bool {
+        let mut i = 0;
+        while i < self.patterns.len() {
+            if let Some(p) = &self.patterns[i] {
+                if !p.matches(num) {
+                    return false;
+                }
+            }
+            i += 1;
+        }
+        true
     }
 
-    pub fn get(&self, op: Operand, num: u32) -> Option<u32> {
-        Some(
-            self.iter()
-                .find(|p| {
-                    if let PatternValue::Variable(c) = p.value {
-                        c == op
-                    } else {
-                        false
+    pub const fn get(&self, op: Operand, num: u32) -> Option<u32> {
+        let mut i = 0;
+        // Note: we cannot use `while let` here, as we want to validate the index and `slice.get()` is not const.
+        while i < self.patterns.len() {
+            if let Some(p) = &self.patterns[i] {
+                if let PatternValue::Variable(c) = p.value {
+                    if op.equals(c) {
+                        return Some(p.get(num));
                     }
-                })?
-                .get(num),
-        )
+                }
+            }
+            i += 1;
+        }
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bit_range_extract() {
+        let a = 0b1010_1111;
+        assert_eq!(bit_range(a, &(0..=u32::BITS)), a);
+        assert_eq!(bit_range(a, &(0..=8)), 0b1010_1111);
+        assert_eq!(bit_range(a, &(0..=4)), 0b1111);
+        assert_eq!(bit_range(a, &(0..=3)), 0b111);
+        assert_eq!(bit_range(a, &(4..=8)), 0b1010);
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &PatternComponent> {
-        self.patterns
-            .iter()
-            .take_while(|p| p.is_some())
-            .map(|p| p.as_ref().unwrap())
+    #[test]
+    fn binary_char_validation() {
+        assert!(is_binary_char(b'0'));
+        assert!(is_binary_char(b'1'));
+        assert!(!is_binary_char(b'2'));
     }
 }

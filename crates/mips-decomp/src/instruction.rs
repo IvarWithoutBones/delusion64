@@ -37,9 +37,12 @@ pub enum Mnenomic {
     Bnel,
     Break,
     Cache,
-    Cfcz,
-    Copz,
-    Ctcz,
+    Cfc1,
+    Cfc2,
+    Cop1,
+    Cop2,
+    Ctc1,
+    Ctc2,
     Dadd,
     Daddi,
     Daddiu,
@@ -73,7 +76,7 @@ pub enum Mnenomic {
     Lb,
     Lbu,
     Ld,
-    Ldcz,
+    Ldc1,
     Ldl,
     Ldr,
     Lh,
@@ -82,16 +85,17 @@ pub enum Mnenomic {
     Lld,
     Lui,
     Lw,
-    Lwcz,
+    Lwc1,
+    Lwc2,
     Lwl,
     Lwr,
     Lwu,
     Mfc0,
-    Mfcz,
+    Mfc2,
     Mfhi,
     Mflo,
     Mtc0,
-    Mtcz,
+    Mtc2,
     Mthi,
     Mtlo,
     Mult,
@@ -103,7 +107,7 @@ pub enum Mnenomic {
     Sc,
     Scd,
     Sd,
-    Sdcz,
+    Sdc1,
     Sdl,
     Sdr,
     Sh,
@@ -120,7 +124,8 @@ pub enum Mnenomic {
     Sub,
     Subu,
     Sw,
-    Swcz,
+    Swc1,
+    Swc2,
     Swl,
     Swr,
     Sync,
@@ -159,12 +164,7 @@ impl Mnenomic {
     pub const fn uses_cp0_destination(&self) -> bool {
         matches!(
             self,
-            Mnenomic::Mfc0
-                | Mnenomic::Mfcz
-                | Mnenomic::Mtc0
-                | Mnenomic::Mtcz
-                | Mnenomic::Dmfc0
-                | Mnenomic::Dmtc0
+            Mnenomic::Mfc0 | Mnenomic::Mtc0 | Mnenomic::Dmfc0 | Mnenomic::Dmtc0
         )
     }
 
@@ -281,7 +281,7 @@ impl Instruction {
         CacheOperation::new(subject, opcode)
     }
 
-    pub fn try_resolve_static_jump(&self, raw: u32, pc: u64) -> Option<u64> {
+    pub const fn try_resolve_static_jump(&self, raw: u32, pc: u64) -> Option<u64> {
         if !self.mnenomic.is_branch() {
             return None;
         }
@@ -289,14 +289,15 @@ impl Instruction {
         match self.operands {
             [.., (Operand::Offset, Signedness::Signed16)] => {
                 // Branch instructions, these jump from the delay slot + the offset (which can be negative)
-                let offset = ((self.pattern.get(Operand::Offset, raw)? as i16) << 2) as i64;
-                Some(((pc + INSTRUCTION_SIZE as u64) as i64 + offset) as u64)
+                if let Some(offset) = self.pattern.get(Operand::Offset, raw) {
+                    let offset = ((offset as i16) << 2) as i64;
+                    Some(((pc + INSTRUCTION_SIZE as u64) as i64 + offset) as u64)
+                } else {
+                    None
+                }
             }
 
-            _ => todo!(
-                "instruction {:?} has static jump but could not resolve",
-                self.mnenomic
-            ),
+            _ => panic!("instruction has a static jump but could not resolve"),
         }
     }
 
@@ -374,7 +375,15 @@ pub struct ParsedInstruction {
 }
 
 impl ParsedInstruction {
-    pub fn try_resolve_static_jump(&self, pc: u64) -> Option<u64> {
+    pub const fn new(raw: u32) -> Option<Self> {
+        if let Some(instr) = decode(raw) {
+            Some(Self { instr, raw })
+        } else {
+            None
+        }
+    }
+
+    pub const fn try_resolve_static_jump(&self, pc: u64) -> Option<u64> {
         self.instr.try_resolve_static_jump(self.raw, pc)
     }
 
@@ -394,7 +403,7 @@ impl ParsedInstruction {
         self.instr.mnenomic.discards_delay_slot()
     }
 
-    pub fn get(&self, op: Operand) -> Option<u32> {
+    pub const fn get(&self, op: Operand) -> Option<u32> {
         self.instr.pattern.get(op, self.raw)
     }
 
@@ -496,6 +505,21 @@ impl fmt::Display for ParsedInstruction {
     }
 }
 
+const fn decode(instr_raw: u32) -> Option<&'static Instruction> {
+    // This is inefficient, if it proves to be a bottleneck we can optimise it in a few ways:
+    // - Eliminate ranges if they are found not to match in a previous iteration.
+    // - Cache the result of `bit_range` on the input, to be reused for matching ranges.
+    let mut i = 0;
+    while i < INSTRUCTIONS.len() {
+        let instr = &INSTRUCTIONS[i];
+        if instr.pattern.matches(instr_raw) {
+            return Some(instr);
+        }
+        i += 1;
+    }
+    None
+}
+
 macro_rules! operand {
     ($name:ident) => {
         (Operand::$name, Signedness::Unsigned32)
@@ -526,10 +550,13 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Addu,    "0000 00ss ssst tttt dddd d000 0010 0001", (Destination)(Source)(Target)),
     instr!(And,     "0000 00ss ssst tttt dddd d000 0010 0100", (Destination)(Source)(Target)),
     instr!(Andi,    "0011 00ss ssst tttt kkkk kkkk kkkk kkkk", (Target)(Source)(Immediate)),
+
+    // TODO: separate the different coprocessor versions into their own instructions.
     instr!(Bczf,    "0100 xx01 0000 0000 ffff ffff ffff ffff", (Coprocessor)(Offset, Signed16)),
     instr!(Bczfl,   "0100 xx01 0000 0010 ffff ffff ffff ffff", (Coprocessor)(Offset, Signed16)),
     instr!(Bczt,    "0100 xx01 0000 0001 ffff ffff ffff ffff", (Coprocessor)(Offset, Signed16)),
     instr!(Bcztl,   "0100 xx01 0000 0011 ffff ffff ffff ffff", (Coprocessor)(Offset, Signed16)),
+
     instr!(Beq,     "0001 00ss ssst tttt ffff ffff ffff ffff", (Source)(Target)(Offset, Signed16)),
     instr!(Beql,    "0101 00ss ssst tttt ffff ffff ffff ffff", (Source)(Target)(Offset, Signed16)),
     instr!(Bgez,    "0000 01ss sss0 0001 ffff ffff ffff ffff", (Source)(Offset, Signed16)),
@@ -548,9 +575,12 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Bnel,    "0101 01ss ssst tttt ffff ffff ffff ffff", (Source)(Target)(Offset, Signed16)),
     instr!(Break,   "0000 00kk kkkk kkkk kkkk kkkk kk00 1101"),
     instr!(Cache,   "1011 11bb bbby yyjj ffff ffff ffff ffff", (CacheOpcode)(CacheSubject)(Offset, Signed16)(Base)),
-    instr!(Cfcz,    "0100 xx00 010t tttt dddd d000 0000 0000", (Coprocessor)(Target)(Destination)),
-    instr!(Copz,    "0100 xx1k kkkk kkkk kkkk kkkk kkkk kkkk", (Coprocessor)(Immediate)),
-    instr!(Ctcz,    "0100 xx00 110t tttt dddd d000 0000 0000", (Coprocessor)(Target)(Destination)),
+    instr!(Cfc1,    "0100 0100 010t tttt dddd d000 0000 0000", (Target)(Destination)),
+    instr!(Cfc2,    "0100 1000 010t tttt dddd d000 0000 0000", (Target)(Destination)),
+    instr!(Cop1,    "0100 011k kkkk kkkk kkkk kkkk kkkk kkkk", (Immediate)),
+    instr!(Cop2,    "0100 101k kkkk kkkk kkkk kkkk kkkk kkkk", (Immediate)),
+    instr!(Ctc1,    "0100 0100 110t tttt dddd d000 0000 0000", (Target)(Destination)),
+    instr!(Ctc2,    "0100 1000 110t tttt dddd d000 0000 0000", (Target)(Destination)),
     instr!(Dadd,    "0000 00ss ssst tttt dddd d000 0010 1100", (Destination)(Source)(Target)),
     instr!(Daddi,   "0110 00ss ssst tttt kkkk kkkk kkkk kkkk", (Target)(Source)(Immediate, Signed16)),
     instr!(Daddiu,  "0110 01ss ssst tttt kkkk kkkk kkkk kkkk", (Target)(Source)(Immediate, Signed16)),
@@ -583,7 +613,7 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Lb,      "1000 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Lbu,     "1001 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Ld,      "1101 11bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
-    instr!(Ldcz,    "1101 xxbb bbbt tttt ffff ffff ffff ffff", (Coprocessor)(Target)(Offset, Signed16)(Base)),
+    instr!(Ldc1,    "1101 01bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Ldl,     "0110 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Ldr,     "0110 11bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Lh,      "1000 01bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
@@ -592,16 +622,17 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Lld,     "1101 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Lui,     "0011 1100 000t tttt kkkk kkkk kkkk kkkk", (Target)(Immediate, Signed16)),
     instr!(Lw,      "1000 11bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
-    instr!(Lwcz,    "1100 xxbb bbbt tttt ffff ffff ffff ffff", (Coprocessor)(Target)(Offset, Signed16)(Base)),
+    instr!(Lwc1,    "1100 01bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Lwc2,    "1100 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Lwl,     "1000 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Lwr,     "1001 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Lwu,     "1001 11bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Mfc0,    "0100 0000 000t tttt dddd d000 0000 0000", (Target)(Destination)),
-    instr!(Mfcz,    "0100 xx00 000t tttt dddd d000 0000 0000", (Coprocessor)(Target)(Destination)),
+    instr!(Mfc2,    "0100 1000 000t tttt dddd d000 0000 0000", (Target)(Destination)),
     instr!(Mfhi,    "0000 0000 0000 0000 dddd d000 0001 0000", (Destination)),
     instr!(Mflo,    "0000 0000 0000 0000 dddd d000 0001 0010", (Destination)),
     instr!(Mtc0,    "0100 0000 100t tttt dddd d000 0000 0000", (Target)(Destination)),
-    instr!(Mtcz,    "0100 xx00 100t tttt dddd d000 0000 0000", (Coprocessor)(Destination)(Destination)),
+    instr!(Mtc2,    "0100 1000 100t tttt dddd d000 0000 0000", (Target)(Destination)),
     instr!(Mthi,    "0000 00ss sss0 0000 0000 0000 0001 0001", (Source)),
     instr!(Mtlo,    "0000 00ss sss0 0000 0000 0000 0001 0011", (Source)),
     instr!(Mult,    "0000 00ss ssst tttt 0000 0000 0001 1000", (Source)(Target)),
@@ -613,7 +644,7 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Sc,      "1110 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Scd,     "1111 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Sd,      "1111 11bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
-    instr!(Sdcz,    "1111 xxbb bbbt tttt ffff ffff ffff ffff", (Coprocessor)(Target)(Offset, Signed16)(Base)),
+    instr!(Sdc1,    "1111 01bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Sdl,     "1011 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Sdr,     "1011 01bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Sh,      "1010 01bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
@@ -630,7 +661,8 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Sub,     "0000 00ss ssst tttt dddd d000 0010 0010", (Destination)(Source)(Target)),
     instr!(Subu,    "0000 00ss ssst tttt dddd d000 0010 0011", (Destination)(Source)(Target)),
     instr!(Sw,      "1010 11bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
-    instr!(Swcz,    "1110 xxbb bbbt tttt ffff ffff ffff ffff", (Coprocessor)(Target)(Offset, Signed16)(Base)),
+    instr!(Swc1,    "1110 01bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Swc2,    "1110 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Swl,     "1010 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Swr,     "1011 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Sync,    "0000 0000 0000 0000 0000 0000 0000 1111"),
@@ -663,10 +695,3 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Bc1t,       "0100 0101 0000 0001 ffff ffff ffff ffff", (Offset)),
     instr!(Bc1tl,      "0100 0101 0000 0011 ffff ffff ffff ffff", (Offset)),
 ];
-
-fn decode(instr: u32) -> Option<&'static Instruction> {
-    // This is inefficient, if it proves to be a bottleneck we can optimise it in a few ways:
-    // - Eliminate matching ranges if they are found not to match.
-    // - Cache the result of `bit_range` on the input, to be reused for matching ranges.
-    INSTRUCTIONS.iter().find(|i| i.pattern.matches(instr))
-}
