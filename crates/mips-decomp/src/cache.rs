@@ -1,6 +1,6 @@
 //! Parsing for the `cache` instructions's operands. See the `cache` instruction in the ISA manual for more information.
 
-use core::fmt;
+use std::fmt;
 use strum::{EnumVariantNames, FromRepr, IntoStaticStr, VariantNames};
 
 /// The type of cache the instruction refers to. Meant to be parsed using `Operand::CacheSubject`.

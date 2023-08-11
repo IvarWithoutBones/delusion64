@@ -119,11 +119,6 @@ pub fn recompile_instruction<'ctx>(
             stub(codegen, "break");
         }
 
-        Mnenomic::Cop1 => {
-            // Perform a CP1 operation
-            stub(codegen, "cop1");
-        }
-
         Mnenomic::Cop2 => {
             // Perform a CP2 operation
             stub(codegen, "cop2");

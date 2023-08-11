@@ -39,7 +39,6 @@ pub enum Mnenomic {
     Cache,
     Cfc1,
     Cfc2,
-    Cop1,
     Cop2,
     Ctc1,
     Ctc2,
@@ -149,14 +148,53 @@ pub enum Mnenomic {
     Xor,
     Xori,
 
-    // Floating point
+    // Floating point unit
+    #[strum(serialize = "abs.fmt")]
     AbsFmt,
+    #[strum(serialize = "add.fmt")]
     AddFmt,
-    CCondFmtFs,
     Bc1f,
     Bc1fl,
     Bc1t,
     Bc1tl,
+    #[strum(serialize = "c.cond.fmt")]
+    CCondFmtFs,
+    #[strum(serialize = "ceil.l.fmt")]
+    CeilLFmt,
+    #[strum(serialize = "ceil.w.fmt")]
+    CeilWFmt,
+    #[strum(serialize = "cvt.d.fmt")]
+    CvtDFmt,
+    #[strum(serialize = "cvt.l.fmt")]
+    CvtLFmt,
+    #[strum(serialize = "cvt.s.fmt")]
+    CvtSFmt,
+    #[strum(serialize = "cvt.w.fmt")]
+    CvtWFmt,
+    #[strum(serialize = "div.fmt")]
+    DivFmt,
+    #[strum(serialize = "floor.l.fmt")]
+    FloorLFmt,
+    #[strum(serialize = "floor.w.fmt")]
+    FloorWFmt,
+    #[strum(serialize = "mov.fmt")]
+    MovFmt,
+    #[strum(serialize = "mul.fmt")]
+    MulFmt,
+    #[strum(serialize = "neg.fmt")]
+    NegFmt,
+    #[strum(serialize = "round.l.fmt")]
+    RoundLFmt,
+    #[strum(serialize = "round.w.fmt")]
+    RoundWFmt,
+    #[strum(serialize = "sqrt.fmt")]
+    SqrtFmt,
+    #[strum(serialize = "sub.fmt")]
+    SubFmt,
+    #[strum(serialize = "trunc.l.fmt")]
+    TruncLFmt,
+    #[strum(serialize = "trunc.w.fmt")]
+    TruncWFmt,
 }
 
 impl Mnenomic {
@@ -307,7 +345,7 @@ impl Instruction {
             return "nop".to_string();
         }
 
-        let mut result = format!("{: <8}", self.mnenomic.name());
+        let mut result = format!("{: <15}", self.mnenomic.name());
 
         for (i, (op, sign)) in self.operands.iter().enumerate() {
             let num = self
@@ -577,7 +615,6 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Cache,   "1011 11bb bbby yyjj ffff ffff ffff ffff", (CacheOpcode)(CacheSubject)(Offset, Signed16)(Base)),
     instr!(Cfc1,    "0100 0100 010t tttt dddd d000 0000 0000", (Target)(Destination)),
     instr!(Cfc2,    "0100 1000 010t tttt dddd d000 0000 0000", (Target)(Destination)),
-    instr!(Cop1,    "0100 011k kkkk kkkk kkkk kkkk kkkk kkkk", (Immediate)),
     instr!(Cop2,    "0100 101k kkkk kkkk kkkk kkkk kkkk kkkk", (Immediate)),
     instr!(Ctc1,    "0100 0100 110t tttt dddd d000 0000 0000", (Target)(Destination)),
     instr!(Ctc2,    "0100 1000 110t tttt dddd d000 0000 0000", (Target)(Destination)),
@@ -687,11 +724,30 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Xori,    "0011 10ss ssst tttt kkkk kkkk kkkk kkkk", (Target)(Source)(Immediate)),
 
     // Floating point
-    instr!(AbsFmt,     "0100 01aa aaa0 0000 ssss sddd dd00 0101", (Destination)(Source)),
-    instr!(AddFmt,     "0100 01aa aaat tttt ssss sddd dd00 0000", (Destination)(Source)),
-    instr!(CCondFmtFs, "0100 01aa aaat tttt ssss s000 0011 cccc", (Source)(Target)(Condition)),
+    instr!(AbsFmt,     "0100 01aa aaa0 0000 ssss sddd dd00 0101", (Format)(Destination)(Source)),
+    instr!(AddFmt,     "0100 01aa aaat tttt ssss sddd dd00 0000", (Format)(Destination)(Source)(Target)),
     instr!(Bc1f,       "0100 0101 0000 0000 ffff ffff ffff ffff", (Offset)),
     instr!(Bc1fl,      "0100 0101 0000 0010 ffff ffff ffff ffff", (Offset)),
     instr!(Bc1t,       "0100 0101 0000 0001 ffff ffff ffff ffff", (Offset)),
     instr!(Bc1tl,      "0100 0101 0000 0011 ffff ffff ffff ffff", (Offset)),
+    instr!(CCondFmtFs, "0100 01aa aaat tttt ssss s000 0011 cccc", (Source)(Target)(Condition)),
+    instr!(CeilLFmt,   "0100 01aa aaa0 0000 ssss sddd dd00 1010", (Format)(Destination)(Source)),
+    instr!(CeilWFmt,   "0100 01aa aaa0 0000 ssss sddd dd00 1110", (Format)(Destination)(Source)),
+    instr!(CvtDFmt,    "0100 01aa aaa0 0000 ssss sddd dd10 0001", (Format)(Destination)(Source)),
+    instr!(CvtLFmt,    "0100 01aa aaa0 0000 ssss sddd dd10 0101", (Format)(Destination)(Source)),
+    instr!(CvtSFmt,    "0100 01aa aaa0 0000 ssss sddd dd10 0000", (Format)(Destination)(Source)),
+    instr!(CvtSFmt,    "0100 01aa aaa0 0000 ssss sddd dd10 0000", (Format)(Destination)(Source)),
+    instr!(CvtWFmt,    "0100 01aa aaa0 0000 ssss sddd dd10 0100", (Format)(Destination)(Source)),
+    instr!(DivFmt,     "0100 01aa aaat tttt ssss sddd dd00 0011", (Format)(Destination)(Source)(Target)),
+    instr!(FloorLFmt,  "0100 01aa aaa0 0000 ssss sddd dd00 1011", (Format)(Destination)(Source)),
+    instr!(FloorWFmt,  "0100 01aa aaa0 0000 ssss sddd dd00 1111", (Format)(Destination)(Source)),
+    instr!(MovFmt,     "0100 01aa aaa0 0000 ssss sddd dd00 0110", (Format)(Destination)(Source)),
+    instr!(MulFmt,     "0100 01aa aaat tttt ssss sddd dd00 0010", (Format)(Destination)(Source)(Target)),
+    instr!(NegFmt,     "0100 01aa aaa0 0000 ssss sddd dd00 0111", (Format)(Destination)(Source)),
+    instr!(RoundLFmt,  "0100 01aa aaa0 0000 ssss sddd dd00 1000", (Format)(Destination)(Source)),
+    instr!(RoundWFmt,  "0100 01aa aaa0 0000 ssss sddd dd00 1100", (Format)(Destination)(Source)),
+    instr!(SqrtFmt,    "0100 01aa aaa0 0000 ssss sddd dd00 0100", (Format)(Destination)(Source)),
+    instr!(SubFmt,     "0100 01aa aaat tttt ssss sddd dd00 0001", (Format)(Destination)(Source)(Target)),
+    instr!(TruncLFmt,  "0100 01aa aaa0 0000 ssss sddd dd00 1001", (Format)(Destination)(Source)),
+    instr!(TruncWFmt,  "0100 01aa aaa0 0000 ssss sddd dd00 1101", (Format)(Destination)(Source)),
 ];
