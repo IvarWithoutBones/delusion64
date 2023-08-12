@@ -24,6 +24,7 @@ pub struct Registers {
     general_purpose: Pin<Box<[u64; register::GeneralPurpose::count()]>>,
     special: Pin<Box<[u64; register::Special::count()]>>,
     cp0: Pin<Box<[u64; register::Cp0::count()]>>,
+    fpu: Pin<Box<[u64; register::Fpu::count()]>>,
 }
 
 pub struct Environment<'ctx, Mem>
@@ -72,7 +73,7 @@ where
 
         // Add a mapping to the general purpose registers
         let gprs_ty = i64_type.array_type(register::GeneralPurpose::count() as _);
-        let general_purpose_regs = module.add_global(gprs_ty, None, "general_purpose_regs");
+        let general_purpose_regs = module.add_global(gprs_ty, None, "general_purpose_registers");
         execution_engine.add_global_mapping(
             &general_purpose_regs,
             self.registers.general_purpose.as_ptr() as _,
@@ -80,13 +81,17 @@ where
 
         // Add a mapping to the special registers
         let special_regs_ty = i64_type.array_type(register::Special::count() as _);
-        let special_regs = module.add_global(special_regs_ty, None, "special_regs");
+        let special_regs = module.add_global(special_regs_ty, None, "special_registers");
         execution_engine.add_global_mapping(&special_regs, self.registers.special.as_ptr() as _);
 
         // Add a mapping to the cp0 registers
         let cp0_regs_ty = i64_type.array_type(register::Cp0::count() as _);
-        let cp0_regs = module.add_global(cp0_regs_ty, None, "cp0_regs");
+        let cp0_regs = module.add_global(cp0_regs_ty, None, "cp0_registers");
         execution_engine.add_global_mapping(&cp0_regs, self.registers.cp0.as_ptr() as _);
+
+        let fpu_regs_ty = i64_type.array_type(register::Fpu::count() as _);
+        let fpu_regs = module.add_global(fpu_regs_ty, None, "fpu_registers");
+        execution_engine.add_global_mapping(&fpu_regs, self.registers.fpu.as_ptr() as _);
 
         // Add a mapping to the host stack frame pointer.
         let stack_frame = module.add_global(ptr_type, None, "host_stack_frame");
@@ -118,11 +123,12 @@ where
         }
 
         codegen::Globals {
+            stack_frame: (stack_frame, stack_frame_storage),
             env_ptr,
             general_purpose_regs,
             special_regs,
             cp0_regs,
-            stack_frame: (stack_frame, stack_frame_storage),
+            fpu_regs,
         }
     }
 
@@ -421,6 +427,7 @@ impl Default for Registers {
             general_purpose: Box::pin([0; register::GeneralPurpose::count()]),
             special: Box::pin([0; register::Special::count()]),
             cp0: Box::pin([0; register::Cp0::count()]),
+            fpu: Box::pin([0; register::Fpu::count()]),
         }
     }
 }
@@ -439,9 +446,15 @@ impl fmt::Debug for Registers {
             writeln!(f, "{name: <9} = {r:#x}")?;
         }
 
-        writeln!(f, "\ncoprocessor registers:")?;
+        writeln!(f, "\ncoprocessor 1 registers:")?;
         for (i, r) in self.cp0.iter().enumerate() {
             let name = register::Cp0::name_from_index(i as _);
+            writeln!(f, "{name: <9} = {r:#x}")?;
+        }
+
+        writeln!(f, "\nfpu registers:")?;
+        for (i, r) in self.fpu.iter().enumerate() {
+            let name = register::Fpu::name_from_index(i as _);
             writeln!(f, "{name: <9} = {r:#x}")?;
         }
 
@@ -450,10 +463,10 @@ impl fmt::Debug for Registers {
 }
 
 macro_rules! impl_index {
-    ($(($name:ident, $struct:ident :: $field:ident)),*) => {
+    ($ty:ty, $(($name:ident, $struct:ident :: $field:ident)),*) => {
         $(
             impl ::std::ops::Index<register::$name> for $struct {
-                type Output = u64;
+                type Output = $ty;
 
                 fn index(&self, reg: register::$name) -> &Self::Output {
                     &self.$field[reg as usize]
@@ -470,7 +483,9 @@ macro_rules! impl_index {
 }
 
 impl_index!(
+    u64,
     (GeneralPurpose, Registers::general_purpose),
     (Special, Registers::special),
-    (Cp0, Registers::cp0)
+    (Cp0, Registers::cp0),
+    (Fpu, Registers::fpu)
 );

@@ -164,15 +164,23 @@ pub enum GeneralPurpose {
 
 impl_reg!(GeneralPurpose);
 
-/// A miscellaneous MIPS 3 register.
+/// A miscellaneous MIPS 3 register, which does not nicely fit into any other category.
 #[derive(EnumCount, FromRepr, EnumVariantNames, Debug, PartialEq, Eq, Clone, Copy)]
 #[strum(serialize_all = "snake_case")]
 #[repr(u8)]
 pub enum Special {
-    Hi,
-    Lo,
-    LoadLink,
+    /// The program counter, which is not directly accessible but here for bookkeeping purposes.
     Pc,
+    /// For the `mult` and `multu` instructions.
+    Hi,
+    /// For the `mult` and `multu` instructions.
+    Lo,
+    /// For the `sc` family of instructions.
+    LoadLink,
+    /// FPU Control/Status Register `FCR31`.
+    FpuControlStatus,
+    /// FPU Implementation/Revision Register `FCR0`.
+    FpuImplementationRevision,
 }
 
 impl_reg!(Special);
@@ -267,12 +275,53 @@ impl Cp0 {
 
 impl_reg!(Cp0);
 
+/// A MIPS 3 FPU (coprocessor 1, or CP1) register.
+#[derive(EnumCount, FromRepr, EnumVariantNames, Debug, PartialEq, Eq, Clone, Copy)]
+#[strum(serialize_all = "snake_case")]
+pub enum Fpu {
+    F0,
+    F1,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
+    F13,
+    F14,
+    F15,
+    F16,
+    F17,
+    F18,
+    F19,
+    F20,
+    F21,
+    F22,
+    F23,
+    F24,
+    F25,
+    F26,
+    F27,
+    F28,
+    F29,
+    F30,
+    F31,
+}
+
+impl_reg!(Fpu);
+
 /// A MIPS 3 register.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Register {
     GeneralPurpose(GeneralPurpose),
     Special(Special),
     Cp0(Cp0),
+    Fpu(Fpu),
 }
 
 impl Register {
@@ -281,6 +330,7 @@ impl Register {
             Self::GeneralPurpose(v) => v.name(),
             Self::Special(v) => v.name(),
             Self::Cp0(v) => v.name(),
+            Self::Fpu(v) => v.name(),
         }
     }
 
@@ -289,6 +339,7 @@ impl Register {
             Self::GeneralPurpose(v) => v.to_repr(),
             Self::Special(v) => v.to_repr(),
             Self::Cp0(v) => v.to_repr(),
+            Self::Fpu(v) => v.to_repr(),
         }
     }
 }
@@ -308,5 +359,11 @@ impl From<Special> for Register {
 impl From<Cp0> for Register {
     fn from(v: Cp0) -> Self {
         Self::Cp0(v)
+    }
+}
+
+impl From<Fpu> for Register {
+    fn from(v: Fpu) -> Self {
+        Self::Fpu(v)
     }
 }

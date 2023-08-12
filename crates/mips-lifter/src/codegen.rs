@@ -45,13 +45,14 @@ pub fn function_attributes(context: &Context) -> Vec<Attribute> {
 
 #[derive(Debug)]
 pub struct Globals<'ctx> {
+    // NOTE: The backing memory must be externally managed, so that the pointer remains valid across module reloads.
+    pub stack_frame: (GlobalValue<'ctx>, Box<u64>),
     pub env_ptr: GlobalValue<'ctx>,
+
     pub general_purpose_regs: GlobalValue<'ctx>,
     pub special_regs: GlobalValue<'ctx>,
     pub cp0_regs: GlobalValue<'ctx>,
-
-    // NOTE: The backing memory must be externally managed, so that the pointer remains valid across module reloads.
-    pub stack_frame: (GlobalValue<'ctx>, Box<u64>),
+    pub fpu_regs: GlobalValue<'ctx>,
 }
 
 #[derive(Debug)]
@@ -445,6 +446,7 @@ impl<'ctx> CodeGen<'ctx> {
             Register::GeneralPurpose(_) => self.globals.general_purpose_regs.as_pointer_value(),
             Register::Special(_) => self.globals.special_regs.as_pointer_value(),
             Register::Cp0(_) => self.globals.cp0_regs.as_pointer_value(),
+            Register::Fpu(_) => self.globals.fpu_regs.as_pointer_value(),
         };
 
         unsafe {
@@ -489,6 +491,19 @@ impl<'ctx> CodeGen<'ctx> {
             .into_int_value()
     }
 
+    /// Read the floating-point unit (FPU) register at the given index.
+    /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits will be returned.
+    pub fn read_fpu_register<T>(&self, ty: IntType<'ctx>, index: T) -> IntValue<'ctx>
+    where
+        T: Into<u64>,
+    {
+        debug_assert!(ty.get_bit_width() == 32 || ty.get_bit_width() == 64);
+        let reg = register::Fpu::from_repr(index.into() as _).unwrap();
+        let name = format!("{}_", reg.name());
+        let reg_ptr = self.register_pointer(reg);
+        self.builder.build_load(ty, reg_ptr, &name).into_int_value()
+    }
+
     pub fn read_special_reg(&self, reg: register::Special) -> IntValue<'ctx> {
         // TODO: dont hardcode 32-bit register width
         let reg_ty = self.context.i32_type();
@@ -506,6 +521,7 @@ impl<'ctx> CodeGen<'ctx> {
             Register::GeneralPurpose(reg) => self.read_general_register(ty, reg),
             Register::Special(reg) => self.read_special_reg(reg),
             Register::Cp0(reg) => self.read_cp0_reg(reg),
+            Register::Fpu(reg) => self.read_fpu_register(ty, reg),
         }
     }
 
@@ -530,6 +546,15 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.build_store(reg_ptr, value);
     }
 
+    pub fn write_fpu_reg<T>(&self, index: T, value: IntValue<'ctx>)
+    where
+        T: Into<u64>,
+    {
+        let reg = register::Fpu::from_repr(index.into() as _).unwrap();
+        let reg_ptr = self.register_pointer(reg);
+        self.builder.build_store(reg_ptr, value);
+    }
+
     pub fn write_special_reg(&self, reg: register::Special, value: IntValue<'ctx>) {
         let register = self.register_pointer(reg);
         self.builder.build_store(register, value);
@@ -543,6 +568,7 @@ impl<'ctx> CodeGen<'ctx> {
             Register::GeneralPurpose(reg) => self.write_general_reg(reg, value),
             Register::Special(reg) => self.write_special_reg(reg, value),
             Register::Cp0(reg) => self.write_cp0_reg(reg, value),
+            Register::Fpu(reg) => self.write_fpu_reg(reg, value),
         }
     }
 

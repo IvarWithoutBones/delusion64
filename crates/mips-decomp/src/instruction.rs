@@ -4,7 +4,7 @@ use crate::{
     register, INSTRUCTION_SIZE,
 };
 use std::fmt;
-use strum::{EnumVariantNames, VariantNames};
+use strum::{EnumVariantNames, FromRepr, VariantNames};
 
 #[derive(EnumVariantNames, Debug, Clone, Copy, PartialEq, Eq)]
 #[strum(serialize_all = "lowercase")]
@@ -206,6 +206,37 @@ impl Mnenomic {
         )
     }
 
+    pub const fn is_fpu_instruction(&self) -> bool {
+        matches!(
+            self,
+            Self::AbsFmt
+                | Self::AddFmt
+                | Self::Bc1f
+                | Self::Bc1fl
+                | Self::Bc1t
+                | Self::Bc1tl
+                | Self::CCondFmtFs
+                | Self::CeilLFmt
+                | Self::CeilWFmt
+                | Self::CvtDFmt
+                | Self::CvtLFmt
+                | Self::CvtSFmt
+                | Self::CvtWFmt
+                | Self::DivFmt
+                | Self::FloorLFmt
+                | Self::FloorWFmt
+                | Self::MovFmt
+                | Self::MulFmt
+                | Self::NegFmt
+                | Self::RoundLFmt
+                | Self::RoundWFmt
+                | Self::SqrtFmt
+                | Self::SubFmt
+                | Self::TruncLFmt
+                | Self::TruncWFmt
+        )
+    }
+
     pub const fn is_branch(&self) -> bool {
         matches!(
             self,
@@ -271,6 +302,34 @@ impl Mnenomic {
 
     pub const fn name(&self) -> &'static str {
         Self::VARIANTS[*self as usize]
+    }
+}
+
+/// The `fmt` field of floating point instructions, meant to be parsed with `Operand::Format`.
+#[derive(FromRepr, Debug, PartialEq, Eq, Clone, Copy)]
+#[strum(serialize_all = "snake_case")]
+#[repr(u8)]
+pub enum FloatFormat {
+    Single = 16,
+    Double = 17,
+    Word = 20,
+    Long = 21,
+}
+
+impl FloatFormat {
+    pub const fn as_char(&self) -> char {
+        match self {
+            FloatFormat::Single => 's',
+            FloatFormat::Double => 'd',
+            FloatFormat::Word => 'w',
+            FloatFormat::Long => 'l',
+        }
+    }
+}
+
+impl fmt::Display for FloatFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_char())
     }
 }
 
@@ -367,17 +426,26 @@ impl Instruction {
                     continue;
                 }
 
+                Operand::Format => {
+                    // TODO: could be formatted nicer by replacing `fmt` with this.
+                    if let Some(format) = FloatFormat::from_repr(num as _) {
+                        result.push(format.as_char());
+                    } else {
+                        // TODO: something is probably going wrong with parsing, im seeing this more than expected.
+                        result.push('?');
+                    }
+                }
+
                 Operand::Offset => {
                     if let Some((next_op, _signed)) = self.operands.get(i + 1) {
+                        // Show the base and offset grouped together, for example `lw s8, sp(4)`
                         if next_op == &Operand::Base {
                             let base = register::GeneralPurpose::name_from_index(
-                                self.pattern.get(*next_op, raw).unwrap_or_else(|| {
-                                    panic!("failed to get operand {op:?} for {:?}", self.mnenomic)
-                                }) as i16 as _,
+                                self.pattern.get(*next_op, raw).unwrap() as _,
                             );
 
                             result.push_str(&format!("{}({base})", sign.format(num)));
-                            break; // Always the last parameter
+                            break; // The base is always the last operand.
                         } else {
                             result.push_str(&sign.format(num))
                         }
@@ -390,8 +458,12 @@ impl Instruction {
                     result.push_str(register::Cp0::name_from_index(num as _));
                 }
 
-                _ if op.is_register() => {
+                _ if op.is_general_purpose_register() => {
                     result.push_str(register::GeneralPurpose::name_from_index(num as _));
+                }
+
+                _ if op.is_fpu_register() => {
+                    result.push_str(register::Fpu::name_from_index(num as _));
                 }
 
                 _ => result.push_str(&sign.format(num)),
@@ -446,84 +518,51 @@ impl ParsedInstruction {
     }
 
     pub fn rt(&self) -> u32 {
-        self.get(Operand::Target).unwrap_or_else(|| {
-            panic!(
-                "failed to get target register for instruction {:?}",
-                self.instr.mnenomic.name()
-            )
-        })
+        self.get(Operand::Target).unwrap()
     }
 
     pub fn rs(&self) -> u32 {
-        self.get(Operand::Source).unwrap_or_else(|| {
-            panic!(
-                "failed to get source register for instruction {:?}",
-                self.instr.mnenomic.name()
-            )
-        })
+        self.get(Operand::Source).unwrap()
     }
 
     pub fn rd(&self) -> u32 {
-        self.get(Operand::Destination).unwrap_or_else(|| {
-            panic!(
-                "failed to get destination register for instruction {:?}",
-                self.instr.mnenomic.name()
-            )
-        })
+        self.get(Operand::Destination).unwrap()
+    }
+
+    pub fn ft(&self) -> u32 {
+        self.get(Operand::FloatTarget).unwrap()
+    }
+
+    pub fn fs(&self) -> u32 {
+        self.get(Operand::FloatSource).unwrap()
+    }
+
+    pub fn fd(&self) -> u32 {
+        self.get(Operand::FloatDestination).unwrap()
     }
 
     pub fn sa(&self) -> u32 {
-        self.get(Operand::Immediate).unwrap_or_else(|| {
-            panic!(
-                "failed to get shift amount for instruction {:?}",
-                self.instr.mnenomic.name()
-            )
-        })
+        self.get(Operand::Immediate).unwrap()
     }
 
     pub fn immediate(&self) -> u32 {
-        self.get(Operand::Immediate).unwrap_or_else(|| {
-            panic!(
-                "failed to get immediate for instruction {:?}",
-                self.instr.mnenomic.name()
-            )
-        })
+        self.get(Operand::Immediate).unwrap()
     }
 
     pub fn offset(&self) -> u32 {
-        self.get(Operand::Offset).unwrap_or_else(|| {
-            panic!(
-                "failed to get offset for instruction {:?}",
-                self.instr.mnenomic.name()
-            )
-        })
+        self.get(Operand::Offset).unwrap()
     }
 
     pub fn base(&self) -> u32 {
-        self.get(Operand::Base).unwrap_or_else(|| {
-            panic!(
-                "failed to get base for instruction {:?}",
-                self.instr.mnenomic.name()
-            )
-        })
+        self.get(Operand::Base).unwrap()
     }
 
     pub fn coprocessor(&self) -> u32 {
-        self.get(Operand::Coprocessor).unwrap_or_else(|| {
-            panic!(
-                "failed to get coprocessor for instruction {:?}",
-                self.instr.mnenomic.name()
-            )
-        })
+        self.get(Operand::Coprocessor).unwrap()
     }
 
     pub fn cache_operation(&self) -> CacheOperation {
-        self.instr.get_cache_operation(self.raw).unwrap_or_else(|| {
-            panic!(
-                "failed to get cache operation for instruction {:?}",
-                self.instr.mnenomic.name()
-            )
-        })
+        self.instr.get_cache_operation(self.raw).unwrap()
     }
 }
 
@@ -722,30 +761,30 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Xori,    "0011 10ss ssst tttt kkkk kkkk kkkk kkkk", (Target)(Source)(Immediate)),
 
     // Floating point
-    instr!(AbsFmt,     "0100 01aa aaa0 0000 ssss sddd dd00 0101", (Format)(Destination)(Source)),
-    instr!(AddFmt,     "0100 01aa aaat tttt ssss sddd dd00 0000", (Format)(Destination)(Source)(Target)),
+    instr!(AbsFmt,     "0100 01aa aaa0 0000 SSSS SDDD DD00 0101", (Format)(FloatDestination)(FloatSource)),
+    instr!(AddFmt,     "0100 01aa aaaT TTTT SSSS SDDD DD00 0000", (Format)(FloatDestination)(FloatSource)(FloatTarget)),
     instr!(Bc1f,       "0100 0101 0000 0000 ffff ffff ffff ffff", (Offset)),
     instr!(Bc1fl,      "0100 0101 0000 0010 ffff ffff ffff ffff", (Offset)),
     instr!(Bc1t,       "0100 0101 0000 0001 ffff ffff ffff ffff", (Offset)),
     instr!(Bc1tl,      "0100 0101 0000 0011 ffff ffff ffff ffff", (Offset)),
-    instr!(CCondFmtFs, "0100 01aa aaat tttt ssss s000 0011 cccc", (Source)(Target)(Condition)),
-    instr!(CeilLFmt,   "0100 01aa aaa0 0000 ssss sddd dd00 1010", (Format)(Destination)(Source)),
-    instr!(CeilWFmt,   "0100 01aa aaa0 0000 ssss sddd dd00 1110", (Format)(Destination)(Source)),
-    instr!(CvtDFmt,    "0100 01aa aaa0 0000 ssss sddd dd10 0001", (Format)(Destination)(Source)),
-    instr!(CvtLFmt,    "0100 01aa aaa0 0000 ssss sddd dd10 0101", (Format)(Destination)(Source)),
-    instr!(CvtSFmt,    "0100 01aa aaa0 0000 ssss sddd dd10 0000", (Format)(Destination)(Source)),
-    instr!(CvtSFmt,    "0100 01aa aaa0 0000 ssss sddd dd10 0000", (Format)(Destination)(Source)),
-    instr!(CvtWFmt,    "0100 01aa aaa0 0000 ssss sddd dd10 0100", (Format)(Destination)(Source)),
-    instr!(DivFmt,     "0100 01aa aaat tttt ssss sddd dd00 0011", (Format)(Destination)(Source)(Target)),
-    instr!(FloorLFmt,  "0100 01aa aaa0 0000 ssss sddd dd00 1011", (Format)(Destination)(Source)),
-    instr!(FloorWFmt,  "0100 01aa aaa0 0000 ssss sddd dd00 1111", (Format)(Destination)(Source)),
-    instr!(MovFmt,     "0100 01aa aaa0 0000 ssss sddd dd00 0110", (Format)(Destination)(Source)),
-    instr!(MulFmt,     "0100 01aa aaat tttt ssss sddd dd00 0010", (Format)(Destination)(Source)(Target)),
-    instr!(NegFmt,     "0100 01aa aaa0 0000 ssss sddd dd00 0111", (Format)(Destination)(Source)),
-    instr!(RoundLFmt,  "0100 01aa aaa0 0000 ssss sddd dd00 1000", (Format)(Destination)(Source)),
-    instr!(RoundWFmt,  "0100 01aa aaa0 0000 ssss sddd dd00 1100", (Format)(Destination)(Source)),
-    instr!(SqrtFmt,    "0100 01aa aaa0 0000 ssss sddd dd00 0100", (Format)(Destination)(Source)),
-    instr!(SubFmt,     "0100 01aa aaat tttt ssss sddd dd00 0001", (Format)(Destination)(Source)(Target)),
-    instr!(TruncLFmt,  "0100 01aa aaa0 0000 ssss sddd dd00 1001", (Format)(Destination)(Source)),
-    instr!(TruncWFmt,  "0100 01aa aaa0 0000 ssss sddd dd00 1101", (Format)(Destination)(Source)),
+    instr!(CCondFmtFs, "0100 01aa aaaT TTTT SSSS S000 0011 cccc", (Format)(FloatSource)(FloatTarget)(Condition)),
+    instr!(CeilLFmt,   "0100 01aa aaa0 0000 SSSS SDDD DD00 1010", (Format)(FloatDestination)(FloatSource)),
+    instr!(CeilWFmt,   "0100 01aa aaa0 0000 SSSS SDDD DD00 1110", (Format)(FloatDestination)(FloatSource)),
+    instr!(CvtDFmt,    "0100 01aa aaa0 0000 SSSS SDDD DD10 0001", (Format)(FloatDestination)(FloatSource)),
+    instr!(CvtLFmt,    "0100 01aa aaa0 0000 SSSS SDDD DD10 0101", (Format)(FloatDestination)(FloatSource)),
+    instr!(CvtSFmt,    "0100 01aa aaa0 0000 SSSS SDDD DD10 0000", (Format)(FloatDestination)(FloatSource)),
+    instr!(CvtSFmt,    "0100 01aa aaa0 0000 SSSS SDDD DD10 0000", (Format)(FloatDestination)(FloatSource)),
+    instr!(CvtWFmt,    "0100 01aa aaa0 0000 SSSS SDDD DD10 0100", (Format)(FloatDestination)(FloatSource)),
+    instr!(DivFmt,     "0100 01aa aaaT TTTT SSSS SDDD DD00 0011", (Format)(FloatDestination)(FloatSource)(FloatTarget)),
+    instr!(FloorLFmt,  "0100 01aa aaa0 0000 SSSS SDDD DD00 1011", (Format)(FloatDestination)(FloatSource)),
+    instr!(FloorWFmt,  "0100 01aa aaa0 0000 SSSS SDDD DD00 1111", (Format)(FloatDestination)(FloatSource)),
+    instr!(MovFmt,     "0100 01aa aaa0 0000 SSSS SDDD DD00 0110", (Format)(FloatDestination)(FloatSource)),
+    instr!(MulFmt,     "0100 01aa aaaT TTTT SSSS SDDD DD00 0010", (Format)(FloatDestination)(FloatSource)(FloatTarget)),
+    instr!(NegFmt,     "0100 01aa aaa0 0000 SSSS SDDD DD00 0111", (Format)(FloatDestination)(FloatSource)),
+    instr!(RoundLFmt,  "0100 01aa aaa0 0000 SSSS SDDD DD00 1000", (Format)(FloatDestination)(FloatSource)),
+    instr!(RoundWFmt,  "0100 01aa aaa0 0000 SSSS SDDD DD00 1100", (Format)(FloatDestination)(FloatSource)),
+    instr!(SqrtFmt,    "0100 01aa aaa0 0000 SSSS SDDD DD00 0100", (Format)(FloatDestination)(FloatSource)),
+    instr!(SubFmt,     "0100 01aa aaaT TTTT SSSS SDDD DD00 0001", (Format)(FloatDestination)(FloatSource)(FloatTarget)),
+    instr!(TruncLFmt,  "0100 01aa aaa0 0000 SSSS SDDD DD00 1001", (Format)(FloatDestination)(FloatSource)),
+    instr!(TruncWFmt,  "0100 01aa aaa0 0000 SSSS SDDD DD00 1101", (Format)(FloatDestination)(FloatSource)),
 ];

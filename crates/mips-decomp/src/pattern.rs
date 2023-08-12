@@ -73,6 +73,9 @@ pub enum Operand {
     Condition,
     CacheSubject,
     CacheOpcode,
+    FloatDestination,
+    FloatSource,
+    FloatTarget,
 }
 
 impl Operand {
@@ -90,14 +93,24 @@ impl Operand {
             'c' => Self::Condition,
             'y' => Self::CacheOpcode,
             'j' => Self::CacheSubject,
-            _ => panic!("invalid operand"),
+            'S' => Self::FloatSource,
+            'D' => Self::FloatDestination,
+            'T' => Self::FloatTarget,
+            _ => panic!("Invalid operand"),
         }
     }
 
-    pub const fn is_register(&self) -> bool {
+    pub const fn is_general_purpose_register(&self) -> bool {
         matches!(
             self,
             Self::Source | Self::Destination | Self::Target | Self::Base
+        )
+    }
+
+    pub const fn is_fpu_register(&self) -> bool {
+        matches!(
+            self,
+            Self::FloatSource | Self::FloatDestination | Self::FloatTarget
         )
     }
 
