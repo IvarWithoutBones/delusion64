@@ -5,10 +5,10 @@ use mips_lifter::runtime::Memory;
 pub mod location;
 
 /// Allocates a fixed-sized boxed slice of a given length.
-fn boxed_slice<const LEN: usize>() -> Box<[u8; LEN]> {
+fn boxed_array<T: Default + Clone, const LEN: usize>() -> Box<[T; LEN]> {
     // Use a Vec to allocate directly onto the heap. Using an array will allocate on the stack,
     // which can cause a stack overflow. SAFETY: We're sure the input size matches the output size.
-    let result = vec![0; LEN].into_boxed_slice();
+    let result = vec![Default::default(); LEN].into_boxed_slice();
     unsafe { result.try_into().unwrap_unchecked() }
 }
 
@@ -24,10 +24,10 @@ pub struct Bus {
 impl Bus {
     pub fn new(cartridge_rom: Box<[u8]>) -> Self {
         Self {
+            rdram: boxed_array(),
+            rsp_dmem: boxed_array(),
+            rsp_imem: boxed_array(),
             cartridge_rom,
-            rdram: boxed_slice(),
-            rsp_dmem: boxed_slice(),
-            rsp_imem: boxed_slice(),
             pi: PeripheralInterface::new(),
         }
     }

@@ -4,12 +4,9 @@ use std::ops::RangeInclusive;
 
 const MAX_COMPONENTS: usize = 16;
 
-/// Extracts an inclusive range of bits from a number, where zero is the least significant bit.
-pub const fn bit_range(num: u32, range: &RangeInclusive<u32>) -> u32 {
-    assert!(*range.start() <= u32::BITS);
-    assert!(*range.end() <= u32::BITS);
-    let mask = 2_usize.pow(*range.end() - *range.start()) - 1;
-    (num >> *range.start()) & mask as u32
+/// Counts the amount of bits in a range, and returns a mask which covers those bits.
+const fn bits_in_range(range: &RangeInclusive<u32>) -> u32 {
+    (2_usize.pow(*range.end() - *range.start()) - 1) as u32
 }
 
 /// Checks if a number is a binary digit (1 or 0), in ASCII.
@@ -34,31 +31,27 @@ const fn remove_spaces(s: &str) -> [u8; u32::BITS as usize] {
     result
 }
 
-/// Parses a binary string into a number.
-const fn parse_binary_string(input: &[u8], start: usize, end: usize) -> usize {
-    let mut result = 0;
-    let mut i = start;
-    while i < end {
-        let x = input[i];
-        assert!(is_binary_char(x));
-
-        let num = x - b'0';
-        result += (num as usize) << ((end - i) - 1);
-        i += 1;
-    }
-    result
-}
-
 /// Parses a binary string into a number, returns the number of bytes parsed and the result.
 const fn parse_binary(input: &[u8], start: usize) -> (usize, usize) {
+    // Count the number of consecutive binary digits.
     let mut end = start;
     while end < input.len() && is_binary_char(input[end]) {
         end += 1;
     }
-    (end - start, parse_binary_string(input, start, end))
+
+    // Parse the binary digits into a number.
+    let mut result = 0;
+    let mut i = start;
+    while i < end {
+        let x = input[i];
+        result += ((x - b'0') as usize) << ((end - i) - 1);
+        i += 1;
+    }
+
+    (end - start, result)
 }
 
-/// Counts the amount of consecutive bytes that match the given pattern.
+/// Counts the amount of consecutive bytes that match the given character.
 const fn count_repeated(input: &[u8], start: usize, pattern: u8) -> usize {
     let mut i = start;
     while i < input.len() && input[i] == pattern {
@@ -121,7 +114,7 @@ impl From<char> for Operand {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PatternValue {
     Constant(u32),
     Variable(Operand),
@@ -129,8 +122,12 @@ pub enum PatternValue {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PatternComponent {
-    pub range: RangeInclusive<u32>,
+    /// The value of this pattern component.
     pub value: PatternValue,
+    /// The range of bits that this pattern component occupies.
+    pub range: RangeInclusive<u32>,
+    /// A mask that covers the range of bits that this pattern component occupies.
+    mask: u32,
 }
 
 impl PatternComponent {
@@ -140,9 +137,11 @@ impl PatternComponent {
             start += len;
             let remainder = u32::BITS - start as u32;
 
+            let range = remainder..=(remainder + len as u32);
             PatternComponent {
-                range: remainder..=(remainder + len as u32),
                 value: PatternValue::Constant(num as _),
+                mask: bits_in_range(&range),
+                range,
             }
         } else {
             let pattern = input[start];
@@ -150,58 +149,75 @@ impl PatternComponent {
             let remainder = u32::BITS - start as u32;
             start += len;
 
+            let range = (remainder - len as u32)..=remainder;
             PatternComponent {
-                range: (remainder - len as u32)..=remainder,
                 value: PatternValue::Variable(Operand::from_char(pattern as char)),
+                mask: bits_in_range(&range),
+                range,
             }
         };
 
         (start, pattern)
     }
 
+    #[inline]
     pub const fn matches(&self, num: u32) -> bool {
         match self.value {
-            PatternValue::Constant(c) => bit_range(num, &self.range) == c,
+            PatternValue::Constant(c) => self.extract_from(num) == c,
             PatternValue::Variable(_) => true,
         }
     }
 
-    pub const fn get(&self, num: u32) -> u32 {
-        bit_range(num, &self.range)
+    #[inline]
+    pub const fn extract_from(&self, num: u32) -> u32 {
+        (num >> *self.range.start()) & self.mask
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstructionPattern {
-    patterns: [Option<PatternComponent>; MAX_COMPONENTS],
+    constant_patterns: [Option<PatternComponent>; MAX_COMPONENTS],
+    variable_patterns: [Option<PatternComponent>; MAX_COMPONENTS],
 }
 
 impl InstructionPattern {
     const PATTERNS_INIT: Option<PatternComponent> = None;
 
     pub const fn new(identifier: &str) -> Self {
-        let mut patterns = [Self::PATTERNS_INIT; MAX_COMPONENTS];
-        let raw = remove_spaces(identifier);
+        let mut constant_patterns = [Self::PATTERNS_INIT; MAX_COMPONENTS];
+        let mut variable_patterns = [Self::PATTERNS_INIT; MAX_COMPONENTS];
 
+        let raw = remove_spaces(identifier);
         let mut start = 0;
         let mut i = 0;
         while start != u32::BITS as usize {
             let (new_start, pattern) = PatternComponent::new(&raw, start);
-            patterns[i] = Some(pattern);
             start = new_start;
-            i += 1;
+
+            match pattern.value {
+                PatternValue::Constant(_) => {
+                    constant_patterns[i] = Some(pattern);
+                    i += 1;
+                }
+                PatternValue::Variable(v) => variable_patterns[v as usize] = Some(pattern),
+            }
         }
 
-        Self { patterns }
+        Self {
+            constant_patterns,
+            variable_patterns,
+        }
     }
 
     pub const fn matches(&self, num: u32) -> bool {
         let mut i = 0;
-        while i < self.patterns.len() {
-            if let Some(p) = &self.patterns[i] {
+        while i < self.constant_patterns.len() {
+            if let Some(p) = &self.constant_patterns[i] {
                 if !p.matches(num) {
                     return false;
                 }
+            } else {
+                break;
             }
             i += 1;
         }
@@ -209,35 +225,17 @@ impl InstructionPattern {
     }
 
     pub const fn get(&self, op: Operand, num: u32) -> Option<u32> {
-        let mut i = 0;
-        // Note: we cannot use `while let` here, as we want to validate the index and `slice.get()` is not const.
-        while i < self.patterns.len() {
-            if let Some(p) = &self.patterns[i] {
-                if let PatternValue::Variable(c) = p.value {
-                    if op.equals(c) {
-                        return Some(p.get(num));
-                    }
-                }
-            }
-            i += 1;
+        if let Some(p) = &self.variable_patterns[op as usize] {
+            Some(p.extract_from(num))
+        } else {
+            None
         }
-        None
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn bit_range_extract() {
-        let a = 0b1010_1111;
-        assert_eq!(bit_range(a, &(0..=u32::BITS)), a);
-        assert_eq!(bit_range(a, &(0..=8)), 0b1010_1111);
-        assert_eq!(bit_range(a, &(0..=4)), 0b1111);
-        assert_eq!(bit_range(a, &(0..=3)), 0b111);
-        assert_eq!(bit_range(a, &(4..=8)), 0b1010);
-    }
 
     #[test]
     fn binary_char_validation() {

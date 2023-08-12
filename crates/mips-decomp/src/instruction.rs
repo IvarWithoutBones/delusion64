@@ -531,9 +531,7 @@ impl TryFrom<u32> for ParsedInstruction {
     type Error = ();
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
-        decode(value)
-            .map(|instr| Self { instr, raw: value })
-            .ok_or(())
+        Self::new(value).ok_or(())
     }
 }
 
