@@ -4,6 +4,7 @@ pub mod cache;
 pub mod instruction;
 mod label;
 mod pattern;
+pub mod matcher;
 pub mod register;
 
 pub use crate::label::{Label, LabelList};

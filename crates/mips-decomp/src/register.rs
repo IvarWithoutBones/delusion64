@@ -10,6 +10,10 @@ macro_rules! impl_reg {
                 Self::from_repr(index as _).unwrap()
             }
 
+            pub const fn is_valid(index: usize) -> bool {
+                index < Self::COUNT
+            }
+
             /// Returns the index of the register.
             pub const fn to_repr(self) -> usize {
                 self as usize
