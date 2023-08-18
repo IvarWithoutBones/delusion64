@@ -356,7 +356,7 @@ impl<'ctx> CodeGen<'ctx> {
                 self.builder.build_int_add(pc, offset, "next_instr_pc")
             };
 
-            self.write_general_reg(register::GeneralPurpose::Ra, next_instr_pc);
+            self.write_general_register(register::GeneralPurpose::Ra, next_instr_pc);
             self.build_jump(target_pc);
         }
 
@@ -460,59 +460,60 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     /// Read the general-purpose register (GPR) at the given index.
-    /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits will be returned.
+    /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits returned.
     pub fn read_general_register<T>(&self, ty: IntType<'ctx>, index: T) -> IntValue<'ctx>
     where
         T: Into<u64>,
     {
-        debug_assert!(ty.get_bit_width() == 32 || ty.get_bit_width() == 64);
         let reg = register::GeneralPurpose::from_repr(index.into() as _).unwrap();
-        match reg {
-            // Register zero is hardcoded to zero.
-            register::GeneralPurpose::Zero => ty.const_zero(),
-            _ => {
-                let name = format!("{}_", reg.name());
-                let reg_ptr = self.register_pointer(reg);
-                self.builder.build_load(ty, reg_ptr, &name).into_int_value()
-            }
+        if reg == register::GeneralPurpose::Zero {
+            // Register zero is hardwired to zero.
+            ty.const_zero()
+        } else {
+            let name = format!("{}_", reg.name());
+            let reg_ptr = self.register_pointer(reg);
+            self.builder.build_load(ty, reg_ptr, &name).into_int_value()
         }
     }
 
+    /// Read the CP0 register at the given index.
+    /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits returned.
     pub fn read_cp0_register<T>(&self, ty: IntType<'ctx>, index: T) -> IntValue<'ctx>
     where
         T: Into<u64>,
     {
         let reg = register::Cp0::from_repr(index.into() as _).unwrap();
+        let name = &format!("{}_", reg.name());
         let register = self.register_pointer(reg);
-        self.builder
-            .build_load(ty, register, &format!("{}_", reg.name()))
-            .into_int_value()
+        self.builder.build_load(ty, register, name).into_int_value()
     }
 
     /// Read the floating-point unit (FPU) register at the given index.
-    /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits will be returned.
+    /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits returned.
     pub fn read_fpu_register<T>(&self, ty: IntType<'ctx>, index: T) -> IntValue<'ctx>
     where
         T: Into<u64>,
     {
-        debug_assert!(ty.get_bit_width() == 32 || ty.get_bit_width() == 64);
         let reg = register::Fpu::from_repr(index.into() as _).unwrap();
         let name = format!("{}_", reg.name());
         let reg_ptr = self.register_pointer(reg);
         self.builder.build_load(ty, reg_ptr, &name).into_int_value()
     }
 
+    /// Read the specified miscellaneous "special" register.
+    /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits returned.
     pub fn read_special_register(
         &self,
         ty: IntType<'ctx>,
         reg: register::Special,
     ) -> IntValue<'ctx> {
+        let name = &format!("{}_", reg.name());
         let register = self.register_pointer(reg);
-        self.builder
-            .build_load(ty, register, &format!("{}_", reg.name()))
-            .into_int_value()
+        self.builder.build_load(ty, register, name).into_int_value()
     }
 
+    /// Read the specified register.
+    /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits returned.
     pub fn read_register<T>(&self, ty: IntType<'ctx>, reg: T) -> IntValue<'ctx>
     where
         T: Into<Register>,
@@ -525,19 +526,19 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
-    pub fn write_general_reg<T>(&self, index: T, value: IntValue<'ctx>)
+    pub fn write_general_register<T>(&self, index: T, value: IntValue<'ctx>)
     where
         T: Into<u64>,
     {
         let reg = register::GeneralPurpose::from_repr(index.into() as _).unwrap();
         if reg != register::GeneralPurpose::Zero {
-            // Register zero is read-only
+            // Register zero is hardwired to zero.
             let register = self.register_pointer(reg);
             self.builder.build_store(register, value);
         }
     }
 
-    pub fn write_cp0_reg<T>(&self, index: T, value: IntValue<'ctx>)
+    pub fn write_cp0_register<T>(&self, index: T, value: IntValue<'ctx>)
     where
         T: Into<u64>,
     {
@@ -555,7 +556,7 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.build_store(reg_ptr, value);
     }
 
-    pub fn write_special_reg(&self, reg: register::Special, value: IntValue<'ctx>) {
+    pub fn write_special_register(&self, reg: register::Special, value: IntValue<'ctx>) {
         let register = self.register_pointer(reg);
         self.builder.build_store(register, value);
     }
@@ -565,10 +566,10 @@ impl<'ctx> CodeGen<'ctx> {
         T: Into<Register>,
     {
         match reg.into() {
-            Register::GeneralPurpose(reg) => self.write_general_reg(reg, value),
-            Register::Special(reg) => self.write_special_reg(reg, value),
-            Register::Cp0(reg) => self.write_cp0_reg(reg, value),
+            Register::GeneralPurpose(reg) => self.write_general_register(reg, value),
+            Register::Cp0(reg) => self.write_cp0_register(reg, value),
             Register::Fpu(reg) => self.write_fpu_register(reg, value),
+            Register::Special(reg) => self.write_special_register(reg, value),
         }
     }
 

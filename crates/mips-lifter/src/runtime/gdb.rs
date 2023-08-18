@@ -72,7 +72,7 @@ where
         }
     }
 
-    pub fn set_panicked(&mut self) {
+    pub fn signal_panicked(&mut self) {
         self.state = State::Paused;
         self.stop_reason = Some(SingleThreadStopReason::Signal(
             gdbstub::common::Signal::SIGTERM,
@@ -220,11 +220,10 @@ where
             let end = data.len().min(i + 4);
             let word = {
                 let paddr = self.tlb.translate(start_addr as u64 + i as u64).ok_or(())?;
-                self.memory.read_u32(paddr).ok_or(())?
+                self.memory.read_u32(paddr).map_err(|_| ())?
             };
             data[i..end].copy_from_slice(&word.to_ne_bytes()[..end - i]);
         }
-
         Ok(())
     }
 
@@ -237,7 +236,7 @@ where
             let end = data.len().min(i + 4);
             let paddr = self.tlb.translate(start_addr as u64 + i as u64).ok_or(())?;
             let word = u32::from_ne_bytes(data[i..end].try_into().unwrap());
-            self.memory.write_u32(paddr, word).ok_or(())?;
+            self.memory.write_u32(paddr, word).map_err(|_| ())?;
         }
 
         Ok(())

@@ -147,8 +147,8 @@ where
 
     fn panic_update_debugger(&mut self, message: &str) -> ! {
         if self.debugger.is_some() {
-            println!("{message}");
-            self.debugger.as_mut().unwrap().set_panicked();
+            eprintln!("{message}");
+            self.debugger.as_mut().unwrap().signal_panicked();
             loop {
                 self.update_debugger()
             }
@@ -157,20 +157,24 @@ where
         }
     }
 
-    fn panic_read_failed(&mut self, vaddr: u64, paddr: u64) -> ! {
+    fn panic_read_failed<E>(&mut self, err: E, vaddr: u64, paddr: u64) -> !
+    where
+        E: fmt::Debug,
+    {
         let message = format!(
-            "memory read failed at vaddr {vaddr:#x}, paddr {paddr:#x}\n{:?}",
+            "memory read failed at vaddr={vaddr:#x} paddr={paddr:#x}: {err:?}\n{:?}",
             self.registers
         );
         self.panic_update_debugger(&message)
     }
 
-    fn panic_write_failed<T>(&mut self, vaddr: u64, paddr: u64, value: T)
+    fn panic_write_failed<T, E>(&mut self, err: E, vaddr: u64, paddr: u64, value: T) -> !
     where
         T: fmt::LowerHex,
+        E: fmt::Debug,
     {
         let message = format!(
-            "memory write of {value:#x} failed at vaddr {vaddr:#x}, paddr {paddr:#x}\n{:?}",
+            "memory write of {value:#x} failed at vaddr={vaddr:#x} paddr={paddr:#x}: {err:?}\n{:?}",
             self.registers
         );
         self.panic_update_debugger(&message)
@@ -392,56 +396,56 @@ where
         let paddr = self.virtual_to_physical_address(vaddr);
         self.memory
             .read_u8(paddr)
-            .unwrap_or_else(|| self.panic_read_failed(vaddr, paddr))
+            .unwrap_or_else(|err| self.panic_read_failed(err, vaddr, paddr))
     }
 
     unsafe extern "C" fn read_u16(&mut self, vaddr: u64) -> u16 {
         let paddr = self.virtual_to_physical_address(vaddr);
         self.memory
             .read_u16(paddr)
-            .unwrap_or_else(|| self.panic_read_failed(vaddr, paddr))
+            .unwrap_or_else(|err| self.panic_read_failed(err, vaddr, paddr))
     }
 
     unsafe extern "C" fn read_u32(&mut self, vaddr: u64) -> u32 {
         let paddr = self.virtual_to_physical_address(vaddr);
         self.memory
             .read_u32(paddr)
-            .unwrap_or_else(|| self.panic_read_failed(vaddr, paddr))
+            .unwrap_or_else(|err| self.panic_read_failed(err, vaddr, paddr))
     }
 
     unsafe extern "C" fn read_u64(&mut self, vaddr: u64) -> u64 {
         let paddr = self.virtual_to_physical_address(vaddr);
         self.memory
             .read_u64(paddr)
-            .unwrap_or_else(|| self.panic_read_failed(vaddr, paddr))
+            .unwrap_or_else(|err| self.panic_read_failed(err, vaddr, paddr))
     }
 
     unsafe extern "C" fn write_u8(&mut self, vaddr: u64, value: u8) {
         let paddr = self.virtual_to_physical_address(vaddr);
         self.memory
             .write_u8(paddr, value)
-            .unwrap_or_else(|| self.panic_write_failed(vaddr, paddr, value))
+            .unwrap_or_else(|err| self.panic_write_failed(err, vaddr, paddr, value))
     }
 
     unsafe extern "C" fn write_u16(&mut self, vaddr: u64, value: u16) {
         let paddr = self.virtual_to_physical_address(vaddr);
         self.memory
             .write_u16(paddr, value)
-            .unwrap_or_else(|| self.panic_write_failed(vaddr, paddr, value))
+            .unwrap_or_else(|err| self.panic_write_failed(err, vaddr, paddr, value))
     }
 
     unsafe extern "C" fn write_u32(&mut self, vaddr: u64, value: u32) {
         let paddr = self.virtual_to_physical_address(vaddr);
         self.memory
             .write_u32(paddr, value)
-            .unwrap_or_else(|| self.panic_write_failed(vaddr, paddr, value))
+            .unwrap_or_else(|err| self.panic_write_failed(err, vaddr, paddr, value))
     }
 
     unsafe extern "C" fn write_u64(&mut self, vaddr: u64, value: u64) {
         let paddr = self.virtual_to_physical_address(vaddr);
         self.memory
             .write_u64(paddr, value)
-            .unwrap_or_else(|| self.panic_write_failed(vaddr, paddr, value))
+            .unwrap_or_else(|err| self.panic_write_failed(err, vaddr, paddr, value))
     }
 }
 

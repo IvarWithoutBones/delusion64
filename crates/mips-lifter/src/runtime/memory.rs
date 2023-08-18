@@ -1,6 +1,6 @@
 //! Memory access for runtime environment.
 
-use std::ops::Range;
+use std::{fmt, ops::Range};
 use tartan_bitfield::bitfield;
 
 const KSEG0: Range<u64> = 0x8000_0000..0xA000_0000;
@@ -153,27 +153,30 @@ impl TranslationLookasideBuffer {
 
 /// A trait providing memory access for runtime environment.
 pub trait Memory {
+    /// The type of error that can occur when accessing memory.
+    type AccessError: fmt::Debug;
+
     /// Read a u8 from the given physical address.
-    fn read_u8(&self, addr: u64) -> Option<u8>;
+    fn read_u8(&self, addr: u64) -> Result<u8, Self::AccessError>;
 
     /// Read a u16 from the given physical address.
-    fn read_u16(&self, addr: u64) -> Option<u16>;
+    fn read_u16(&self, addr: u64) -> Result<u16, Self::AccessError>;
 
     /// Read a u32 from the given physical address.
-    fn read_u32(&self, addr: u64) -> Option<u32>;
+    fn read_u32(&self, addr: u64) -> Result<u32, Self::AccessError>;
 
     /// Read a u64 from the given physical address.
-    fn read_u64(&self, addr: u64) -> Option<u64>;
+    fn read_u64(&self, addr: u64) -> Result<u64, Self::AccessError>;
 
     /// Write a u8 to the given physical address.
-    fn write_u8(&mut self, addr: u64, value: u8) -> Option<()>;
+    fn write_u8(&mut self, addr: u64, value: u8) -> Result<(), Self::AccessError>;
 
     /// Write a u16 to the given physical address.
-    fn write_u16(&mut self, addr: u64, value: u16) -> Option<()>;
+    fn write_u16(&mut self, addr: u64, value: u16) -> Result<(), Self::AccessError>;
 
     /// Write a u32 to the given physical address.
-    fn write_u32(&mut self, addr: u64, value: u32) -> Option<()>;
+    fn write_u32(&mut self, addr: u64, value: u32) -> Result<(), Self::AccessError>;
 
     /// Write a u64 to the given physical address.
-    fn write_u64(&mut self, addr: u64, value: u64) -> Option<()>;
+    fn write_u64(&mut self, addr: u64, value: u64) -> Result<(), Self::AccessError>;
 }

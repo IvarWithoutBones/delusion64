@@ -3,6 +3,8 @@
 use std::{fmt, mem::size_of, ops::Range};
 use strum::{EnumIter, IntoEnumIterator};
 
+use super::BusError;
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MemoryType {
     U8,
@@ -258,10 +260,10 @@ impl MemoryLocation {
 }
 
 impl TryFrom<u64> for MemoryLocation {
-    type Error = ();
+    type Error = BusError;
 
     fn try_from(addr: u64) -> Result<Self, Self::Error> {
-        Self::new(addr).ok_or(())
+        Self::new(addr).ok_or(BusError::UnmappedAddress(addr))
     }
 }
 

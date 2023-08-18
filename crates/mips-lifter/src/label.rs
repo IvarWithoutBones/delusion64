@@ -138,7 +138,7 @@ impl<'ctx> LabelWithContext<'ctx> {
         // Set the program counter to the current instruction, assumes the labels start corresponds to a virtual address.
         let addr = ((self.label.start() + index) * INSTRUCTION_SIZE) as u64;
         let addr_const = codegen.context.i64_type().const_int(addr, false);
-        codegen.write_special_reg(register::Special::Pc, addr_const);
+        codegen.write_special_register(register::Special::Pc, addr_const);
 
         // Call the `on_instruction` callback from the environment, used for the debugger.
         env_call!(codegen, RuntimeFunction::OnInstruction, []);
