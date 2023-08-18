@@ -22,7 +22,7 @@ impl MemoryType {
     }
 
     pub fn read_from(&self, slice: &[u8], offset: usize) -> Option<MemoryValue> {
-        // This is safe because we can guarantee that the slice is the correct length, the offset will still be boundary checked.
+        // SAFETY: We're that the slice is the correct length, the offset will still be boundary checked.
         unsafe {
             match self {
                 Self::U8 => Some((*slice.get(offset)?).into()),
@@ -242,7 +242,7 @@ impl MemoryRegion {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub struct MemoryLocation {
     pub region: MemoryRegion,
     pub offset: usize,
@@ -262,5 +262,14 @@ impl TryFrom<u64> for MemoryLocation {
 
     fn try_from(addr: u64) -> Result<Self, Self::Error> {
         Self::new(addr).ok_or(())
+    }
+}
+
+impl fmt::Debug for MemoryLocation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MemoryLocation")
+            .field("region", &self.region)
+            .field("offset", &format_args!("{:#x}", self.offset))
+            .finish()
     }
 }

@@ -14,7 +14,7 @@ use gdbstub::{
     },
 };
 use mips_decomp::register;
-use std::{collections::HashSet, net::TcpStream};
+use std::{collections::HashSet, net::TcpStream, num::ParseIntError};
 
 type Connection = Box<dyn ConnectionExt<Error = std::io::Error>>;
 
@@ -100,7 +100,7 @@ where
             }
 
             GdbStubStateMachine::CtrlCInterrupt(gdb) => {
-                println!("on_interrupt");
+                self.debugger.as_mut().unwrap().state = State::Paused;
                 let stop_reason = Some(SingleThreadStopReason::Signal(
                     gdbstub::common::Signal::SIGINT,
                 ));
@@ -219,10 +219,10 @@ where
         for i in (0..data.len()).step_by(4) {
             let end = data.len().min(i + 4);
             let word = {
-                let paddr = self.virtual_to_physical_address(start_addr as u64 + i as u64);
+                let paddr = self.tlb.translate(start_addr as u64 + i as u64).ok_or(())?;
                 self.memory.read_u32(paddr).ok_or(())?
             };
-            data[i..end].copy_from_slice(&word.to_le_bytes()[..end - i]);
+            data[i..end].copy_from_slice(&word.to_ne_bytes()[..end - i]);
         }
 
         Ok(())
@@ -235,8 +235,8 @@ where
     ) -> TargetResult<(), Self> {
         for i in (0..data.len()).step_by(4) {
             let end = data.len().min(i + 4);
-            let paddr = self.virtual_to_physical_address(start_addr as u64 + i as u64);
-            let word = u32::from_le_bytes(data[i..end].try_into().unwrap());
+            let paddr = self.tlb.translate(start_addr as u64 + i as u64).ok_or(())?;
+            let word = u32::from_ne_bytes(data[i..end].try_into().unwrap());
             self.memory.write_u32(paddr, word).ok_or(())?;
         }
 
@@ -253,9 +253,11 @@ where
         regs.cp0.cause = self.registers[register::Cp0::Cache] as _;
         regs.cp0.status = self.registers[register::Cp0::Status] as _;
         regs.cp0.badvaddr = self.registers[register::Cp0::BadVAddr] as _;
-
         for (i, r) in regs.r.iter_mut().enumerate() {
             *r = self.registers.general_purpose[i] as _;
+        }
+        for (i, r) in regs.fpu.r.iter_mut().enumerate() {
+            *r = self.registers.fpu[i] as _;
         }
 
         Ok(())
@@ -266,7 +268,7 @@ where
         regs: &<Self::Arch as gdbstub::arch::Arch>::Registers,
     ) -> TargetResult<(), Self> {
         assert!(
-            regs.pc == self.registers.special[register::Special::Pc as usize] as _,
+            regs.pc == self.registers[register::Special::Pc] as _,
             "gdb: attempted to change PC"
         );
 
@@ -275,9 +277,11 @@ where
         self.registers[register::Cp0::Cause] = regs.cp0.cause as _;
         self.registers[register::Cp0::Status] = regs.cp0.status as _;
         self.registers[register::Cp0::BadVAddr] = regs.cp0.badvaddr as _;
-
         for (i, r) in regs.r.iter().enumerate() {
             self.registers.general_purpose[i] = *r as _;
+        }
+        for (i, r) in regs.fpu.r.iter().enumerate() {
+            self.registers.fpu[i] = *r as _;
         }
 
         Ok(())
@@ -330,23 +334,51 @@ where
         cmd: &[u8],
         mut out: target::ext::monitor_cmd::ConsoleOutput<'_>,
     ) -> Result<(), Self::Error> {
-        // This is a closure so that we can early-return using `?`.
-        let mut real = || -> Result<(), ()> {
+        // This is a closure so that we can early-return using `?`, without propagating the error.
+        let _ = || -> Result<(), ()> {
             let cmd = std::str::from_utf8(cmd).map_err(|_| {
-                const ERROR_MSG: &str = "monitor command is not valid UTF-8";
-                outputln!(out, "{ERROR_MSG}");
+                outputln!(out, "monitor command is not valid UTF-8");
             })?;
 
             // Could be much more elegant, but this works fine for now.
-            match cmd {
+            let mut iter = cmd.split_whitespace().peekable();
+            match iter.next().unwrap_or("") {
                 "registers" | "regs" | "r" => outputln!(out, "{:?}", self.registers),
+
+                "physical_address" | "paddr" => {
+                    let vaddr = str_to_u64(
+                        iter.next()
+                            .ok_or_else(|| outputln!(out, "expected virtual address"))?,
+                    )
+                    .map_err(|e| outputln!(out, "failed to parse virtual address: {e}"))?;
+
+                    let paddr = self.tlb.translate(vaddr).ok_or_else(|| {
+                        outputln!(out, "virtual address {vaddr:#x} is not mapped");
+                    })?;
+                    outputln!(out, "{paddr:#x}");
+                }
+
                 _ => outputln!(out, "unrecognized command: '{cmd}'"),
             };
 
-            Ok(())
-        };
+            if iter.peek().is_some() {
+                outputln!(out, "warning: ignoring extra arguments");
+            }
 
-        let _ = real();
+            Ok(())
+        }();
         Ok(())
     }
+}
+
+fn str_to_u64(mut str: &str) -> Result<u64, ParseIntError> {
+    const HEX_PREFIX: &str = "0x";
+    let radix = if str.starts_with(HEX_PREFIX) {
+        str = &str[HEX_PREFIX.len()..];
+        16
+    } else {
+        10
+    };
+    // Read as a signed integer to support negative numbers
+    Ok(i64::from_str_radix(str, radix)? as u64)
 }

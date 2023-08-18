@@ -97,7 +97,7 @@ impl Memory for Bus {
     fn read_u8(&self, addr: u64) -> Option<u8> {
         let location = addr.try_into().ok()?;
         self.read(location, MemoryType::U8).map(|value| {
-            // This is safe because we're sure the returned value matches the MemoryType.
+            // SAFETY: we're sure the returned value matches the MemoryType.
             unsafe { value.try_into().unwrap_unchecked() }
         })
     }
@@ -106,7 +106,7 @@ impl Memory for Bus {
     fn read_u16(&self, addr: u64) -> Option<u16> {
         let location = addr.try_into().ok()?;
         self.read(location, MemoryType::U16).map(|value| {
-            // This is safe because we're sure the returned value matches the MemoryType.
+            // SAFETY: we're sure the returned value matches the MemoryType.
             unsafe { value.try_into().unwrap_unchecked() }
         })
     }
@@ -115,7 +115,7 @@ impl Memory for Bus {
     fn read_u32(&self, addr: u64) -> Option<u32> {
         let location = addr.try_into().ok()?;
         self.read(location, MemoryType::U32).map(|value| {
-            // This is safe because we're sure the returned value matches the MemoryType.
+            // SAFETY: we're sure the returned value matches the MemoryType.
             unsafe { value.try_into().unwrap_unchecked() }
         })
     }
@@ -124,7 +124,7 @@ impl Memory for Bus {
     fn read_u64(&self, addr: u64) -> Option<u64> {
         let location = addr.try_into().ok()?;
         self.read(location, MemoryType::U64).map(|value| {
-            // This is safe because we're sure the returned value matches the MemoryType.
+            // SAFETY: we're sure the returned value matches the MemoryType.
             unsafe { value.try_into().unwrap_unchecked() }
         })
     }

@@ -65,7 +65,10 @@ pub struct PeripheralInterface {
     pub cart_address: CartAddress,
     pub read_length: ReadLength,
     pub write_length: WriteLength,
-    pub status: Status,
+
+    // NOTE: Differentiates when reading or writing to it.
+    pub status_read: Status,
+    pub status_write: Status,
 
     pub domain_1_latch: Latch,
     pub domain_2_latch: Latch,
@@ -90,7 +93,7 @@ impl PeripheralInterface {
         match Register::new(offset)? {
             Register::DramAddress => Some(self.dram_address.into()),
             Register::CartAddress => Some(self.cart_address.into()),
-            Register::Status => Some(self.status.into()),
+            Register::Status => Some(self.status_read.into()),
 
             // Reading these registers appears to always return 0x7F, according to n64brew.
             Register::ReadLength => Some(0x7F),
@@ -140,7 +143,7 @@ impl PeripheralInterface {
                 self.start_dma(DmaType::ToMemory, rdram, cart);
             }
 
-            Register::Status => self.status.write(value),
+            Register::Status => self.status_write = Status::from(value),
 
             Register::Latch(dom) => match dom {
                 Domain::One => self.domain_1_latch = Latch::from(value),
