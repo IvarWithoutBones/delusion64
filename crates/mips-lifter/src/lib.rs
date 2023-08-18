@@ -134,7 +134,7 @@ pub fn run<Mem>(
     // Its a rather bruteforce approach, but it works :)
     codegen.save_host_stack();
 
-    codegen.build_dynamic_jump(codegen.read_special_reg(register::Special::Pc));
+    codegen.build_dynamic_jump(codegen.read_register(i64_type, register::Special::Pc));
 
     // Compile the generated functions.
     for (i, label) in codegen.labels.iter().enumerate() {
@@ -164,5 +164,5 @@ pub fn run<Mem>(
 
     // Run the generated code!
     unsafe { main_fn.call() };
-    env.print_registers();
+    println!("finished executing code:{:?}", env.registers);
 }

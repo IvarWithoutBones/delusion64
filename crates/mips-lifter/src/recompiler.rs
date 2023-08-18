@@ -99,11 +99,6 @@ pub fn recompile_instruction<'ctx>(
             stub(codegen, "tne");
         }
 
-        Mnenomic::AddFmt => {
-            // Add fs and ft, store result in fd
-            stub(codegen, "addfmt");
-        }
-
         Mnenomic::CCondFmtFs => {
             // Compares fs and ft using cond
             stub(codegen, "ccondfmtfs");
@@ -179,16 +174,6 @@ pub fn recompile_instruction<'ctx>(
             stub(codegen, "lwl");
         }
 
-        Mnenomic::Cfc1 => {
-            // Copy contents of CP1's control register rd, to GPR rt
-            stub(codegen, "cfc1");
-        }
-
-        Mnenomic::Ctc1 => {
-            // Copy contents of GPR rt, to CP1's control register rd
-            stub(codegen, "ctc1");
-        }
-
         Mnenomic::Ctc2 => {
             // Copy contents of GPR rt, to CP2's control register rd
             stub(codegen, "ctc2");
@@ -230,6 +215,11 @@ pub fn recompile_instruction<'ctx>(
             return Some(curr_block);
         }
 
+        Mnenomic::AddFmt => {
+            // Add fs and ft, store result in fd
+            stub(codegen, "addfmt");
+        }
+
         Mnenomic::Sync => {
             // Executed as NOP on the VR4300
         }
@@ -237,6 +227,26 @@ pub fn recompile_instruction<'ctx>(
         Mnenomic::Cache => {
             // Flush instruction or data cache at address (base + offset) to RAM
             // There is no need to emulate the instruction/data cache, so we'll ignore it for now.
+        }
+
+        Mnenomic::Tlbwi => {
+            // Stores the contents of EntryHi and EntryLo registers into the TLB entry pointed at by the Index register
+            let index = codegen.read_register(i64_type, register::Cp0::Index);
+            env_call!(codegen, RuntimeFunction::WriteTlbEntry, [index]);
+        }
+
+        Mnenomic::Ctc1 => {
+            // Copy contents of GPR rt, to CP1's control register fs. Only valid if fs equals 0 or 31
+            assert!(instr.fs() == 0 || instr.fs() == 31);
+            let target = codegen.read_general_register(i64_type, instr.rt());
+            codegen.write_fpu_register(instr.fs(), target);
+        }
+
+        Mnenomic::Cfc1 => {
+            // Copy contents of CP1's control register fs, to GPR rt. Only valid if fs equals 0 or 31
+            assert!(instr.fs() == 0 || instr.fs() == 31);
+            let source = codegen.read_fpu_register(i64_type, instr.fs());
+            codegen.write_general_reg(instr.rt(), source);
         }
 
         Mnenomic::Mtlo => {
@@ -259,21 +269,19 @@ pub fn recompile_instruction<'ctx>(
 
         Mnenomic::Mfc0 => {
             // Copy contents of CP0's coprocessor register rd, to GPR rt
-            let destination = codegen.read_cp0_reg(instr.rd());
+            let destination = codegen.read_cp0_register(i32_type, instr.rd());
             codegen.write_general_reg(instr.rt(), destination);
         }
 
         Mnenomic::Dmtc0 => {
-            // Copy doubleword contents of GPR rt, to CPz coprocessor register rd
-            // TODO: dont assume cp0? Kinda weird zero is in the name though...
+            // Copy doubleword contents of GPR rt, to CP0 coprocessor register rd
             let target = codegen.read_general_register(i64_type, instr.rt());
             codegen.write_cp0_reg(instr.rd(), target);
         }
 
         Mnenomic::Dmfc0 => {
-            // Copy doubleword contents of CPz coprocessor register rd, to GPR rt
-            // TODO: dont assume cp0? Kinda weird zero is in the name though...
-            let destination = codegen.read_cp0_reg(instr.rd());
+            // Copy doubleword contents of CP0's coprocessor register rd, to GPR rt
+            let destination = codegen.read_cp0_register(i64_type, instr.rd());
             codegen.write_general_reg(instr.rt(), destination);
         }
 

@@ -352,7 +352,7 @@ impl<'ctx> CodeGen<'ctx> {
                     i64_type.const_int(value as u64, false)
                 };
 
-                let pc = self.read_special_reg(register::Special::Pc);
+                let pc = self.read_register(i64_type, register::Special::Pc);
                 self.builder.build_int_add(pc, offset, "next_instr_pc")
             };
 
@@ -411,10 +411,10 @@ impl<'ctx> CodeGen<'ctx> {
     /// Gets the address of the instruction after the current one,
     /// by adding the instruction size to the program counter (PC).
     pub fn next_instruction_address(&self) -> IntValue<'ctx> {
-        let pc = self.read_special_reg(register::Special::Pc);
+        let pc = self.read_register(self.context.i64_type(), register::Special::Pc);
         let instr_size = self
             .context
-            .i32_type()
+            .i64_type()
             .const_int(INSTRUCTION_SIZE as _, false);
         let next_pc = self
             .builder
@@ -478,16 +478,14 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
-    pub fn read_cp0_reg<T>(&self, index: T) -> IntValue<'ctx>
+    pub fn read_cp0_register<T>(&self, ty: IntType<'ctx>, index: T) -> IntValue<'ctx>
     where
         T: Into<u64>,
     {
-        // TODO: dont hardcode 32-bit register width
-        let reg_ty = self.context.i32_type();
         let reg = register::Cp0::from_repr(index.into() as _).unwrap();
         let register = self.register_pointer(reg);
         self.builder
-            .build_load(reg_ty, register, &format!("{}_", reg.name()))
+            .build_load(ty, register, &format!("{}_", reg.name()))
             .into_int_value()
     }
 
@@ -504,12 +502,14 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.build_load(ty, reg_ptr, &name).into_int_value()
     }
 
-    pub fn read_special_reg(&self, reg: register::Special) -> IntValue<'ctx> {
-        // TODO: dont hardcode 32-bit register width
-        let reg_ty = self.context.i32_type();
+    pub fn read_special_register(
+        &self,
+        ty: IntType<'ctx>,
+        reg: register::Special,
+    ) -> IntValue<'ctx> {
         let register = self.register_pointer(reg);
         self.builder
-            .build_load(reg_ty, register, &format!("{}_", reg.name()))
+            .build_load(ty, register, &format!("{}_", reg.name()))
             .into_int_value()
     }
 
@@ -519,8 +519,8 @@ impl<'ctx> CodeGen<'ctx> {
     {
         match reg.into() {
             Register::GeneralPurpose(reg) => self.read_general_register(ty, reg),
-            Register::Special(reg) => self.read_special_reg(reg),
-            Register::Cp0(reg) => self.read_cp0_reg(reg),
+            Register::Special(reg) => self.read_special_register(ty, reg),
+            Register::Cp0(reg) => self.read_cp0_register(ty, reg),
             Register::Fpu(reg) => self.read_fpu_register(ty, reg),
         }
     }
@@ -546,7 +546,7 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.build_store(reg_ptr, value);
     }
 
-    pub fn write_fpu_reg<T>(&self, index: T, value: IntValue<'ctx>)
+    pub fn write_fpu_register<T>(&self, index: T, value: IntValue<'ctx>)
     where
         T: Into<u64>,
     {
@@ -568,7 +568,7 @@ impl<'ctx> CodeGen<'ctx> {
             Register::GeneralPurpose(reg) => self.write_general_reg(reg, value),
             Register::Special(reg) => self.write_special_reg(reg, value),
             Register::Cp0(reg) => self.write_cp0_reg(reg, value),
-            Register::Fpu(reg) => self.write_fpu_reg(reg, value),
+            Register::Fpu(reg) => self.write_fpu_register(reg, value),
         }
     }
 

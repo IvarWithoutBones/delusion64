@@ -89,6 +89,7 @@ where
         let cp0_regs = module.add_global(cp0_regs_ty, None, "cp0_registers");
         execution_engine.add_global_mapping(&cp0_regs, self.registers.cp0.as_ptr() as _);
 
+        // Add a mapping to the fpu (cp1) registers
         let fpu_regs_ty = i64_type.array_type(register::Fpu::count() as _);
         let fpu_regs = module.add_global(fpu_regs_ty, None, "fpu_registers");
         execution_engine.add_global_mapping(&fpu_regs, self.registers.fpu.as_ptr() as _);
@@ -104,9 +105,10 @@ where
             let ptr: *const u8 = match func {
                 RuntimeFunction::PrintString => Self::print_string as _,
                 RuntimeFunction::Panic => Self::panic as _,
+                RuntimeFunction::OnInstruction => Self::on_instruction as _,
 
                 RuntimeFunction::GetFunctionPtr => Self::get_function_ptr as _,
-                RuntimeFunction::OnInstruction => Self::on_instruction as _,
+                RuntimeFunction::WriteTlbEntry => Self::write_tlb_entry as _,
 
                 RuntimeFunction::ReadI8 => Self::read_u8 as _,
                 RuntimeFunction::ReadI16 => Self::read_u16 as _,
@@ -136,13 +138,9 @@ where
         self.codegen.set(Some(codegen));
     }
 
-    pub fn print_registers(&self) {
-        println!("{:#?}", self.registers);
-    }
-
     fn virtual_to_physical_address(&mut self, vaddr: u64) -> u64 {
         self.tlb.translate(vaddr).unwrap_or_else(|| {
-            self.print_registers();
+            println!("{:?}", self.registers);
             panic!("failed to generate paddr for vaddr {vaddr:#06x}");
         })
     }
@@ -281,7 +279,8 @@ where
                             .append_basic_block(fallthrough_func, "fallthrough_block");
                         codegen.builder.position_at_end(fallthrough_block);
 
-                        let pc = codegen.read_special_reg(register::Special::Pc);
+                        let pc = codegen
+                            .read_register(codegen.context.i64_type(), register::Special::Pc);
                         let next = {
                             // If the second-last instruction has a delay slot, we've already executed the last instruction.
                             // In this case we need to skip over it, in order to avoid executing it twice.
@@ -301,7 +300,7 @@ where
                                 pc,
                                 codegen
                                     .context
-                                    .i32_type()
+                                    .i64_type()
                                     .const_int(offset * (INSTRUCTION_SIZE as u64), false),
                                 "next_block_addr",
                             )
@@ -360,8 +359,33 @@ where
     }
 
     unsafe extern "C" fn panic(&mut self) {
-        self.print_registers();
+        println!("{:?}", self.registers);
         panic!("Environment::panic called");
+    }
+
+    unsafe extern "C" fn write_tlb_entry(&mut self, index: u64) {
+        let entry = memory::TlbEntry32::default()
+            .with_entry_lo_0(memory::EntryLo32::from(
+                self.registers[register::Cp0::EntryLo0] as u32,
+            ))
+            .with_entry_lo_1(memory::EntryLo32::from(
+                self.registers[register::Cp0::EntryLo1] as u32,
+            ))
+            .with_entry_hi(memory::EntryHi32::from(
+                self.registers[register::Cp0::EntryHi] as u32,
+            ))
+            .with_page_mask(memory::PageMask::from(
+                self.registers[register::Cp0::PageMask] as u32,
+            ));
+
+        self.tlb
+            .set_entry(index as usize, entry)
+            .unwrap_or_else(|| {
+                self.panic_update_debugger(&format!(
+                    "failed to set TLB entry at index {:#x}",
+                    index
+                ))
+            });
     }
 
     unsafe extern "C" fn read_u8(&mut self, vaddr: u64) -> u8 {

@@ -11,9 +11,10 @@ use strum::{EnumIter, EnumVariantNames, VariantNames};
 pub enum RuntimeFunction {
     PrintString,
     Panic,
+    OnInstruction,
 
     GetFunctionPtr,
-    OnInstruction,
+    WriteTlbEntry,
 
     ReadI8,
     ReadI16,
@@ -41,7 +42,7 @@ impl RuntimeFunction {
         let ptr_type = i64_type.ptr_type(AddressSpace::default());
 
         // Dirty macro to make the signature generation a bit more readable.
-        // The name doesnt do anything, its just there to enforce nicer syntax.
+        // The name doesn't do anything, its just there to enforce nicer syntax.
         macro_rules! sig {
             ($ret_ty:expr, [$(
                $name:ident : $arg_ty:expr
@@ -59,11 +60,13 @@ impl RuntimeFunction {
             Self::PrintString => sig!(void_type, [string_ptr: ptr_type, len: i64_type]),
             // `Environment::panic(&mut self)`
             Self::Panic => sig!(void_type, []),
+            // `Environment::on_instruction(&mut self)`
+            Self::OnInstruction => sig!(void_type, []),
 
             // `Environment::get_function_ptr(&mut self, vaddr: u64) -> u64
             Self::GetFunctionPtr => sig!(i64_type, [vaddr: i64_type]),
-            // `Environment::on_instruction(&mut self)`
-            Self::OnInstruction => sig!(void_type, []),
+            // `Environment::write_tlb_entry(&mut self, index: u64)`
+            Self::WriteTlbEntry => sig!(void_type, [index: i64_type]),
 
             // `Environment::read_u8(&mut self, vaddr: u64) -> u8`
             Self::ReadI8 => sig!(i8_type, [vaddr: i64_type]),

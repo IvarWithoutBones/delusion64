@@ -28,15 +28,15 @@ bitfield! {
     /// CP0 register `EntryLo0`/`EntryLo1`
     pub struct EntryLo32(u32) {
         /// `G` bit
-        [0] global,
+        [0] pub global,
         /// `V` bit
-        [1] valid,
+        [1] pub valid,
         /// `D` bit
-        [2] dirty,
+        [2] pub dirty,
         /// `C` bits
-        [3..=5] page_attr: u8,
+        [3..=5] pub page_attr: u8,
         /// `PFN` bits
-        [6..=25] physical_frame_number: u32,
+        [6..=25] pub physical_frame_number: u32,
     }
 }
 
@@ -44,11 +44,11 @@ bitfield! {
     /// CP0 register `EntryHi`
     pub struct EntryHi32(u32) {
         /// `ASID` bits
-        [0..=7] asid: u8,
+        [0..=7] pub asid: u8,
         /// `G` bit
-        [13] global,
+        [13] pub global,
         /// `VPN2` bits
-        [14..=31] virtual_page_number: u32,
+        [14..=31] pub virtual_page_number: u32,
     }
 }
 
@@ -56,7 +56,7 @@ bitfield! {
     /// CP0 register `PageMask`
     pub struct PageMask(u32) {
         /// `MASK` bits
-        [13..=25] mask: u16,
+        [13..=25] pub mask: u16,
     }
 }
 
@@ -64,13 +64,13 @@ bitfield! {
     /// A TLB entry in 32-bit mode.
     pub struct TlbEntry32(u128) {
         /// CP0 register `EntryLo0`
-        [0..=31] entry_lo_0: u32 as EntryLo32,
+        [0..=31] pub entry_lo_0: u32 as EntryLo32,
         /// CP0 register `EntryLo1`
-        [32..=63] entry_lo_1: u32 as EntryLo32,
+        [32..=63] pub entry_lo_1: u32 as EntryLo32,
         /// CP0 register `EntryHi`
-        [64..=95] entry_hi: u32 as EntryHi32,
+        [64..=95] pub entry_hi: u32 as EntryHi32,
         /// CP0 register `PageMask`
-        [96..=127] page_mask: u32 as PageMask,
+        [96..=127] pub page_mask: u32 as PageMask,
     }
 }
 
@@ -143,6 +143,11 @@ impl TranslationLookasideBuffer {
         } else {
             self.load(vaddr)
         }
+    }
+
+    pub fn set_entry(&mut self, index: usize, entry: TlbEntry32) -> Option<()> {
+        *self.entries.get_mut(index)? = entry;
+        Some(())
     }
 }
 
