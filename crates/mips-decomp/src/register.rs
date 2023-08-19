@@ -192,11 +192,11 @@ pub enum Cp0 {
     Index,
     /// Pseudorandom pointer into TLB array (read only)
     Random,
-    /// Low half of TLB entry for even virtual address (VPN)
+    /// Low half of TLB entry for even virtual address
     EntryLo0,
-    /// Low half of TLB entry for odd virtual address (VPN)
+    /// Low half of TLB entry for odd virtual address
     EntryLo1,
-    /// Pointer to kernel virtual page table entry (PTE) in 32-bit mode
+    /// Pointer to kernel virtual page table entry in 32-bit mode
     Context,
     /// Page size specification
     PageMask,
@@ -209,7 +209,7 @@ pub enum Cp0 {
     BadVAddr,
     /// Timer Count
     Count,
-    /// High half of TLB entry (including ASID)
+    /// High half of TLB entry
     EntryHi,
     /// Timer Compare Value
     Compare,
@@ -229,7 +229,7 @@ pub enum Cp0 {
     WatchLo,
     /// Memory reference trap address high bits
     WatchHi,
-    /// Pointer to Kernel virtual PTE table in 64-bit mode
+    /// Pointer to kernel virtual page table entry in 64-bit mode
     XContext,
     /// Reserved for future use
     #[strum(serialize = "Reserved")]

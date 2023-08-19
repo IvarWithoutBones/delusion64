@@ -1,4 +1,4 @@
-use super::{Environment, Memory};
+use super::{memory::tlb::AccessMode, Environment, Memory};
 use gdbstub::{
     conn::ConnectionExt,
     outputln,
@@ -219,7 +219,14 @@ where
         for i in (0..data.len()).step_by(4) {
             let end = data.len().min(i + 4);
             let word = {
-                let paddr = self.tlb.translate(start_addr as u64 + i as u64).ok_or(())?;
+                let paddr = self
+                    .tlb
+                    .translate(
+                        start_addr as u64 + i as u64,
+                        AccessMode::Read,
+                        &self.registers,
+                    )
+                    .map_err(|_| ())?;
                 self.memory.read_u32(paddr).map_err(|_| ())?
             };
             data[i..end].copy_from_slice(&word.to_ne_bytes()[..end - i]);
@@ -234,7 +241,14 @@ where
     ) -> TargetResult<(), Self> {
         for i in (0..data.len()).step_by(4) {
             let end = data.len().min(i + 4);
-            let paddr = self.tlb.translate(start_addr as u64 + i as u64).ok_or(())?;
+            let paddr = self
+                .tlb
+                .translate(
+                    start_addr as u64 + i as u64,
+                    AccessMode::Write,
+                    &self.registers,
+                )
+                .map_err(|_| ())?;
             let word = u32::from_ne_bytes(data[i..end].try_into().unwrap());
             self.memory.write_u32(paddr, word).map_err(|_| ())?;
         }
@@ -351,9 +365,12 @@ where
                     )
                     .map_err(|e| outputln!(out, "failed to parse virtual address: {e}"))?;
 
-                    let paddr = self.tlb.translate(vaddr).ok_or_else(|| {
-                        outputln!(out, "virtual address {vaddr:#x} is not mapped");
-                    })?;
+                    let paddr = self
+                        .tlb
+                        .translate(vaddr, AccessMode::Read, &self.registers)
+                        .map_err(|e| {
+                            outputln!(out, "virtual address {vaddr:#x} is not mapped: {e:#?}");
+                        })?;
                     outputln!(out, "{paddr:#x}");
                 }
 

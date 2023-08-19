@@ -168,9 +168,20 @@ pub enum MemoryRegion {
 }
 
 impl MemoryRegion {
-    const RSP_MEM_MIRRORS: Range<u64> = 0x04002000..0x04040000;
+    /// Resolves mirrored RSP memory, if needed.
+    // Its kind of unfortunate we need to add a special case for this,
+    // but resolving this automatically seems like it will make for a better API.
+    fn resolve_mirror(addr: u32) -> u32 {
+        const RSP_MEM_MIRRORS: Range<u32> = 0x04002000..0x04040000;
+        if RSP_MEM_MIRRORS.contains(&addr) {
+            let normalised = addr % (Self::RspDMemory.len() + Self::RspIMemory.len()) as u32;
+            normalised + Self::RspDMemory.start()
+        } else {
+            addr
+        }
+    }
 
-    pub fn new(addr: u64) -> Option<Self> {
+    pub fn new(addr: u32) -> Option<Self> {
         let addr = Self::resolve_mirror(addr);
         Self::iter().find(|&region| region.contains(addr))
     }
@@ -182,7 +193,7 @@ impl MemoryRegion {
         true
     }
 
-    pub const fn range(&self) -> Range<u64> {
+    pub const fn range(&self) -> Range<u32> {
         // See https://n64brew.dev/wiki/Memory_map#Physical_Memory_Map.
         match self {
             MemoryRegion::RdramMemory => 0x00000000..0x03F00000,
@@ -208,23 +219,11 @@ impl MemoryRegion {
         }
     }
 
-    /// Resolves mirrored RSP memory, if needed.
-    // Its kind of unfortunate we need to add a special case for this,
-    // but resolving this automatically seems like it will make for a better API.
-    fn resolve_mirror(addr: u64) -> u64 {
-        if Self::RSP_MEM_MIRRORS.contains(&addr) {
-            let normalised = addr % (Self::RspDMemory.len() + Self::RspIMemory.len()) as u64;
-            normalised + Self::RspDMemory.start()
-        } else {
-            addr
-        }
-    }
-
-    pub const fn start(&self) -> u64 {
+    pub const fn start(&self) -> u32 {
         self.range().start
     }
 
-    pub const fn end(&self) -> u64 {
+    pub const fn end(&self) -> u32 {
         self.range().end
     }
 
@@ -233,12 +232,12 @@ impl MemoryRegion {
         (self.end() - self.start()) as usize
     }
 
-    pub fn offset(&self, addr: u64) -> usize {
+    pub fn offset(&self, addr: u32) -> usize {
         let addr = Self::resolve_mirror(addr);
         (addr - self.start()) as usize
     }
 
-    pub fn contains(&self, addr: u64) -> bool {
+    pub fn contains(&self, addr: u32) -> bool {
         let addr = Self::resolve_mirror(addr);
         self.range().contains(&addr)
     }
@@ -251,7 +250,7 @@ pub struct MemoryLocation {
 }
 
 impl MemoryLocation {
-    pub fn new(addr: u64) -> Option<Self> {
+    pub fn new(addr: u32) -> Option<Self> {
         MemoryRegion::new(addr).map(|region| Self {
             region,
             offset: region.offset(addr),
@@ -259,10 +258,10 @@ impl MemoryLocation {
     }
 }
 
-impl TryFrom<u64> for MemoryLocation {
+impl TryFrom<u32> for MemoryLocation {
     type Error = BusError;
 
-    fn try_from(addr: u64) -> Result<Self, Self::Error> {
+    fn try_from(addr: u32) -> Result<Self, Self::Error> {
         Self::new(addr).ok_or(BusError::UnmappedAddress(addr))
     }
 }

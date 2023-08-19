@@ -17,7 +17,7 @@ const LLVM_CALLING_CONVENTION_FAST: u32 = 8;
 // TODO: dont do this all at once, provide a builder API instead.
 pub fn run<Mem>(
     mem: Mem,
-    binary_range: Range<u64>,
+    binary_range: Range<u32>,
     gdb_stream: Option<TcpStream>,
     ir_path: Option<&str>,
     disassembly_path: Option<&str>,

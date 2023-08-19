@@ -110,7 +110,7 @@ impl Bus {
 
 pub enum BusError {
     /// The address is not mapped to any memory region.
-    UnmappedAddress(u64),
+    UnmappedAddress(u32),
     /// A read-only region was written to.
     ReadOnlyRegionWrite(MemoryRegion),
     /// A write-only region was read from.
@@ -145,54 +145,54 @@ impl Memory for Bus {
     type AccessError = BusError;
 
     #[inline]
-    fn read_u8(&self, addr: u64) -> Result<u8, Self::AccessError> {
-        self.read(addr.try_into()?, MemoryType::U8).map(|value| {
+    fn read_u8(&self, paddr: u32) -> Result<u8, Self::AccessError> {
+        self.read(paddr.try_into()?, MemoryType::U8).map(|value| {
             // SAFETY: we're sure the returned value matches the MemoryType.
             unsafe { value.try_into().unwrap_unchecked() }
         })
     }
 
     #[inline]
-    fn read_u16(&self, addr: u64) -> Result<u16, Self::AccessError> {
-        self.read(addr.try_into()?, MemoryType::U16).map(|value| {
+    fn read_u16(&self, paddr: u32) -> Result<u16, Self::AccessError> {
+        self.read(paddr.try_into()?, MemoryType::U16).map(|value| {
             // SAFETY: we're sure the returned value matches the MemoryType.
             unsafe { value.try_into().unwrap_unchecked() }
         })
     }
 
     #[inline]
-    fn read_u32(&self, addr: u64) -> Result<u32, Self::AccessError> {
-        self.read(addr.try_into()?, MemoryType::U32).map(|value| {
+    fn read_u32(&self, paddr: u32) -> Result<u32, Self::AccessError> {
+        self.read(paddr.try_into()?, MemoryType::U32).map(|value| {
             // SAFETY: we're sure the returned value matches the MemoryType.
             unsafe { value.try_into().unwrap_unchecked() }
         })
     }
 
     #[inline]
-    fn read_u64(&self, addr: u64) -> Result<u64, Self::AccessError> {
-        self.read(addr.try_into()?, MemoryType::U64).map(|value| {
+    fn read_u64(&self, paddr: u32) -> Result<u64, Self::AccessError> {
+        self.read(paddr.try_into()?, MemoryType::U64).map(|value| {
             // SAFETY: we're sure the returned value matches the MemoryType.
             unsafe { value.try_into().unwrap_unchecked() }
         })
     }
 
     #[inline]
-    fn write_u8(&mut self, addr: u64, value: u8) -> Result<(), Self::AccessError> {
-        self.write(addr.try_into()?, value)
+    fn write_u8(&mut self, paddr: u32, value: u8) -> Result<(), Self::AccessError> {
+        self.write(paddr.try_into()?, value)
     }
 
     #[inline]
-    fn write_u16(&mut self, addr: u64, value: u16) -> Result<(), Self::AccessError> {
-        self.write(addr.try_into()?, value)
+    fn write_u16(&mut self, paddr: u32, value: u16) -> Result<(), Self::AccessError> {
+        self.write(paddr.try_into()?, value)
     }
 
     #[inline]
-    fn write_u32(&mut self, addr: u64, value: u32) -> Result<(), Self::AccessError> {
-        self.write(addr.try_into()?, value)
+    fn write_u32(&mut self, paddr: u32, value: u32) -> Result<(), Self::AccessError> {
+        self.write(paddr.try_into()?, value)
     }
 
     #[inline]
-    fn write_u64(&mut self, addr: u64, value: u64) -> Result<(), Self::AccessError> {
-        self.write(addr.try_into()?, value)
+    fn write_u64(&mut self, paddr: u32, value: u64) -> Result<(), Self::AccessError> {
+        self.write(paddr.try_into()?, value)
     }
 }

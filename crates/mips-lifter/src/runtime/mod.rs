@@ -1,6 +1,6 @@
 //! The runtime environment which generated code can call into.
 
-use self::memory::TranslationLookasideBuffer;
+use self::memory::tlb::{AccessMode, TranslationLookasideBuffer};
 use crate::{
     codegen::{self, function_attributes, CodeGen},
     LLVM_CALLING_CONVENTION_FAST,
@@ -138,14 +138,20 @@ where
         self.codegen.set(Some(codegen));
     }
 
-    fn virtual_to_physical_address(&mut self, vaddr: u64) -> u64 {
-        self.tlb.translate(vaddr).unwrap_or_else(|| {
-            println!("{:?}", self.registers);
-            panic!("failed to generate paddr for vaddr {vaddr:#06x}");
-        })
+    fn virtual_to_physical_address(&mut self, vaddr: u64, mode: AccessMode) -> u32 {
+        self.tlb
+            .translate(vaddr, mode, &self.registers)
+            .unwrap_or_else(|err| {
+                let msg = format!(
+                    "failed to generate paddr for vaddr {vaddr:#06x}: {err:?}\n{:?}",
+                    self.registers
+                );
+                self.panic_update_debugger(&msg)
+            })
     }
 
     fn panic_update_debugger(&mut self, message: &str) -> ! {
+        eprintln!("{:?}", self.registers);
         if self.debugger.is_some() {
             eprintln!("{message}");
             self.debugger.as_mut().unwrap().signal_panicked();
@@ -157,25 +163,21 @@ where
         }
     }
 
-    fn panic_read_failed<E>(&mut self, err: E, vaddr: u64, paddr: u64) -> !
+    fn panic_read_failed<E>(&mut self, err: E, vaddr: u64, paddr: u32) -> !
     where
         E: fmt::Debug,
     {
-        let message = format!(
-            "memory read failed at vaddr={vaddr:#x} paddr={paddr:#x}: {err:?}\n{:?}",
-            self.registers
-        );
+        let message = format!("memory read failed at vaddr={vaddr:#x} paddr={paddr:#x}: {err:?}",);
         self.panic_update_debugger(&message)
     }
 
-    fn panic_write_failed<T, E>(&mut self, err: E, vaddr: u64, paddr: u64, value: T) -> !
+    fn panic_write_failed<T, E>(&mut self, err: E, vaddr: u64, paddr: u32, value: T) -> !
     where
         T: fmt::LowerHex,
         E: fmt::Debug,
     {
         let message = format!(
-            "memory write of {value:#x} failed at vaddr={vaddr:#x} paddr={paddr:#x}: {err:?}\n{:?}",
-            self.registers
+            "memory write of {value:#x} failed at vaddr={vaddr:#x} paddr={paddr:#x}: {err:?}",
         );
         self.panic_update_debugger(&message)
     }
@@ -191,7 +193,7 @@ where
 
         // This is a closure so we can return early if we already a matching block compiled.
         let func = || -> FunctionValue<'ctx> {
-            let paddr = self.virtual_to_physical_address(vaddr);
+            let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
 
             // This is not accurate, just a hack consistent with label.rs.
             let offset = vaddr as usize / 4;
@@ -341,7 +343,7 @@ where
 
     unsafe extern "C" fn on_instruction(&mut self) {
         let pc_vaddr = self.registers[register::Special::Pc];
-        let pc_paddr = self.virtual_to_physical_address(pc_vaddr);
+        let pc_paddr = self.virtual_to_physical_address(pc_vaddr, AccessMode::Read);
 
         let instr = ParsedInstruction::try_from(self.memory.read_u32(pc_paddr).unwrap()).unwrap();
         println!("{pc_vaddr:06x}: {instr}");
@@ -368,81 +370,65 @@ where
     }
 
     unsafe extern "C" fn write_tlb_entry(&mut self, index: u64) {
-        let entry = memory::TlbEntry32::default()
-            .with_entry_lo_0(memory::EntryLo32::from(
-                self.registers[register::Cp0::EntryLo0] as u32,
-            ))
-            .with_entry_lo_1(memory::EntryLo32::from(
-                self.registers[register::Cp0::EntryLo1] as u32,
-            ))
-            .with_entry_hi(memory::EntryHi32::from(
-                self.registers[register::Cp0::EntryHi] as u32,
-            ))
-            .with_page_mask(memory::PageMask::from(
-                self.registers[register::Cp0::PageMask] as u32,
-            ));
-
         self.tlb
-            .set_entry(index as usize, entry)
+            .set_entry(index as usize, &self.registers)
             .unwrap_or_else(|| {
-                self.panic_update_debugger(&format!(
-                    "failed to set TLB entry at index {:#x}",
-                    index
-                ))
+                let msg = format!("failed to set tlb entry at {index:#x}");
+                self.panic_update_debugger(&msg)
             });
     }
 
     unsafe extern "C" fn read_u8(&mut self, vaddr: u64) -> u8 {
-        let paddr = self.virtual_to_physical_address(vaddr);
+        let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
         self.memory
             .read_u8(paddr)
             .unwrap_or_else(|err| self.panic_read_failed(err, vaddr, paddr))
     }
 
     unsafe extern "C" fn read_u16(&mut self, vaddr: u64) -> u16 {
-        let paddr = self.virtual_to_physical_address(vaddr);
+        let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
         self.memory
             .read_u16(paddr)
             .unwrap_or_else(|err| self.panic_read_failed(err, vaddr, paddr))
     }
 
     unsafe extern "C" fn read_u32(&mut self, vaddr: u64) -> u32 {
-        let paddr = self.virtual_to_physical_address(vaddr);
+        let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
         self.memory
             .read_u32(paddr)
             .unwrap_or_else(|err| self.panic_read_failed(err, vaddr, paddr))
     }
 
     unsafe extern "C" fn read_u64(&mut self, vaddr: u64) -> u64 {
-        let paddr = self.virtual_to_physical_address(vaddr);
+        let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
         self.memory
             .read_u64(paddr)
             .unwrap_or_else(|err| self.panic_read_failed(err, vaddr, paddr))
     }
 
     unsafe extern "C" fn write_u8(&mut self, vaddr: u64, value: u8) {
-        let paddr = self.virtual_to_physical_address(vaddr);
+        let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Write);
         self.memory
             .write_u8(paddr, value)
             .unwrap_or_else(|err| self.panic_write_failed(err, vaddr, paddr, value))
     }
 
     unsafe extern "C" fn write_u16(&mut self, vaddr: u64, value: u16) {
-        let paddr = self.virtual_to_physical_address(vaddr);
+        let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Write);
         self.memory
             .write_u16(paddr, value)
             .unwrap_or_else(|err| self.panic_write_failed(err, vaddr, paddr, value))
     }
 
     unsafe extern "C" fn write_u32(&mut self, vaddr: u64, value: u32) {
-        let paddr = self.virtual_to_physical_address(vaddr);
+        let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Write);
         self.memory
             .write_u32(paddr, value)
             .unwrap_or_else(|err| self.panic_write_failed(err, vaddr, paddr, value))
     }
 
     unsafe extern "C" fn write_u64(&mut self, vaddr: u64, value: u64) {
-        let paddr = self.virtual_to_physical_address(vaddr);
+        let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Write);
         self.memory
             .write_u64(paddr, value)
             .unwrap_or_else(|err| self.panic_write_failed(err, vaddr, paddr, value))
