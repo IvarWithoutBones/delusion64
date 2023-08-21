@@ -142,10 +142,7 @@ where
         self.tlb
             .translate(vaddr, mode, &self.registers)
             .unwrap_or_else(|err| {
-                let msg = format!(
-                    "failed to generate paddr for vaddr {vaddr:#06x}: {err:?}\n{:?}",
-                    self.registers
-                );
+                let msg = format!("failed to generate paddr for vaddr {vaddr:#06x}: {err:#?}");
                 self.panic_update_debugger(&msg)
             })
     }
@@ -167,7 +164,7 @@ where
     where
         E: fmt::Debug,
     {
-        let message = format!("memory read failed at vaddr={vaddr:#x} paddr={paddr:#x}: {err:?}",);
+        let message = format!("memory read failed at vaddr={vaddr:#x} paddr={paddr:#x}: {err:?}");
         self.panic_update_debugger(&message)
     }
 
@@ -454,15 +451,15 @@ impl fmt::Debug for Registers {
             writeln!(f, "{name: <9} = {r:#x}")?;
         }
 
-        writeln!(f, "\nspecial registers:")?;
-        for (i, r) in self.special.iter().enumerate() {
-            let name = register::Special::name_from_index(i as _);
-            writeln!(f, "{name: <9} = {r:#x}")?;
-        }
-
         writeln!(f, "\ncoprocessor 1 registers:")?;
         for (i, r) in self.cp0.iter().enumerate() {
             let name = register::Cp0::name_from_index(i as _);
+            writeln!(f, "{name: <9} = {r:#x}")?;
+        }
+
+        writeln!(f, "\nspecial registers:")?;
+        for (i, r) in self.special.iter().enumerate() {
+            let name = register::Special::name_from_index(i as _);
             writeln!(f, "{name: <9} = {r:#x}")?;
         }
 
