@@ -408,22 +408,7 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.build_int_truncate(value, ty, &name)
     }
 
-    /// Gets the address of the instruction after the current one,
-    /// by adding the instruction size to the program counter (PC).
-    pub fn next_instruction_address(&self) -> IntValue<'ctx> {
-        let pc = self.read_register(self.context.i64_type(), register::Special::Pc);
-        let instr_size = self
-            .context
-            .i64_type()
-            .const_int(INSTRUCTION_SIZE as _, false);
-        let next_pc = self
-            .builder
-            .build_int_add(pc, instr_size, "next_instr_addr");
-        self.zero_extend_to(self.context.i64_type(), next_pc)
-    }
-
     pub fn base_plus_offset(&self, instr: &ParsedInstruction, add_name: &str) -> IntValue<'ctx> {
-        // TODO: Dont assume 32-bit mode
         let i16_type = self.context.i16_type();
         let i32_type = self.context.i32_type();
         let i64_type = self.context.i64_type();

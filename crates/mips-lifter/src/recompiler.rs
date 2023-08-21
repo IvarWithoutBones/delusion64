@@ -2,7 +2,7 @@ use crate::{codegen::CodeGen, runtime::RuntimeFunction};
 use inkwell::{basic_block::BasicBlock, values::IntValue, IntPredicate};
 use mips_decomp::{
     instruction::{Mnenomic, ParsedInstruction},
-    register,
+    register, INSTRUCTION_SIZE,
 };
 
 fn stub(codegen: &CodeGen, name: &str) {
@@ -14,22 +14,25 @@ fn stub(codegen: &CodeGen, name: &str) {
 
 /// A helper for various jump instructions (JAL, J) which calculates the target address at runtime.
 /// The 26-bit target is shifted left two bits and combined with the high-order four bits of the address of the delay slot.
-fn jump_address<'ctx>(codegen: &CodeGen<'ctx>, target: u32) -> IntValue<'ctx> {
+fn jump_address<'ctx>(
+    codegen: &CodeGen<'ctx>,
+    addr: IntValue<'ctx>,
+    target: u32,
+) -> IntValue<'ctx> {
     let i64_type = codegen.context.i64_type();
     let delay_slot = {
-        let address = codegen.next_instruction_address();
         let mask = i64_type.const_int(0xFFFF_FFFF_F000_0000, false);
-        codegen.builder.build_and(address, mask, "delay_slot")
+        codegen.builder.build_and(addr, mask, "delay_slot")
     };
-
     let target = i64_type.const_int((target as u64) << 2, false);
-    codegen.builder.build_or(target, delay_slot, "jal_addr")
+    codegen.builder.build_or(target, delay_slot, "jump_addr")
 }
 
 pub fn recompile_instruction<'ctx>(
     codegen: &CodeGen<'ctx>,
     instr: &ParsedInstruction,
     pc: u64,
+    executed_delay_slot: bool,
 ) -> Option<BasicBlock<'ctx>> {
     let mnemonic = instr.mnemonic();
     let i8_type = codegen.context.i8_type();
@@ -37,6 +40,16 @@ pub fn recompile_instruction<'ctx>(
     let i32_type = codegen.context.i32_type();
     let i64_type = codegen.context.i64_type();
     let i128_type = codegen.context.i128_type();
+
+    let next_instruction_address = || {
+        // Delay slots need some extra care when calculating jumps, as we dont want to execute the delay slot instruction twice
+        let offset = i64_type.const_int(
+            INSTRUCTION_SIZE as u64 * (if executed_delay_slot { 2 } else { 1 }),
+            false,
+        );
+        let pc = codegen.read_register(i64_type, register::Special::Pc);
+        codegen.builder.build_int_add(pc, offset, "next_instr_addr")
+    };
 
     match mnemonic {
         Mnenomic::Tltiu => {
@@ -288,21 +301,22 @@ pub fn recompile_instruction<'ctx>(
         Mnenomic::Jalr => {
             // Jump to address stored in rs, stores return address in rd
             let source = codegen.read_general_register(i64_type, instr.rs());
-            let return_addr = codegen.next_instruction_address();
-            codegen.write_general_register(instr.rd(), return_addr);
+            codegen.write_general_register(instr.rd(), next_instruction_address());
             codegen.build_dynamic_jump(source);
         }
 
         Mnenomic::Jal => {
             // Jump to target address, stores return address in r31 (ra)
-            let return_address = codegen.next_instruction_address();
+            let return_address = next_instruction_address();
             codegen.write_general_register(register::GeneralPurpose::Ra, return_address);
-            codegen.call_label_dynamic(jump_address(codegen, instr.immediate()));
+            let addr = jump_address(codegen, next_instruction_address(), instr.immediate());
+            codegen.call_label_dynamic(addr);
         }
 
         Mnenomic::J => {
             // Jump to target address
-            codegen.call_label_dynamic(jump_address(codegen, instr.immediate()));
+            let addr = jump_address(codegen, next_instruction_address(), instr.immediate());
+            codegen.call_label_dynamic(addr);
         }
 
         Mnenomic::Sc => {

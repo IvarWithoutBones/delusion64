@@ -87,11 +87,11 @@ impl<'ctx> LabelWithContext<'ctx> {
                 // This is problematic for an Likely Branch instruction, as should *only* run the delay slot instruction if the branch is taken.
                 // In this case we cannot simply swap the instructions, but instead inject the delay slot instruction prior to the jump to the branch target.
                 if !instr.mnemonic().discards_delay_slot() {
-                    self.compile_instruction(i + 1, next_instr, codegen);
-                    self.compile_instruction(i, instr, codegen);
+                    self.compile_instruction(i + 1, false, next_instr, codegen);
+                    self.compile_instruction(i, true, instr, codegen);
                 } else {
                     // The block taken when the branch was successful.
-                    let then_block = self.compile_instruction(i, instr, codegen).unwrap();
+                    let then_block = self.compile_instruction(i, false, instr, codegen).unwrap();
 
                     // Two instructions that end a block in a row are undefined behavior, just ignore it.
                     if !next_instr.ends_block() {
@@ -99,14 +99,14 @@ impl<'ctx> LabelWithContext<'ctx> {
                         codegen
                             .builder
                             .position_before(&then_block.get_first_instruction().unwrap());
-                        self.compile_instruction(i + 1, next_instr, codegen);
+                        self.compile_instruction(i + 1, false, next_instr, codegen);
                         codegen.builder.position_at_end(current_block);
                     }
                 }
 
                 break;
             } else {
-                self.compile_instruction(i, instr, codegen);
+                self.compile_instruction(i, false, instr, codegen);
                 i += 1;
             }
         }
@@ -132,6 +132,7 @@ impl<'ctx> LabelWithContext<'ctx> {
     fn compile_instruction(
         &self,
         index: usize,
+        executed_delay_slot: bool,
         instr: &ParsedInstruction,
         codegen: &CodeGen<'ctx>,
     ) -> Option<BasicBlock<'ctx>> {
@@ -144,7 +145,7 @@ impl<'ctx> LabelWithContext<'ctx> {
         env_call!(codegen, RuntimeFunction::OnInstruction, []);
 
         // Finally recompile the disassembled instruction.
-        recompile_instruction(codegen, instr, addr)
+        recompile_instruction(codegen, instr, addr, executed_delay_slot)
     }
 }
 
