@@ -20,11 +20,17 @@ mod function;
 mod gdb;
 mod memory;
 
-pub struct Registers {
+pub(crate) struct Registers {
     general_purpose: Pin<Box<[u64; register::GeneralPurpose::count()]>>,
     special: Pin<Box<[u64; register::Special::count()]>>,
     cp0: Pin<Box<[u64; register::Cp0::count()]>>,
     fpu: Pin<Box<[u64; register::Fpu::count()]>>,
+}
+
+impl Registers {
+    pub fn status(&self) -> register::cp0::Status {
+        register::cp0::Status::new(self[register::Cp0::Status] as u32)
+    }
 }
 
 pub struct Environment<'ctx, Mem>
@@ -363,7 +369,7 @@ where
 
     unsafe extern "C" fn panic(&mut self) {
         println!("{:?}", self.registers);
-        panic!("Environment::panic called");
+        self.panic_update_debugger("Environment::panic called");
     }
 
     unsafe extern "C" fn write_tlb_entry(&mut self, index: u64) {

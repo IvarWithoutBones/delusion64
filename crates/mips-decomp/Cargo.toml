@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 strum = { version = "0.25.0", features = ["derive"] }
+tartan-bitfield = "1.2.0"

@@ -1,15 +1,30 @@
 use strum::{EnumCount, EnumVariantNames, FromRepr, VariantNames};
 
-// Generates helper functions/impls that are common to all registers.
-macro_rules! impl_reg {
-    ($enum:ident) => {
-        impl $enum {
-            /// Returns the register at the given index, or panics if the index is out of bounds.
-            /// If you want to handle out of bounds indices, use `from_repr` instead.
-            pub fn new(index: usize) -> Self {
-                Self::from_repr(index as _).unwrap()
+pub mod cp0;
+
+macro_rules! impl_from_and_try_from {
+    ($ty:ident, $($num:ident),+) => {
+        $(
+            impl TryFrom<$num> for $ty {
+                type Error = ();
+
+                fn try_from(v: $num) -> Result<Self, Self::Error> {
+                    Self::from_repr(v as _).ok_or(())
+                }
             }
 
+            impl From<$ty> for $num {
+                fn from(v: $ty) -> Self {
+                    v.to_repr() as _
+                }
+            }
+        )+
+    };
+}
+
+macro_rules! impl_reg {
+    ($ty:ident) => {
+        impl $ty {
             /// Returns the index of the register.
             pub const fn to_repr(self) -> usize {
                 self as usize
@@ -31,95 +46,13 @@ macro_rules! impl_reg {
             }
         }
 
-        impl ::std::fmt::Display for $enum {
+        impl ::std::fmt::Display for $ty {
             fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
                 write!(f, "{}", self.name())
             }
         }
 
-        impl TryFrom<u8> for $enum {
-            type Error = ();
-
-            fn try_from(v: u8) -> Result<Self, Self::Error> {
-                Self::from_repr(v as _).ok_or(())
-            }
-        }
-
-        impl TryFrom<u16> for $enum {
-            type Error = ();
-
-            fn try_from(v: u16) -> Result<Self, Self::Error> {
-                Self::from_repr(v as _).ok_or(())
-            }
-        }
-
-        impl TryFrom<u32> for $enum {
-            type Error = ();
-
-            fn try_from(v: u32) -> Result<Self, Self::Error> {
-                Self::from_repr(v as _).ok_or(())
-            }
-        }
-
-        impl TryFrom<u64> for $enum {
-            type Error = ();
-
-            fn try_from(v: u64) -> Result<Self, Self::Error> {
-                Self::from_repr(v as _).ok_or(())
-            }
-        }
-
-        impl TryFrom<u128> for $enum {
-            type Error = ();
-
-            fn try_from(v: u128) -> Result<Self, Self::Error> {
-                Self::from_repr(v as _).ok_or(())
-            }
-        }
-
-        impl TryFrom<usize> for $enum {
-            type Error = ();
-
-            fn try_from(v: usize) -> Result<Self, Self::Error> {
-                Self::from_repr(v as _).ok_or(())
-            }
-        }
-
-        impl From<$enum> for u8 {
-            fn from(v: $enum) -> Self {
-                v.to_repr() as _
-            }
-        }
-
-        impl From<$enum> for u16 {
-            fn from(v: $enum) -> Self {
-                v.to_repr() as _
-            }
-        }
-
-        impl From<$enum> for u32 {
-            fn from(v: $enum) -> Self {
-                v.to_repr() as _
-            }
-        }
-
-        impl From<$enum> for u64 {
-            fn from(v: $enum) -> Self {
-                v.to_repr() as _
-            }
-        }
-
-        impl From<$enum> for u128 {
-            fn from(v: $enum) -> Self {
-                v.to_repr() as _
-            }
-        }
-
-        impl From<$enum> for usize {
-            fn from(v: $enum) -> Self {
-                v.to_repr()
-            }
-        }
+        impl_from_and_try_from!($ty, u8, u16, u32, u64, u128, usize);
     };
 }
 
@@ -164,27 +97,6 @@ pub enum GeneralPurpose {
 
 impl_reg!(GeneralPurpose);
 
-/// A miscellaneous MIPS 3 register, which does not nicely fit into any other category.
-#[derive(EnumCount, FromRepr, EnumVariantNames, Debug, PartialEq, Eq, Clone, Copy)]
-#[strum(serialize_all = "snake_case")]
-#[repr(u8)]
-pub enum Special {
-    /// The program counter, which is not directly accessible but here for bookkeeping purposes.
-    Pc,
-    /// For the `mult` and `multu` instructions.
-    Hi,
-    /// For the `mult` and `multu` instructions.
-    Lo,
-    /// For the `sc` family of instructions.
-    LoadLink,
-    /// FPU Control/Status Register `FCR31`.
-    FpuControlStatus,
-    /// FPU Implementation/Revision Register `FCR0`.
-    FpuImplementationRevision,
-}
-
-impl_reg!(Special);
-
 /// A MIPS 3 coprocessor 0 register.
 #[derive(EnumCount, FromRepr, EnumVariantNames, Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Cp0 {
@@ -192,9 +104,9 @@ pub enum Cp0 {
     Index,
     /// Pseudorandom pointer into TLB array (read only)
     Random,
-    /// Low half of TLB entry for even virtual address
+    /// Low half of TLB entry for even virtual addresses
     EntryLo0,
-    /// Low half of TLB entry for odd virtual address
+    /// Low half of TLB entry for odd virtual addresses
     EntryLo1,
     /// Pointer to kernel virtual page table entry in 32-bit mode
     Context,
@@ -261,18 +173,6 @@ pub enum Cp0 {
     Reserved31,
 }
 
-impl Cp0 {
-    /// Returns whether the register is reserved for future use, and thus should not be used.
-    pub const fn is_reserved(&self) -> bool {
-        matches!(self, |Self::Reserved7| Self::Reserved21
-            | Self::Reserved22
-            | Self::Reserved23
-            | Self::Reserved24
-            | Self::Reserved25
-            | Self::Reserved31)
-    }
-}
-
 impl_reg!(Cp0);
 
 /// A MIPS 3 FPU (coprocessor 1, or CP1) register.
@@ -314,6 +214,27 @@ pub enum Fpu {
 }
 
 impl_reg!(Fpu);
+
+/// A miscellaneous MIPS 3 register, which does not nicely fit into any other category.
+#[derive(EnumCount, FromRepr, EnumVariantNames, Debug, PartialEq, Eq, Clone, Copy)]
+#[strum(serialize_all = "snake_case")]
+#[repr(u8)]
+pub enum Special {
+    /// The program counter, which is not directly accessible but here for bookkeeping purposes.
+    Pc,
+    /// Used by the `mult` and `multu` instructions.
+    Hi,
+    /// Used by the `mult` and `multu` instructions.
+    Lo,
+    /// A bit used by the `sc` family of instructions.
+    LoadLink,
+    /// FPU Control/Status Register `FCR31`.
+    FpuControlStatus,
+    /// FPU Implementation/Revision Register `FCR0`.
+    FpuImplementationRevision,
+}
+
+impl_reg!(Special);
 
 /// A MIPS 3 register.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

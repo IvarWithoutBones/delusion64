@@ -356,9 +356,11 @@ where
             // Could be much more elegant, but this works fine for now.
             let mut iter = cmd.split_whitespace().peekable();
             match iter.next().unwrap_or("") {
-                "registers" | "regs" | "r" => outputln!(out, "{:?}", self.registers),
+                "registers" | "regs" => outputln!(out, "{:?}", self.registers),
+                "status" => outputln!(out, "{:#?}", self.registers.status()),
+                "dump-tlb" => outputln!(out, "{:#x?}", self.tlb),
 
-                "physical_address" | "paddr" => {
+                "physical-address" | "paddr" => {
                     let vaddr = str_to_u64(
                         iter.next()
                             .ok_or_else(|| outputln!(out, "expected virtual address"))?,

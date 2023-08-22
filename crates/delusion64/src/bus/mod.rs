@@ -66,13 +66,12 @@ impl Bus {
                 Err(BusError::ReadOnlyRegionWrite(region))
             }
 
-            _ => {
-                if region.safe_to_stub() {
-                    Ok(())
-                } else {
-                    Err(BusError::Unimplemented)
-                }
-            }
+            _ => region
+                .safe_to_stub()
+                .then(|| {
+                    eprintln!("STUB: memory write of {value:#x?} at {location:#x?}");
+                })
+                .ok_or(BusError::Unimplemented),
         }
     }
 
@@ -97,13 +96,13 @@ impl Bus {
 
             MemoryRegion::RdramRegistersWriteOnly => Err(BusError::WriteOnlyRegionRead(region)),
 
-            _ => {
-                if region.safe_to_stub() {
-                    Ok(ty.zero())
-                } else {
-                    Err(BusError::Unimplemented)
-                }
-            }
+            _ => region
+                .safe_to_stub()
+                .then(|| {
+                    eprintln!("STUB: memory read of {ty:?} at {location:#x?}");
+                    ty.zero()
+                })
+                .ok_or(BusError::Unimplemented),
         }
     }
 }

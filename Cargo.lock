@@ -353,6 +353,7 @@ name = "mips-decomp"
 version = "0.1.0"
 dependencies = [
  "strum",
+ "tartan-bitfield",
 ]
 
 [[package]]
