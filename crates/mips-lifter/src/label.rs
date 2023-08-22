@@ -176,7 +176,7 @@ pub fn generate_label_functions<'ctx>(
                     label = next_label;
                     instr = Some(label.instructions[0].clone());
                 } else {
-                    println!("warning: delay slot into invalid label");
+                    panic!("delay slot into non-existent label");
                 }
             }
 

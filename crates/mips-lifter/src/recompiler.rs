@@ -1415,7 +1415,9 @@ pub fn recompile_instruction<'ctx>(
             return Some(then_block);
         }
 
-        _ => todo!("instruction {} at {pc:#x}", instr.mnemonic().name()),
+        _ => {
+            stub(codegen, instr.mnemonic().name());
+        }
     };
 
     None

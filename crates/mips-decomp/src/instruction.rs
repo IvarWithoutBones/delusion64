@@ -206,37 +206,6 @@ impl Mnenomic {
         )
     }
 
-    pub const fn is_fpu_instruction(&self) -> bool {
-        matches!(
-            self,
-            Self::AbsFmt
-                | Self::AddFmt
-                | Self::Bc1f
-                | Self::Bc1fl
-                | Self::Bc1t
-                | Self::Bc1tl
-                | Self::CCondFmtFs
-                | Self::CeilLFmt
-                | Self::CeilWFmt
-                | Self::CvtDFmt
-                | Self::CvtLFmt
-                | Self::CvtSFmt
-                | Self::CvtWFmt
-                | Self::DivFmt
-                | Self::FloorLFmt
-                | Self::FloorWFmt
-                | Self::MovFmt
-                | Self::MulFmt
-                | Self::NegFmt
-                | Self::RoundLFmt
-                | Self::RoundWFmt
-                | Self::SqrtFmt
-                | Self::SubFmt
-                | Self::TruncLFmt
-                | Self::TruncWFmt
-        )
-    }
-
     pub const fn is_branch(&self) -> bool {
         matches!(
             self,
@@ -297,7 +266,7 @@ impl Mnenomic {
     }
 
     pub const fn has_delay_slot(&self) -> bool {
-        self.ends_block()
+        self.ends_block() && !matches!(self, Mnenomic::Break | Mnenomic::Eret)
     }
 
     pub const fn name(&self) -> &'static str {
