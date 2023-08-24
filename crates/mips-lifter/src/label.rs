@@ -122,7 +122,7 @@ impl<'ctx> LabelWithContext<'ctx> {
                 codegen.call_function(fallthrough_fn);
             } else {
                 let str = format!("ERROR: label {:#x} attempted to execute fallthrough block without one existing!\n", self.label.start() * 4);
-                codegen.print_constant_string(&str, "error_no_fallthrough");
+                codegen.print_string(&str, "error_no_fallthrough");
                 env_call!(codegen, RuntimeFunction::Panic, []);
                 codegen.builder.build_unreachable();
             }

@@ -8,7 +8,7 @@ use mips_decomp::{
 fn stub(codegen: &CodeGen, name: &str) {
     let output = format!("STUB: {name} instruction not executed");
     let storage_name = format!("{name}_stub");
-    codegen.print_constant_string(&output, &storage_name);
+    codegen.print_string(&output, &storage_name);
     env_call!(codegen, RuntimeFunction::Panic, []);
 }
 
@@ -35,6 +35,7 @@ pub fn recompile_instruction<'ctx>(
     executed_delay_slot: bool,
 ) -> Option<BasicBlock<'ctx>> {
     let mnemonic = instr.mnemonic();
+    let bool_type = codegen.context.bool_type();
     let i8_type = codegen.context.i8_type();
     let i16_type = codegen.context.i16_type();
     let i32_type = codegen.context.i32_type();
@@ -310,82 +311,47 @@ pub fn recompile_instruction<'ctx>(
             let return_address = next_instruction_address();
             codegen.write_general_register(register::GeneralPurpose::Ra, return_address);
             let addr = jump_address(codegen, next_instruction_address(), instr.immediate());
-            codegen.call_label_dynamic(addr);
+            codegen.build_dynamic_jump(addr);
         }
 
         Mnenomic::J => {
             // Jump to target address
             let addr = jump_address(codegen, next_instruction_address(), instr.immediate());
-            codegen.call_label_dynamic(addr);
+            codegen.build_dynamic_jump(addr);
         }
 
         Mnenomic::Sc => {
             // If LL bit is set, stores contents of rt, to memory address (base + offset), truncated to 32-bits
-            let ll_bit = codegen.read_register(i64_type, register::Special::LoadLink);
-            let cond = codegen.builder.build_int_compare(
+            let ll_bit = codegen.read_register(bool_type, register::Special::LoadLink);
+            let cmp = codegen.builder.build_int_compare(
                 IntPredicate::EQ,
                 ll_bit,
-                i32_type.const_int(1, false),
-                "sc_cond",
+                bool_type.const_int(1, false),
+                "sc_cmp",
             );
 
-            let current_fn = codegen
-                .builder
-                .get_insert_block()
-                .unwrap()
-                .get_parent()
-                .unwrap();
-            let then_block = codegen.context.append_basic_block(current_fn, "sc_write");
-            let next_block = codegen.context.append_basic_block(current_fn, "sc_done");
-
-            codegen
-                .builder
-                .build_conditional_branch(cond, then_block, next_block);
-
-            codegen.builder.position_at_end(then_block);
-            {
+            codegen.build_if("sc_ll_set", cmp, || {
                 let addr = codegen.base_plus_offset(instr, "sc_addr");
                 let value = codegen.read_general_register(i32_type, instr.rt());
                 codegen.write_memory(addr, value);
-                codegen.builder.build_unconditional_branch(next_block);
-            }
-
-            codegen.builder.position_at_end(next_block);
+            });
         }
 
         Mnenomic::Scd => {
             // If LL bit is set, stores contents of rt, to memory address (base + offset)
-            let ll_bit = codegen.read_register(i64_type, register::Special::LoadLink);
-            let cond = codegen.builder.build_int_compare(
+            let ll_bit = codegen.read_register(bool_type, register::Special::LoadLink);
+            let cmp = codegen.builder.build_int_compare(
                 IntPredicate::EQ,
                 ll_bit,
-                i32_type.const_int(1, false),
-                "scd_cond",
+                bool_type.const_int(1, false),
+                "scd_cmp",
             );
 
-            let current_fn = codegen
-                .builder
-                .get_insert_block()
-                .unwrap()
-                .get_parent()
-                .unwrap();
-            let then_block = codegen.context.append_basic_block(current_fn, "scd_write");
-            let next_block = codegen.context.append_basic_block(current_fn, "scd_done");
-
-            codegen
-                .builder
-                .build_conditional_branch(cond, then_block, next_block);
-
-            codegen.builder.position_at_end(then_block);
-            {
+            codegen.build_if("scd_ll_set", cmp, || {
                 let addr = codegen.base_plus_offset(instr, "scd_addr");
                 let value = codegen.read_general_register(i64_type, instr.rt());
                 codegen.write_memory(addr, value);
-                codegen.builder.build_unconditional_branch(next_block);
-            }
-
-            codegen.builder.position_at_end(next_block);
-            // Fall through
+            });
         }
 
         Mnenomic::Ll => {
@@ -394,9 +360,7 @@ pub fn recompile_instruction<'ctx>(
             let value = codegen.read_memory(i32_type, addr);
             let sign_extended = codegen.sign_extend_to(i64_type, value);
             codegen.write_general_register(instr.rt(), sign_extended);
-
-            let one = i64_type.const_int(1, false);
-            codegen.write_register(register::Special::LoadLink, one);
+            codegen.write_register(register::Special::LoadLink, bool_type.const_int(1, false));
         }
 
         Mnenomic::And => {
@@ -1273,9 +1237,9 @@ pub fn recompile_instruction<'ctx>(
                     .builder
                     .build_int_compare(IntPredicate::SGE, source, zero, "bgezal_cmp");
 
-            let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            let then_block = codegen.build_conditional_branch(cmp, target_pc);
-            return Some(then_block);
+            let next = next_instruction_address();
+            let target = instr.try_resolve_static_jump(pc).unwrap();
+            return Some(codegen.build_conditional_branch_set_ra(cmp, target, next));
         }
 
         Mnenomic::Bgezall => {
@@ -1287,9 +1251,9 @@ pub fn recompile_instruction<'ctx>(
                     .builder
                     .build_int_compare(IntPredicate::SGE, source, zero, "bgezall_cmp");
 
-            let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            let then_block = codegen.build_conditional_branch(cmp, target_pc);
-            return Some(then_block);
+            let next = next_instruction_address();
+            let target = instr.try_resolve_static_jump(pc).unwrap();
+            return Some(codegen.build_conditional_branch_set_ra(cmp, target, next));
         }
 
         Mnenomic::Bltzal => {
@@ -1301,9 +1265,9 @@ pub fn recompile_instruction<'ctx>(
                     .builder
                     .build_int_compare(IntPredicate::SLT, source, zero, "bltzal_cmp");
 
-            let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            let then_block = codegen.build_conditional_branch(cmp, target_pc);
-            return Some(then_block);
+            let next = next_instruction_address();
+            let target = instr.try_resolve_static_jump(pc).unwrap();
+            return Some(codegen.build_conditional_branch_set_ra(cmp, target, next));
         }
 
         Mnenomic::Bltzall => {
@@ -1315,9 +1279,9 @@ pub fn recompile_instruction<'ctx>(
                     .builder
                     .build_int_compare(IntPredicate::SLT, source, zero, "bltzal_cmp");
 
-            let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            let then_block = codegen.build_conditional_branch(cmp, target_pc);
-            return Some(then_block);
+            let next = next_instruction_address();
+            let target = instr.try_resolve_static_jump(pc).unwrap();
+            return Some(codegen.build_conditional_branch_set_ra(cmp, target, next));
         }
 
         Mnenomic::Bnel => {
@@ -1415,9 +1379,7 @@ pub fn recompile_instruction<'ctx>(
             return Some(then_block);
         }
 
-        _ => {
-            stub(codegen, instr.mnemonic().name());
-        }
+        _ => stub(codegen, instr.mnemonic().name()),
     };
 
     None

@@ -368,7 +368,6 @@ where
     }
 
     unsafe extern "C" fn panic(&mut self) {
-        println!("{:?}", self.registers);
         self.panic_update_debugger("Environment::panic called");
     }
 

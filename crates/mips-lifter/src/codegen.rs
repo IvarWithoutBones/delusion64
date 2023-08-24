@@ -4,13 +4,11 @@ use inkwell::{
     basic_block::BasicBlock,
     builder::Builder,
     context::Context,
-    execution_engine::{ExecutionEngine, JitFunction, UnsafeFunctionPointer},
+    execution_engine::ExecutionEngine,
     intrinsics::Intrinsic,
     module::Module,
     types::IntType,
-    values::{
-        BasicMetadataValueEnum, CallSiteValue, FunctionValue, GlobalValue, IntValue, PointerValue,
-    },
+    values::{CallSiteValue, FunctionValue, GlobalValue, IntValue, PointerValue},
     IntPredicate,
 };
 use mips_decomp::{
@@ -22,25 +20,24 @@ use mips_decomp::{
 #[macro_export]
 macro_rules! env_call {
     ($codegen:expr, $func:expr, [$($args:expr),*]) => {{
-        let args = &[$codegen.globals.env_ptr.as_pointer_value().into(), $($args.into()),*];
-        $codegen.build_call($func.name(), args)
+        // Type-check the arguments.
+        let codegen: &CodeGen = $codegen;
+        let func: &RuntimeFunction = &$func;
+        let args = &[codegen.globals.env_ptr.as_pointer_value().into(), $($args.into()),*];
+        let func = codegen.module.get_function(func.name()).unwrap();
+        codegen.builder.build_call(func, args, "env_call")
     }};
 }
 
-// TODO: replace this with `LazyCell` once its stabilized, see:
-// https://github.com/rust-lang/rust/issues/109736
-pub fn function_attributes(context: &Context) -> Vec<Attribute> {
-    // TODO: would `naked` make sense to skip the prologue/epilogue?
-    // `nounwind` here makes panics look a bit funky, but its proobably fine.
-    const ATTRIBUTE_NAMES: &[&str] = &["noreturn", "nounwind", "nosync", "nofree", "nocf_check"];
-
-    let mut attributes = Vec::new();
-    for attr_name in ATTRIBUTE_NAMES {
-        let kind_id = Attribute::get_named_enum_kind_id(attr_name);
-        let attr = context.create_enum_attribute(kind_id, 0);
-        attributes.push(attr);
+const ATTRIBUTE_NAMES: &[&str] = &["noreturn", "nounwind", "nosync", "nofree", "nocf_check"];
+pub fn function_attributes(context: &Context) -> [Attribute; ATTRIBUTE_NAMES.len()] {
+    let mut attributes = [None; ATTRIBUTE_NAMES.len()];
+    for (attr, name) in attributes.iter_mut().zip(ATTRIBUTE_NAMES.iter()) {
+        let kind_id = Attribute::get_named_enum_kind_id(name);
+        *attr = Some(context.create_enum_attribute(kind_id, 0));
     }
-    attributes
+    // SAFETY: We have initialized all the attributes.
+    attributes.map(|a| unsafe { a.unwrap_unchecked() })
 }
 
 #[derive(Debug)]
@@ -67,9 +64,6 @@ pub struct CodeGen<'ctx> {
 
     /// The generated labels, with associated functions.
     pub labels: Vec<LabelWithContext<'ctx>>,
-
-    /// The function to jump to when a dynamic jump could not be resolved.
-    pub label_not_found: FunctionValue<'ctx>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -80,38 +74,14 @@ impl<'ctx> CodeGen<'ctx> {
         globals: Globals<'ctx>,
         labels: Vec<LabelWithContext<'ctx>>,
     ) -> Self {
-        let builder = context.create_builder();
-
-        let label_not_found = module.add_function(
-            "label_not_found",
-            context.void_type().fn_type(&[], false),
-            None,
-        );
-        label_not_found.set_call_conventions(LLVM_CALLING_CONVENTION_FAST);
-
-        let codegen = Self {
+        Self {
             context,
             module,
-            builder,
+            builder: context.create_builder(),
             execution_engine,
             globals,
             labels,
-            label_not_found,
-        };
-
-        codegen.init_label_not_found();
-        codegen
-    }
-
-    /// Initializes the error case that occurs when attempting to jump to a label that wasn't found.
-    fn init_label_not_found(&self) {
-        let label_not_found_block = self
-            .context
-            .append_basic_block(self.label_not_found, "label_not_found");
-        self.builder.position_at_end(label_not_found_block);
-        self.print_constant_string("ERROR: unable to fetch label\n", "label_not_found_str");
-        env_call!(self, RuntimeFunction::Panic, []);
-        self.builder.build_return(None);
+        }
     }
 
     /// Saves the host stack frame to a global pointer, so that it can be restored later.
@@ -192,62 +162,72 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(lab)
     }
 
-    fn set_call_attrs(&self, callsite_value: CallSiteValue<'ctx>) {
+    fn set_call_attrs(&self, callsite_value: CallSiteValue<'ctx>) -> CallSiteValue<'ctx> {
         callsite_value.set_tail_call(true);
         callsite_value.set_call_convention(LLVM_CALLING_CONVENTION_FAST);
-
         for attr in function_attributes(self.context) {
             callsite_value.add_attribute(AttributeLoc::Function, attr);
         }
+        callsite_value
     }
 
-    /// Generate a dynamic jump to the given virtual address, ending the current basic block.
-    pub fn call_label_dynamic(&self, address: IntValue<'ctx>) -> CallSiteValue<'ctx> {
+    fn append_basic_block(&self, name: &str) -> BasicBlock<'ctx> {
+        let current_func = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_parent()
+            .unwrap();
+        self.context.append_basic_block(current_func, name)
+    }
+
+    fn current_block_terminated(&self) -> bool {
+        self.builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_some()
+    }
+
+    fn build_jump(&self, address: IntValue<'ctx>) -> CallSiteValue<'ctx> {
         let fn_ty = self.context.void_type().fn_type(&[], false);
         let ptr_ty = fn_ty.ptr_type(Default::default());
 
         // Get a pointer to the host function at the given guest pointer, or JIT compile it if its not yet generated.
-        let func_ptr_callsite = env_call!(self, RuntimeFunction::GetFunctionPtr, [address]);
-        self.set_call_attrs(func_ptr_callsite);
-
-        let raw_ptr = func_ptr_callsite
+        let raw_ptr = env_call!(self, RuntimeFunction::GetFunctionPtr, [address])
             .try_as_basic_value()
             .left()
             .unwrap()
             .into_int_value();
 
         // Build an indirect call to the function pointer.
-        let ptr = self.builder.build_int_to_ptr(raw_ptr, ptr_ty, "fn_ptr");
-        self.builder
-            .build_indirect_call(fn_ty, ptr, &[], "call_fn_ptr")
+        let casted_ptr = self.builder.build_int_to_ptr(raw_ptr, ptr_ty, "fn_ptr");
+        self.set_call_attrs(
+            self.builder
+                .build_indirect_call(fn_ty, casted_ptr, &[], "call_fn_ptr"),
+        )
     }
 
-    /// Generate a jump to the given virtual address, ending the current basic block.
-    /// If the label at the given address has already been compiled, it will be called directly.
-    /// Otherwise, it will be JIT compiled and indirectly called.
-    pub fn build_jump(&self, address: u64) {
-        let callsite_value = if let Some(lab) = self
+    /// Generate a dynamic jump to the given dynamic virtual address, ending the current basic block.
+    pub fn build_dynamic_jump(&self, address: IntValue<'ctx>) {
+        self.build_jump(self.zero_extend_to(self.context.i64_type(), address));
+        self.builder.build_unreachable();
+    }
+
+    /// Generate a jump to the given constant virtual address, ending the current basic block.
+    pub fn build_constant_jump(&self, address: u64) {
+        if let Some(lab) = self
             .labels
             .iter()
             .find(|l| l.label.start() == (address as usize / INSTRUCTION_SIZE))
         {
-            self.builder.build_call(lab.function, &[], "call_fn")
+            // Check if we have previously compiled this function.
+            self.set_call_attrs(self.builder.build_call(lab.function, &[], "constant_jump"));
+            self.builder.build_unreachable();
         } else {
-            let addr = self.context.i64_type().const_int(address, false);
-            self.call_label_dynamic(addr)
+            // Let the runtime environment JIT it, then jump to it.
+            self.build_dynamic_jump(self.context.i64_type().const_int(address, false));
         };
-
-        self.set_call_attrs(callsite_value);
-        self.builder.build_unreachable();
-    }
-
-    /// Generate a dynamic jump to the given virtual address, ending the current basic block.
-    /// If the label at the given address has already been compiled, it will be called directly.
-    /// Otherwise, it will be JIT compiled and indirectly called.
-    pub fn build_dynamic_jump(&self, address: IntValue<'ctx>) {
-        let address = self.zero_extend_to(self.context.i64_type(), address);
-        self.set_call_attrs(self.call_label_dynamic(address));
-        self.builder.build_unreachable();
     }
 
     pub fn call_function(&self, func: FunctionValue<'ctx>) {
@@ -255,23 +235,7 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.build_unreachable();
     }
 
-    pub fn get_function<F>(&self, name: &str) -> Option<JitFunction<F>>
-    where
-        F: UnsafeFunctionPointer,
-    {
-        unsafe { self.execution_engine.get_function(name).ok() }
-    }
-
-    pub fn build_call(
-        &self,
-        name: &str,
-        args: &[BasicMetadataValueEnum<'ctx>],
-    ) -> CallSiteValue<'ctx> {
-        self.builder
-            .build_call(self.module.get_function(name).unwrap(), args, name)
-    }
-
-    pub fn print_constant_string(&self, string: &str, storage_name: &str) {
+    pub fn print_string(&self, string: &str, storage_name: &str) {
         let ptr = self
             .builder
             .build_global_string_ptr(string, storage_name)
@@ -294,100 +258,81 @@ impl<'ctx> CodeGen<'ctx> {
         )
     }
 
-    /// Generate a basic block that calls the given function, then falls through to the next block.
-    /// Returns the newly created block.
-    pub fn build_fall_through_block<F>(
+    /// If the comparison is true, execute the function generated within the given closure, otherwise skip it.
+    /// When the true block does not already have a terminator, a jump to the false block is generated.
+    /// This positions the builder at the false case. The true case is returned.
+    pub fn build_if(
         &self,
         name: &str,
-        next_block: BasicBlock<'ctx>,
-        inside: F,
-    ) -> BasicBlock<'ctx>
-    where
-        F: FnOnce(),
-    {
-        // Create a new block to call the function in.
-        let curr_block = self.builder.get_insert_block().unwrap();
-        let new_block = self
-            .context
-            .append_basic_block(curr_block.get_parent().unwrap(), name);
-
-        self.builder.position_at_end(new_block);
-        inside();
-        self.builder.build_unconditional_branch(next_block);
-        self.builder.position_at_end(curr_block);
-        new_block
-    }
-
-    /// Generate a conditional branch to the given address, and sets the return address to the next instruction.
-    /// Sets the current insert block to the case the comparison is false, to support fallthrough.
-    pub fn build_conditional_branch_set_ra(
-        &self,
         cmp: IntValue<'ctx>,
-        target_pc: u64,
-        instr: &ParsedInstruction,
-    ) {
-        let i64_type = self.context.i64_type();
-        let curr_block = self.builder.get_insert_block().unwrap();
-        let curr_fn = curr_block.get_parent().unwrap();
-        let curr_name = curr_block.get_name().to_str().unwrap().to_string();
-
-        let then_block = {
-            let then_name = format!("{curr_name}_cond_branch_then");
-            self.context.append_basic_block(curr_fn, &then_name)
-        };
-        let else_block = {
-            let else_name = format!("{curr_name}_cond_branch_else");
-            self.context.append_basic_block(curr_fn, &else_name)
-        };
-
+        then: impl FnOnce(),
+    ) -> BasicBlock<'ctx> {
+        let (then_block, else_block) = (
+            self.append_basic_block(&format!("{name}_then")),
+            self.append_basic_block(&format!("{name}_else")),
+        );
         self.builder
             .build_conditional_branch(cmp, then_block, else_block);
 
         self.builder.position_at_end(then_block);
-        {
-            let next_instr_pc = {
-                let offset = {
-                    let value =
-                        (if instr.discards_delay_slot() { 2 } else { 1 }) * INSTRUCTION_SIZE;
-                    i64_type.const_int(value as u64, false)
-                };
-
-                let pc = self.read_register(i64_type, register::Special::Pc);
-                self.builder.build_int_add(pc, offset, "next_instr_pc")
-            };
-
-            self.write_general_register(register::GeneralPurpose::Ra, next_instr_pc);
-            self.build_jump(target_pc);
+        then();
+        if !self.current_block_terminated() {
+            self.builder.build_unconditional_branch(else_block);
         }
 
         self.builder.position_at_end(else_block);
+        then_block
     }
 
-    /// Generate a conditional branch to the given address, ending the current basic block.
-    /// Sets the current insert block to the case the comparison is false, to support fallthrough.
+    /// If the comparison is true, execute the first function generated within the given closure,
+    /// otherwise the second. If either block does not already have a terminator, a jump to a merge block is generated.
+    /// This positions the builder at the merge block. The true and false cases are returned, in order.
+    pub fn build_if_else(
+        &self,
+        name: &str,
+        cmp: IntValue<'ctx>,
+        then: impl FnOnce(),
+        otherwise: impl FnOnce(),
+    ) -> (BasicBlock<'ctx>, BasicBlock<'ctx>) {
+        let merge_block = self.append_basic_block(&format!("{name}_merge"));
+        let then_block = self.build_if(name, cmp, || {
+            then();
+            if !self.current_block_terminated() {
+                self.builder.build_unconditional_branch(merge_block);
+            }
+        });
+
+        // `build_if` leaves us positioned at the false block, so we can just call `otherwise`.
+        let else_block = self.builder.get_insert_block().unwrap();
+        otherwise();
+        if !self.current_block_terminated() {
+            self.builder.build_unconditional_branch(merge_block);
+        }
+
+        self.builder.position_at_end(merge_block);
+        (then_block, else_block)
+    }
+
+    pub fn build_conditional_branch_set_ra(
+        &self,
+        cmp: IntValue<'ctx>,
+        target_pc: u64,
+        next_instr_pc: IntValue<'ctx>,
+    ) -> BasicBlock<'ctx> {
+        self.build_if("conditional_branch_set_ra", cmp, || {
+            self.write_register(register::GeneralPurpose::Ra, next_instr_pc);
+            self.build_constant_jump(target_pc);
+        })
+    }
+
     pub fn build_conditional_branch(
         &self,
         cmp: IntValue<'ctx>,
         target_pc: u64,
     ) -> BasicBlock<'ctx> {
-        let curr_block = self.builder.get_insert_block().unwrap();
-        let curr_fn = curr_block.get_parent().unwrap();
-        let curr_name = curr_block.get_name().to_str().unwrap().to_string();
-
-        let then_name = format!("{curr_name}_cond_branch_then");
-        let then_block = self.context.append_basic_block(curr_fn, &then_name);
-        let else_name = format!("{curr_name}_cond_branch_else");
-        let else_block = self.context.append_basic_block(curr_fn, &else_name);
-
-        self.builder
-            .build_conditional_branch(cmp, then_block, else_block);
-
-        self.builder.position_at_end(then_block);
-        self.build_jump(target_pc);
-
-        self.builder.position_at_end(else_block);
-
-        then_block
+        self.build_if("conditional_branch", cmp, || {
+            self.build_constant_jump(target_pc);
+        })
     }
 
     /// Sign-extends the given value to the given type.
