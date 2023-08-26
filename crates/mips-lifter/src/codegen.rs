@@ -41,15 +41,25 @@ pub fn function_attributes(context: &Context) -> [Attribute; ATTRIBUTE_NAMES.len
 }
 
 #[derive(Debug)]
+pub struct RegisterGlobals<'ctx> {
+    pub general_purpose: GlobalValue<'ctx>,
+    pub cp0: GlobalValue<'ctx>,
+    pub fpu: GlobalValue<'ctx>,
+    pub special: GlobalValue<'ctx>,
+}
+
+#[derive(Debug)]
 pub struct Globals<'ctx> {
     // NOTE: The backing memory must be externally managed, so that the pointer remains valid across module reloads.
-    pub stack_frame: (GlobalValue<'ctx>, Box<u64>),
+    pub stack_frame: (GlobalValue<'ctx>, *mut u64),
     pub env_ptr: GlobalValue<'ctx>,
+    pub registers: RegisterGlobals<'ctx>,
+}
 
-    pub general_purpose_regs: GlobalValue<'ctx>,
-    pub special_regs: GlobalValue<'ctx>,
-    pub cp0_regs: GlobalValue<'ctx>,
-    pub fpu_regs: GlobalValue<'ctx>,
+#[derive(Debug)]
+pub enum FallthroughAmount {
+    One,
+    Two,
 }
 
 #[derive(Debug)]
@@ -61,9 +71,13 @@ pub struct CodeGen<'ctx> {
 
     /// Global mappings to the runtime environment.
     pub globals: Globals<'ctx>,
-
     /// The generated labels, with associated functions.
     pub labels: Vec<LabelWithContext<'ctx>>,
+
+    jump_helper: Option<FunctionValue<'ctx>>,
+    // Separate functions so that we can patch calls to them at runtime without worrying about arguments.
+    fallthrough_one_helper: Option<FunctionValue<'ctx>>,
+    fallthrough_two_helper: Option<FunctionValue<'ctx>>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -72,7 +86,6 @@ impl<'ctx> CodeGen<'ctx> {
         module: Module<'ctx>,
         execution_engine: ExecutionEngine<'ctx>,
         globals: Globals<'ctx>,
-        labels: Vec<LabelWithContext<'ctx>>,
     ) -> Self {
         Self {
             context,
@@ -80,7 +93,90 @@ impl<'ctx> CodeGen<'ctx> {
             builder: context.create_builder(),
             execution_engine,
             globals,
-            labels,
+            labels: Vec::new(),
+            jump_helper: None,
+            fallthrough_one_helper: None,
+            fallthrough_two_helper: None,
+        }
+        .with_jump_helper()
+        .with_fallthrough_helpers()
+    }
+
+    fn with_jump_helper(mut self) -> Self {
+        let i64_type = self.context.i64_type();
+        let void_type = self.context.void_type();
+
+        // Generate the function signature
+        let func = self.set_func_attrs(self.module.add_function(
+            "jump_to_vaddr",
+            void_type.fn_type(&[i64_type.into()], false),
+            None,
+        ));
+
+        // Generate the function body.
+        let block = self.context.append_basic_block(func, "entry");
+        self.builder.position_at_end(block);
+        {
+            unsafe { self.restore_host_stack() } // Hack to avoid stack overflows
+
+            let address = func.get_first_param().unwrap().into_int_value();
+            let func_type = void_type.fn_type(&[], false);
+            let ptr_type = func_type.ptr_type(Default::default());
+
+            let ptr = {
+                let raw = env_call!(&self, RuntimeFunction::GetFunctionPtr, [address])
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_int_value();
+                self.builder.build_int_to_ptr(raw, ptr_type, "jump_fn_ptr")
+            };
+
+            self.set_call_attrs(self.builder.build_indirect_call(
+                func_type,
+                ptr,
+                &[],
+                "jump_fn_call",
+            ));
+            self.builder.build_unreachable(); // The function should never return.
+        }
+
+        self.jump_helper = Some(func);
+        self
+    }
+
+    fn with_fallthrough_helpers(mut self) -> Self {
+        let make_func = |codegen: &Self, amount: u64, name: &str| -> FunctionValue<'ctx> {
+            // Generate the function declaration.
+            let func = codegen.set_func_attrs(codegen.module.add_function(
+                name,
+                codegen.context.void_type().fn_type(&[], false),
+                None,
+            ));
+
+            // Generate the function body.
+            let block = codegen.context.append_basic_block(func, "entry");
+            codegen.builder.position_at_end(block);
+            {
+                let i64_type = codegen.context.i64_type();
+                let pc = codegen.read_register(i64_type, register::Special::Pc);
+                let offset = i64_type.const_int(amount * INSTRUCTION_SIZE as u64, false);
+                let new_pc = codegen.builder.build_int_add(pc, offset, "new_pc");
+                codegen.build_dynamic_jump(new_pc);
+            }
+
+            func
+        };
+
+        self.fallthrough_one_helper = Some(make_func(&self, 1, "fallthrough_one_instruction"));
+        self.fallthrough_two_helper = Some(make_func(&self, 2, "fallthrough_two_instructions"));
+        self
+    }
+
+    pub fn fallthrough_function(&self, amount: FallthroughAmount) -> FunctionValue<'ctx> {
+        match amount {
+            FallthroughAmount::One => self.fallthrough_one_helper.unwrap(),
+            FallthroughAmount::Two => self.fallthrough_two_helper.unwrap(),
         }
     }
 
@@ -158,7 +254,6 @@ impl<'ctx> CodeGen<'ctx> {
         // Now that we have linked the function into our existing module, the function pointer has been invalidated.
         let func = self.module.get_last_function().unwrap();
         lab.function = func;
-
         Ok(lab)
     }
 
@@ -169,6 +264,14 @@ impl<'ctx> CodeGen<'ctx> {
             callsite_value.add_attribute(AttributeLoc::Function, attr);
         }
         callsite_value
+    }
+
+    fn set_func_attrs(&self, func: FunctionValue<'ctx>) -> FunctionValue<'ctx> {
+        func.set_call_conventions(LLVM_CALLING_CONVENTION_FAST);
+        for attr in function_attributes(self.context) {
+            func.add_attribute(AttributeLoc::Function, attr);
+        }
+        func
     }
 
     fn append_basic_block(&self, name: &str) -> BasicBlock<'ctx> {
@@ -189,29 +292,18 @@ impl<'ctx> CodeGen<'ctx> {
             .is_some()
     }
 
-    fn build_jump(&self, address: IntValue<'ctx>) -> CallSiteValue<'ctx> {
-        let fn_ty = self.context.void_type().fn_type(&[], false);
-        let ptr_ty = fn_ty.ptr_type(Default::default());
-
-        // Get a pointer to the host function at the given guest pointer, or JIT compile it if its not yet generated.
-        let raw_ptr = env_call!(self, RuntimeFunction::GetFunctionPtr, [address])
-            .try_as_basic_value()
-            .left()
-            .unwrap()
-            .into_int_value();
-
-        // Build an indirect call to the function pointer.
-        let casted_ptr = self.builder.build_int_to_ptr(raw_ptr, ptr_ty, "fn_ptr");
-        self.set_call_attrs(
-            self.builder
-                .build_indirect_call(fn_ty, casted_ptr, &[], "call_fn_ptr"),
-        )
+    fn build_jump(&self, address: IntValue<'ctx>) {
+        self.set_call_attrs(self.builder.build_call(
+            self.jump_helper.unwrap(),
+            &[address.into()],
+            "build_jump",
+        ));
+        self.builder.build_unreachable();
     }
 
     /// Generate a dynamic jump to the given dynamic virtual address, ending the current basic block.
     pub fn build_dynamic_jump(&self, address: IntValue<'ctx>) {
         self.build_jump(self.zero_extend_to(self.context.i64_type(), address));
-        self.builder.build_unreachable();
     }
 
     /// Generate a jump to the given constant virtual address, ending the current basic block.
@@ -223,7 +315,6 @@ impl<'ctx> CodeGen<'ctx> {
         {
             // Check if we have previously compiled this function.
             self.set_call_attrs(self.builder.build_call(lab.function, &[], "constant_jump"));
-            self.builder.build_unreachable();
         } else {
             // Let the runtime environment JIT it, then jump to it.
             self.build_dynamic_jump(self.context.i64_type().const_int(address, false));
@@ -373,10 +464,12 @@ impl<'ctx> CodeGen<'ctx> {
         let i64_type = self.context.i64_type();
 
         let base_ptr = match reg {
-            Register::GeneralPurpose(_) => self.globals.general_purpose_regs.as_pointer_value(),
-            Register::Special(_) => self.globals.special_regs.as_pointer_value(),
-            Register::Cp0(_) => self.globals.cp0_regs.as_pointer_value(),
-            Register::Fpu(_) => self.globals.fpu_regs.as_pointer_value(),
+            Register::GeneralPurpose(_) => {
+                self.globals.registers.general_purpose.as_pointer_value()
+            }
+            Register::Special(_) => self.globals.registers.special.as_pointer_value(),
+            Register::Cp0(_) => self.globals.registers.cp0.as_pointer_value(),
+            Register::Fpu(_) => self.globals.registers.fpu.as_pointer_value(),
         };
 
         unsafe {

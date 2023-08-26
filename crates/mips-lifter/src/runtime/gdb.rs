@@ -267,10 +267,10 @@ where
         regs.cp0.status = self.registers[register::Cp0::Status] as _;
         regs.cp0.badvaddr = self.registers[register::Cp0::BadVAddr] as _;
         for (i, r) in regs.r.iter_mut().enumerate() {
-            *r = self.registers.general_purpose[i] as _;
+            *r = self.registers[register::GeneralPurpose::try_from(i).unwrap()] as _;
         }
         for (i, r) in regs.fpu.r.iter_mut().enumerate() {
-            *r = self.registers.fpu[i] as _;
+            *r = self.registers[register::Fpu::try_from(i).unwrap()] as _;
         }
 
         Ok(())
@@ -291,10 +291,10 @@ where
         self.registers[register::Cp0::Status] = regs.cp0.status as _;
         self.registers[register::Cp0::BadVAddr] = regs.cp0.badvaddr as _;
         for (i, r) in regs.r.iter().enumerate() {
-            self.registers.general_purpose[i] = *r as _;
+            self.registers[register::GeneralPurpose::try_from(i).unwrap()] = *r as _;
         }
         for (i, r) in regs.fpu.r.iter().enumerate() {
-            self.registers.fpu[i] = *r as _;
+            self.registers[register::Fpu::try_from(i).unwrap()] = *r as _;
         }
 
         Ok(())

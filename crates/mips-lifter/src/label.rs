@@ -55,10 +55,6 @@ impl<'ctx> LabelWithContext<'ctx> {
         let basic_block = codegen.context.append_basic_block(self.function, &name);
         codegen.builder.position_at_end(basic_block);
 
-        // Ensure we never overflow the stack with return addresses of recursive calls.
-        // In theory we should be able to avoid storing the return address in the first place, but this works for now.
-        unsafe { codegen.restore_host_stack() };
-
         let len = self.label.instructions.len();
         let second_last = len.saturating_sub(2);
         let mut i = 0;

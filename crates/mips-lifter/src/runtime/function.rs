@@ -2,7 +2,6 @@
 
 use inkwell::{
     context::ContextRef, execution_engine::ExecutionEngine, module::Module, types::FunctionType,
-    AddressSpace,
 };
 use strum::{EnumIter, EnumVariantNames, VariantNames};
 
@@ -39,7 +38,7 @@ impl RuntimeFunction {
         let i32_type = context.i32_type();
         let i64_type = context.i64_type();
         let void_type = context.void_type();
-        let ptr_type = i64_type.ptr_type(AddressSpace::default());
+        let ptr_type = i64_type.ptr_type(Default::default());
 
         // Dirty macro to make the signature generation a bit more readable.
         // The name doesn't do anything, its just there to enforce nicer syntax.

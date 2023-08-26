@@ -18,16 +18,20 @@ pub struct Bus {
     pub rsp_dmem: Box<[u8; MemoryRegion::RspDMemory.len()]>,
     pub rsp_imem: Box<[u8; MemoryRegion::RspIMemory.len()]>,
     pub cartridge_rom: Box<[u8]>,
-
     pub pi: PeripheralInterface,
 }
 
 impl Bus {
     pub fn new(cartridge_rom: Box<[u8]>) -> Self {
+        // Copy the first 0x1000 bytes of the PIF ROM to the RSP DMEM, simulating IPL2.
+        let mut rsp_dmem = boxed_array();
+        let len = rsp_dmem.len().min(cartridge_rom.len());
+        rsp_dmem[..len].copy_from_slice(&cartridge_rom[..len]);
+
         Self {
             rdram: boxed_array(),
-            rsp_dmem: boxed_array(),
             rsp_imem: boxed_array(),
+            rsp_dmem,
             cartridge_rom,
             pi: PeripheralInterface::new(),
         }

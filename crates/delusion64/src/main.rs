@@ -1,5 +1,6 @@
-use crate::bus::{location::MemoryRegion, Bus};
+use crate::bus::Bus;
 use clap::Parser;
+use mips_lifter::register;
 use n64_cartridge::Cartridge;
 use std::{
     io,
@@ -10,18 +11,17 @@ pub mod bus;
 // TODO: move this to a separate crate
 pub mod pi;
 
-const DEFAULT_GDB_PORT: u16 = 9001;
-
 /// Blocks until a GDB client connects via TCP
-pub fn wait_for_gdb_connection(port: Option<u16>) -> io::Result<TcpStream> {
-    let sockaddr = format!("localhost:{}", port.unwrap_or(DEFAULT_GDB_PORT));
-    eprintln!("Waiting for a GDB connection on {sockaddr:?}...");
+fn wait_for_gdb_connection(port: u16) -> io::Result<TcpStream> {
+    let sockaddr = format!("localhost:{port}");
+    eprintln!("waiting for a GDB connection on {sockaddr:?}...");
     let sock = TcpListener::bind(sockaddr)?;
     let (stream, addr) = sock.accept()?;
-
-    eprintln!("Debugger connected from {addr}");
+    eprintln!("debugger connected from {addr}");
     Ok(stream)
 }
+
+const DEFAULT_GDB_PORT: u16 = 9001;
 
 #[derive(Parser, Debug)]
 #[command(author = "IvarWithoutBones")]
@@ -31,12 +31,6 @@ struct CommandLineInterface {
 
     #[clap(short, long)]
     show_cartridge: bool,
-
-    #[clap(short, long, value_name = "path")]
-    llvm_ir: Option<String>,
-
-    #[clap(short, long, value_name = "path")]
-    disassembly: Option<String>,
 
     #[clap(short, long, value_name = "port")]
     gdb: Option<Option<u16>>,
@@ -56,21 +50,25 @@ fn main() {
         std::process::exit(0);
     }
 
-    let rom = cart.read().unwrap();
-    let emulator = Bus::new(rom.into());
+    let bus = Bus::new(bin.into());
 
-    let maybe_gdb_stream = cli
-        .gdb
-        .map(|port| wait_for_gdb_connection(port).expect("failed to wait for GDB connection"));
+    let maybe_gdb_stream = cli.gdb.map(|port| {
+        wait_for_gdb_connection(port.unwrap_or(DEFAULT_GDB_PORT))
+            .expect("failed to wait for GDB connection")
+    });
 
-    let rom_range =
-        MemoryRegion::CartridgeRom.start()..(MemoryRegion::CartridgeRom.start() + bin.len() as u32);
+    // The initial state of the registers, simulating the effects of IPL 1+2.
+    let regs = &[
+        (register::GeneralPurpose::Sp.into(), 0xFFFF_FFFF_A400_1FF0),
+        (register::GeneralPurpose::T3.into(), 0xFFFF_FFFF_A400_0040),
+        (register::GeneralPurpose::S4.into(), 0x0000_0000_0000_0001),
+        (register::GeneralPurpose::S6.into(), 0x0000_0000_0000_003F),
+        (register::Cp0::Random.into(), 0x0000_001F),
+        (register::Cp0::Status.into(), 0x3400_0000),
+        (register::Cp0::PRId.into(), 0x0000_0B00),
+        (register::Cp0::Config.into(), 0x0006_E463),
+        (register::Special::Pc.into(), 0x0000_0000_A400_0040),
+    ];
 
-    mips_lifter::run(
-        emulator,
-        rom_range,
-        maybe_gdb_stream,
-        cli.llvm_ir.as_deref(),
-        cli.disassembly.as_deref(),
-    )
+    mips_lifter::run(bus, regs, maybe_gdb_stream)
 }

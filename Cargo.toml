@@ -3,3 +3,4 @@ members = ["crates/*"]
 
 [profile.release]
 incremental = true
+debug = true

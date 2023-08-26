@@ -2,15 +2,25 @@
 
 use self::memory::tlb::{AccessMode, TranslationLookasideBuffer};
 use crate::{
-    codegen::{self, function_attributes, CodeGen},
-    LLVM_CALLING_CONVENTION_FAST,
+    codegen::{self, CodeGen, FallthroughAmount, RegisterGlobals},
+    InitialRegisters,
 };
 use inkwell::{
-    attributes::AttributeLoc, execution_engine::ExecutionEngine, module::Module,
-    values::FunctionValue, AddressSpace,
+    context::ContextRef,
+    execution_engine::ExecutionEngine,
+    module::Module,
+    values::{FunctionValue, GlobalValue},
 };
-use mips_decomp::{instruction::ParsedInstruction, register, INSTRUCTION_SIZE};
-use std::{cell::Cell, fmt, net::TcpStream, pin::Pin};
+use mips_decomp::{
+    instruction::ParsedInstruction,
+    register::{self, Register},
+};
+use std::{
+    cell::{Cell, UnsafeCell},
+    fmt,
+    net::TcpStream,
+    pin::Pin,
+};
 use strum::IntoEnumIterator;
 
 pub(crate) use self::function::RuntimeFunction;
@@ -21,13 +31,64 @@ mod gdb;
 mod memory;
 
 pub(crate) struct Registers {
-    general_purpose: Pin<Box<[u64; register::GeneralPurpose::count()]>>,
-    special: Pin<Box<[u64; register::Special::count()]>>,
-    cp0: Pin<Box<[u64; register::Cp0::count()]>>,
-    fpu: Pin<Box<[u64; register::Fpu::count()]>>,
+    general_purpose: UnsafeCell<[u64; register::GeneralPurpose::count()]>,
+    cp0: UnsafeCell<[u64; register::Cp0::count()]>,
+    fpu: UnsafeCell<[u64; register::Fpu::count()]>,
+    special: UnsafeCell<[u64; register::Special::count()]>,
 }
 
 impl Registers {
+    fn map_into<'ctx>(
+        &self,
+        context: &ContextRef<'ctx>,
+        module: &Module<'ctx>,
+        execution_engine: &ExecutionEngine<'ctx>,
+    ) -> RegisterGlobals<'ctx> {
+        let i64_type = context.i64_type();
+        let map_array = |name: &str, ptr: *const [u64], len: usize| -> GlobalValue<'ctx> {
+            let ty = i64_type.array_type(len as u32);
+            let arr = module.add_global(ty, Default::default(), name);
+            execution_engine.add_global_mapping(&arr, ptr.cast::<*const u8>() as usize);
+            arr
+        };
+
+        let cp0 = map_array("cp0_registers", self.cp0.get(), register::Cp0::count());
+        let fpu = map_array("fpu_registers", self.fpu.get(), register::Fpu::count());
+        let general_purpose = map_array(
+            "general_purpose_registers",
+            self.general_purpose.get(),
+            register::GeneralPurpose::count(),
+        );
+        let special = map_array(
+            "special_registers",
+            self.special.get(),
+            register::Special::count(),
+        );
+
+        RegisterGlobals {
+            general_purpose,
+            cp0,
+            fpu,
+            special,
+        }
+    }
+
+    pub fn general_purpose(&self) -> impl Iterator<Item = u64> {
+        unsafe { (*self.general_purpose.get()).iter().copied() }
+    }
+
+    pub fn cp0(&self) -> impl Iterator<Item = u64> {
+        unsafe { (*self.cp0.get()).iter().copied() }
+    }
+
+    pub fn fpu(&self) -> impl Iterator<Item = u64> {
+        unsafe { (*self.fpu.get()).iter().copied() }
+    }
+
+    pub fn special(&self) -> impl Iterator<Item = u64> {
+        unsafe { (*self.special.get()).iter().copied() }
+    }
+
     pub fn status(&self) -> register::cp0::Status {
         register::cp0::Status::new(self[register::Cp0::Status] as u32)
     }
@@ -37,7 +98,7 @@ pub struct Environment<'ctx, Mem>
 where
     Mem: Memory,
 {
-    pub(crate) registers: Registers,
+    pub(crate) registers: Pin<Box<Registers>>,
     memory: Mem,
     tlb: TranslationLookasideBuffer,
     codegen: Cell<Option<CodeGen<'ctx>>>,
@@ -48,9 +109,18 @@ impl<'ctx, Mem> Environment<'ctx, Mem>
 where
     Mem: Memory,
 {
-    pub fn new(memory: Mem, gdb_stream: Option<TcpStream>) -> Pin<Box<Self>> {
+    pub fn new(
+        memory: Mem,
+        regs: InitialRegisters,
+        gdb_stream: Option<TcpStream>,
+    ) -> Pin<Box<Self>> {
+        let mut registers = Registers::default();
+        for (reg, val) in regs {
+            registers[*reg] = *val;
+        }
+
         let mut env = Self {
-            registers: Registers::default(),
+            registers: Box::pin(registers),
             tlb: TranslationLookasideBuffer::default(),
             debugger: None,
             codegen: Default::default(),
@@ -70,41 +140,19 @@ where
         execution_engine: &ExecutionEngine<'ctx>,
     ) -> codegen::Globals<'ctx> {
         let context = module.get_context();
-        let i64_type = context.i64_type();
+        let ptr_type = context.i64_type().ptr_type(Default::default());
 
         // Add a mapping to the environment struct
-        let ptr_type = context.i64_type().ptr_type(AddressSpace::default());
-        let env_ptr = module.add_global(ptr_type, None, "env");
-        execution_engine.add_global_mapping(&env_ptr, self as *const _ as _);
-
-        // Add a mapping to the general purpose registers
-        let gprs_ty = i64_type.array_type(register::GeneralPurpose::count() as _);
-        let general_purpose_regs = module.add_global(gprs_ty, None, "general_purpose_registers");
-        execution_engine.add_global_mapping(
-            &general_purpose_regs,
-            self.registers.general_purpose.as_ptr() as _,
-        );
-
-        // Add a mapping to the special registers
-        let special_regs_ty = i64_type.array_type(register::Special::count() as _);
-        let special_regs = module.add_global(special_regs_ty, None, "special_registers");
-        execution_engine.add_global_mapping(&special_regs, self.registers.special.as_ptr() as _);
-
-        // Add a mapping to the cp0 registers
-        let cp0_regs_ty = i64_type.array_type(register::Cp0::count() as _);
-        let cp0_regs = module.add_global(cp0_regs_ty, None, "cp0_registers");
-        execution_engine.add_global_mapping(&cp0_regs, self.registers.cp0.as_ptr() as _);
-
-        // Add a mapping to the fpu (cp1) registers
-        let fpu_regs_ty = i64_type.array_type(register::Fpu::count() as _);
-        let fpu_regs = module.add_global(fpu_regs_ty, None, "fpu_registers");
-        execution_engine.add_global_mapping(&fpu_regs, self.registers.fpu.as_ptr() as _);
+        let env_ptr = module.add_global(ptr_type, Default::default(), "env");
+        execution_engine.add_global_mapping(&env_ptr, self as *const Environment<_> as usize);
 
         // Add a mapping to the host stack frame pointer.
-        let stack_frame = module.add_global(ptr_type, None, "host_stack_frame");
-        let stack_frame_storage = Box::new(0); // See the `globals` struct for why this is managed by the runtime.
-        execution_engine
-            .add_global_mapping(&stack_frame, stack_frame_storage.as_ref() as *const _ as _);
+        let stack_frame = module.add_global(ptr_type, Default::default(), "host_stack_frame");
+        let stack_frame_storage = Box::into_raw(Box::new(0u64));
+        execution_engine.add_global_mapping(&stack_frame, stack_frame_storage as usize);
+
+        // Map the registers into the modules globals
+        let registers = self.registers.map_into(&context, module, execution_engine);
 
         // Add mappings to the runtime functions
         for func in RuntimeFunction::iter() {
@@ -133,10 +181,7 @@ where
         codegen::Globals {
             stack_frame: (stack_frame, stack_frame_storage),
             env_ptr,
-            general_purpose_regs,
-            special_regs,
-            cp0_regs,
-            fpu_regs,
+            registers,
         }
     }
 
@@ -253,8 +298,6 @@ where
                         crate::label::generate_label_functions(label_list, codegen.context, module)
                             .pop()
                             .unwrap();
-
-                    // TODO: generate the fallthrough label if none could be found.
                     if let Some(fallthrough) = codegen
                         .labels
                         .iter()
@@ -273,50 +316,17 @@ where
                             lab.fallthrough_fn = Some(fallthrough.function);
                         }
                     } else {
-                        let fallthrough_func = codegen.module.add_function(
-                            "fallthrough",
-                            codegen.context.void_type().fn_type(&[], false),
-                            None,
-                        );
-                        fallthrough_func.set_call_conventions(LLVM_CALLING_CONVENTION_FAST);
-                        for attr in function_attributes(codegen.context) {
-                            fallthrough_func.add_attribute(AttributeLoc::Function, attr);
-                        }
-
-                        let fallthrough_block = codegen
-                            .context
-                            .append_basic_block(fallthrough_func, "fallthrough_block");
-                        codegen.builder.position_at_end(fallthrough_block);
-
-                        let pc = codegen
-                            .read_register(codegen.context.i64_type(), register::Special::Pc);
-                        let next = {
-                            // If the second-last instruction has a delay slot, we've already executed the last instruction.
-                            // In this case we need to skip over it, in order to avoid executing it twice.
-                            let offset = if let Some(second_last) =
-                                lab.label.instructions.iter().nth_back(1)
-                            {
+                        let amount =
+                            if let Some(second_last) = lab.label.instructions.iter().nth_back(1) {
                                 if second_last.has_delay_slot() {
-                                    2
+                                    FallthroughAmount::Two
                                 } else {
-                                    1
+                                    FallthroughAmount::One
                                 }
                             } else {
-                                1
+                                FallthroughAmount::One
                             };
-
-                            codegen.builder.build_int_add(
-                                pc,
-                                codegen
-                                    .context
-                                    .i64_type()
-                                    .const_int(offset * (INSTRUCTION_SIZE as u64), false),
-                                "next_block_addr",
-                            )
-                        };
-
-                        codegen.build_dynamic_jump(next);
-                        lab.fallthrough_fn = Some(fallthrough_func);
+                        lab.fallthrough_fn = Some(codegen.fallthrough_function(amount));
                     }
 
                     lab.compile(codegen);
@@ -440,10 +450,10 @@ where
 impl Default for Registers {
     fn default() -> Self {
         Self {
-            general_purpose: Box::pin([0; register::GeneralPurpose::count()]),
-            special: Box::pin([0; register::Special::count()]),
-            cp0: Box::pin([0; register::Cp0::count()]),
-            fpu: Box::pin([0; register::Fpu::count()]),
+            general_purpose: UnsafeCell::new([0; register::GeneralPurpose::count()]),
+            cp0: UnsafeCell::new([0; register::Cp0::count()]),
+            fpu: UnsafeCell::new([0; register::Fpu::count()]),
+            special: UnsafeCell::new([0; register::Special::count()]),
         }
     }
 }
@@ -451,47 +461,43 @@ impl Default for Registers {
 impl fmt::Debug for Registers {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "\ngeneral registers:")?;
-        for (i, r) in self.general_purpose.iter().enumerate() {
+        for (i, r) in self.general_purpose().enumerate() {
             let name = register::GeneralPurpose::name_from_index(i as _);
             writeln!(f, "{name: <9} = {r:#x}")?;
         }
-
         writeln!(f, "\ncoprocessor 1 registers:")?;
-        for (i, r) in self.cp0.iter().enumerate() {
+        for (i, r) in self.cp0().enumerate() {
             let name = register::Cp0::name_from_index(i as _);
             writeln!(f, "{name: <9} = {r:#x}")?;
         }
-
         writeln!(f, "\nspecial registers:")?;
-        for (i, r) in self.special.iter().enumerate() {
+        for (i, r) in self.special().enumerate() {
             let name = register::Special::name_from_index(i as _);
             writeln!(f, "{name: <9} = {r:#x}")?;
         }
-
         writeln!(f, "\nfpu registers:")?;
-        for (i, r) in self.fpu.iter().enumerate() {
+        for (i, r) in self.fpu().enumerate() {
             let name = register::Fpu::name_from_index(i as _);
             writeln!(f, "{name: <9} = {r:#x}")?;
         }
-
         Ok(())
     }
 }
 
 macro_rules! impl_index {
-    ($ty:ty, $(($name:ident, $struct:ident :: $field:ident)),*) => {
+    ($ty:ty, $(($idx:path, $for:ident :: $field:ident)),*) => {
         $(
-            impl ::std::ops::Index<register::$name> for $struct {
+            impl ::std::ops::Index<$idx> for $for {
                 type Output = $ty;
 
-                fn index(&self, reg: register::$name) -> &Self::Output {
-                    &self.$field[reg as usize]
+                fn index(&self, idx: $idx) -> &Self::Output {
+                    unsafe { &self.$field.get().as_ref().unwrap()[idx as usize] }
                 }
             }
 
-            impl ::std::ops::IndexMut<register::$name> for $struct {
-                fn index_mut(&mut self, reg: register::$name) -> &mut Self::Output {
-                    &mut self.$field[reg as usize]
+            impl ::std::ops::IndexMut<$idx> for $for {
+                fn index_mut(&mut self, idx: $idx) -> &mut Self::Output {
+                    unsafe { &mut self.$field.get().as_mut().unwrap()[idx as usize] }
                 }
             }
         )*
@@ -500,8 +506,32 @@ macro_rules! impl_index {
 
 impl_index!(
     u64,
-    (GeneralPurpose, Registers::general_purpose),
-    (Special, Registers::special),
-    (Cp0, Registers::cp0),
-    (Fpu, Registers::fpu)
+    (register::GeneralPurpose, Registers::general_purpose),
+    (register::Special, Registers::special),
+    (register::Cp0, Registers::cp0),
+    (register::Fpu, Registers::fpu)
 );
+
+impl std::ops::Index<Register> for Registers {
+    type Output = u64;
+
+    fn index(&self, index: Register) -> &Self::Output {
+        match index {
+            Register::GeneralPurpose(r) => &self[r],
+            Register::Special(r) => &self[r],
+            Register::Cp0(r) => &self[r],
+            Register::Fpu(r) => &self[r],
+        }
+    }
+}
+
+impl std::ops::IndexMut<Register> for Registers {
+    fn index_mut(&mut self, index: Register) -> &mut Self::Output {
+        match index {
+            Register::GeneralPurpose(r) => &mut self[r],
+            Register::Special(r) => &mut self[r],
+            Register::Cp0(r) => &mut self[r],
+            Register::Fpu(r) => &mut self[r],
+        }
+    }
+}
