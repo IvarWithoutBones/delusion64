@@ -8,7 +8,6 @@ use strum::{EnumIter, EnumVariantNames, VariantNames};
 #[derive(EnumVariantNames, EnumIter, Debug, Clone, Copy, PartialEq, Eq)]
 #[strum(serialize_all = "snake_case")]
 pub enum RuntimeFunction {
-    PrintString,
     Panic,
     OnInstruction,
 
@@ -55,10 +54,8 @@ impl RuntimeFunction {
 
         // NOTE: Must match the specified functions signature in `runtime/mod.rs`!
         match self {
-            // `Environment::print_string(&mut self, string_ptr: *const u8, len: u64)`
-            Self::PrintString => sig!(void_type, [string_ptr: ptr_type, len: i64_type]),
             // `Environment::panic(&mut self)`
-            Self::Panic => sig!(void_type, []),
+            Self::Panic => sig!(void_type, [string_ptr: ptr_type, len: i64_type]),
             // `Environment::on_instruction(&mut self)`
             Self::OnInstruction => sig!(void_type, []),
 

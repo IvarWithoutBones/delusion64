@@ -157,7 +157,6 @@ where
         // Add mappings to the runtime functions
         for func in RuntimeFunction::iter() {
             let ptr: *const u8 = match func {
-                RuntimeFunction::PrintString => Self::print_string as _,
                 RuntimeFunction::Panic => Self::panic as _,
                 RuntimeFunction::OnInstruction => Self::on_instruction as _,
 
@@ -199,15 +198,14 @@ where
     }
 
     fn panic_update_debugger(&mut self, message: &str) -> ! {
-        eprintln!("{:?}", self.registers);
+        eprintln!("{message}\n{:?}", self.registers);
         if self.debugger.is_some() {
-            eprintln!("{message}");
             self.debugger.as_mut().unwrap().signal_panicked();
             loop {
                 self.update_debugger()
             }
         } else {
-            panic!("{message}");
+            panic!();
         }
     }
 
@@ -237,7 +235,6 @@ where
     // TODO: split this up and prettify it a bit, it is rather unwieldy right now.
     unsafe extern "C" fn get_function_ptr(&mut self, vaddr: u64) -> u64 {
         let vaddr = vaddr & u32::MAX as u64;
-        println!("block_id({vaddr:#x})");
 
         // This is a closure so we can return early if we already a matching block compiled.
         let func = || -> FunctionValue<'ctx> {
@@ -248,12 +245,10 @@ where
             let codegen = &mut self.codegen.get_mut().as_mut().unwrap();
 
             if let Some(existing) = codegen.labels.iter().find(|l| l.label.start() == offset) {
-                println!("  found existing block at {vaddr:#x} (offset={offset:#x})");
-                let name = existing.function.get_name().to_str().unwrap();
-                println!("  using existing function: '{name}'");
+                println!("found existing block at {vaddr:#x} (offset={offset:#x})");
                 return existing.function;
             } else {
-                println!("  generating new block at {vaddr:#x} (offset={offset:#x})");
+                println!("generating new block at {vaddr:#x} (offset={offset:#x})");
             }
 
             let bin = {
@@ -266,7 +261,6 @@ where
                         if instr.has_delay_slot() {
                             break_after = Some(2);
                         } else if instr.ends_block() {
-                            println!("  {:#010x}: {instr}", addr);
                             bin.extend_from_slice(&value.to_be_bytes());
                             break;
                         }
@@ -343,8 +337,6 @@ where
         }();
 
         let name = func.get_name().to_str().unwrap();
-        println!("  executing '{name}'");
-
         self.codegen
             .get_mut()
             .as_mut()
@@ -371,14 +363,12 @@ where
         }
     }
 
-    unsafe extern "C" fn print_string(&mut self, string_ptr: *const u8, len: u64) {
-        let slice = std::slice::from_raw_parts(string_ptr, len as _);
-        let string = std::str::from_utf8(slice).unwrap();
-        print!("{string}");
-    }
-
-    unsafe extern "C" fn panic(&mut self) {
-        self.panic_update_debugger("Environment::panic called");
+    unsafe extern "C" fn panic(&mut self, string_ptr: *const u8, len: u64) {
+        let string = {
+            let slice = std::slice::from_raw_parts(string_ptr, len as usize);
+            std::str::from_utf8(slice).unwrap()
+        };
+        self.panic_update_debugger(&format!("Environment::panic called: {string}"));
     }
 
     unsafe extern "C" fn write_tlb_entry(&mut self, index: u64) {

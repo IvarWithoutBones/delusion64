@@ -29,7 +29,7 @@ impl MaybeInstruction {
     #[inline]
     pub const fn try_resolve_static_jump(&self, pc: u64) -> Option<u64> {
         match self {
-            Self::Instruction(instr) => instr.try_resolve_static_jump(pc),
+            Self::Instruction(instr) => instr.try_resolve_constant_jump(pc),
             Self::Invalid(_) => None,
         }
     }

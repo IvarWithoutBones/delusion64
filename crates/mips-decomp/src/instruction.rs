@@ -199,14 +199,14 @@ pub enum Mnenomic {
 
 impl Mnenomic {
     // All cp0 instructions use rd as the coprocessor register.
-    pub const fn uses_cp0_destination(&self) -> bool {
+    pub(crate) const fn uses_cp0_destination(&self) -> bool {
         matches!(
             self,
             Mnenomic::Mfc0 | Mnenomic::Mtc0 | Mnenomic::Dmfc0 | Mnenomic::Dmtc0
         )
     }
 
-    pub const fn is_branch(&self) -> bool {
+    pub const fn is_conditional_branch(&self) -> bool {
         matches!(
             self,
             Mnenomic::Bczf
@@ -233,7 +233,7 @@ impl Mnenomic {
     }
 
     pub const fn ends_block(&self) -> bool {
-        self.is_branch()
+        self.is_conditional_branch()
             || matches!(self, |Mnenomic::Break| Mnenomic::Eret
                 | Mnenomic::J
                 | Mnenomic::Jal
@@ -266,7 +266,7 @@ impl Mnenomic {
     }
 
     pub const fn has_delay_slot(&self) -> bool {
-        self.ends_block() && !matches!(self, Mnenomic::Break | Mnenomic::Eret)
+        !matches!(self, Mnenomic::Break | Mnenomic::Eret) && self.ends_block()
     }
 
     pub const fn name(&self) -> &'static str {
@@ -348,7 +348,7 @@ impl Instruction {
     }
 
     pub const fn try_resolve_static_jump(&self, raw: u32, pc: u64) -> Option<u64> {
-        if !self.mnenomic.is_branch() {
+        if !self.mnenomic.is_conditional_branch() {
             return None;
         }
 
@@ -462,7 +462,7 @@ impl ParsedInstruction {
         }
     }
 
-    pub const fn try_resolve_static_jump(&self, pc: u64) -> Option<u64> {
+    pub const fn try_resolve_constant_jump(&self, pc: u64) -> Option<u64> {
         self.instr.try_resolve_static_jump(self.raw, pc)
     }
 

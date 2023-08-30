@@ -69,7 +69,7 @@ impl Label {
         self.start_offset = start_offset;
     }
 
-    pub fn start(&self) -> usize {
+    pub const fn start(&self) -> usize {
         self.start_offset
     }
 
@@ -102,7 +102,7 @@ impl fmt::Debug for Label {
         writeln!(f)?;
 
         for instr in &self.instructions {
-            if let Some(target) = instr.try_resolve_static_jump(pos as u64) {
+            if let Some(target) = instr.try_resolve_constant_jump(pos as u64) {
                 writeln!(f, "  {pos:06x}: {instr}\t\t-> label_{target:06x}",)?;
             } else {
                 writeln!(f, "  {pos:06x}: {instr}",)?;

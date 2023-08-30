@@ -1,13 +1,10 @@
 use crate::{
     codegen::{function_attributes, CodeGen},
-    recompiler::recompile_instruction,
+    recompiler::{compile_instruction, compile_instruction_with_delay_slot},
     runtime::RuntimeFunction,
     LLVM_CALLING_CONVENTION_FAST,
 };
-use inkwell::{
-    attributes::AttributeLoc, basic_block::BasicBlock, context::Context, module::Module,
-    values::FunctionValue,
-};
+use inkwell::{attributes::AttributeLoc, context::Context, module::Module, values::FunctionValue};
 use mips_decomp::{instruction::ParsedInstruction, register, Label, INSTRUCTION_SIZE};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -60,18 +57,16 @@ impl<'ctx> LabelWithContext<'ctx> {
         let mut i = 0;
         while i < len {
             let instr = &self.label.instructions[i];
-
-            // A delay slot effectively swaps the order of two instructions.
-            if instr.has_delay_slot() {
+            if !instr.has_delay_slot() {
+                self.compile_instruction(i, instr, codegen);
+                i += 1;
+            } else {
                 let next_instr = if i == (len - 1) {
                     // If the delay slot is the last instruction in the block, we execute the singular fallthrough instruction
                     // from the next block. The `fallthrough_fn` will skip over the next slot, so we only run it once.
-                    if let Some(next) = self.fallthrough_instr.as_ref() {
-                        next
-                    } else {
-                        // Because of undefined behavior, we can't really do anything here.
-                        break;
-                    }
+                    self.fallthrough_instr
+                        .as_ref()
+                        .expect("missing fallthrough instruction")
                 } else if i == second_last {
                     // if the two instructions are inside of the same block, we can just swap them
                     &self.label.instructions[i + 1]
@@ -79,31 +74,11 @@ impl<'ctx> LabelWithContext<'ctx> {
                     panic!("unable to resolve delay slot for {instr:#?}");
                 };
 
-                // `recompile_instruction` positions the builder at the block ran when the branch was not taken, so that we can generate a fallthrough.
-                // This is problematic for an Likely Branch instruction, as should *only* run the delay slot instruction if the branch is taken.
-                // In this case we cannot simply swap the instructions, but instead inject the delay slot instruction prior to the jump to the branch target.
-                if !instr.mnemonic().discards_delay_slot() {
-                    self.compile_instruction(i + 1, false, next_instr, codegen);
-                    self.compile_instruction(i, true, instr, codegen);
-                } else {
-                    // The block taken when the branch was successful.
-                    let then_block = self.compile_instruction(i, false, instr, codegen).unwrap();
-
-                    // Two instructions that end a block in a row are undefined behavior, just ignore it.
-                    if !next_instr.ends_block() {
-                        let current_block = codegen.builder.get_insert_block().unwrap();
-                        codegen
-                            .builder
-                            .position_before(&then_block.get_first_instruction().unwrap());
-                        self.compile_instruction(i + 1, false, next_instr, codegen);
-                        codegen.builder.position_at_end(current_block);
-                    }
-                }
-
+                let addr = self.index_to_virtual_address(i);
+                compile_instruction_with_delay_slot(codegen, addr, instr, next_instr, |pc| {
+                    self.on_instruction(pc, codegen)
+                });
                 break;
-            } else {
-                self.compile_instruction(i, false, instr, codegen);
-                i += 1;
             }
         }
 
@@ -117,10 +92,8 @@ impl<'ctx> LabelWithContext<'ctx> {
             if let Some(fallthrough_fn) = self.fallthrough_fn {
                 codegen.call_function(fallthrough_fn);
             } else {
-                let str = format!("ERROR: label {:#x} attempted to execute fallthrough block without one existing!\n", self.label.start() * 4);
-                codegen.print_string(&str, "error_no_fallthrough");
-                env_call!(codegen, RuntimeFunction::Panic, []);
-                codegen.builder.build_unreachable();
+                let str = format!("ERROR: label {:#x} attempted to execute fallthrough block without one existing!\n", self.label.start() * INSTRUCTION_SIZE);
+                codegen.build_panic(&str, "error_no_fallthrough");
             }
         }
     }
@@ -128,20 +101,24 @@ impl<'ctx> LabelWithContext<'ctx> {
     fn compile_instruction(
         &self,
         index: usize,
-        executed_delay_slot: bool,
         instr: &ParsedInstruction,
         codegen: &CodeGen<'ctx>,
-    ) -> Option<BasicBlock<'ctx>> {
-        // Set the program counter to the current instruction, assumes the labels start corresponds to a virtual address.
-        let addr = ((self.label.start() + index) * INSTRUCTION_SIZE) as u64;
-        let addr_const = codegen.context.i64_type().const_int(addr, false);
-        codegen.write_special_register(register::Special::Pc, addr_const);
+    ) {
+        self.on_instruction(self.index_to_virtual_address(index), codegen);
+        compile_instruction(codegen, instr)
+    }
 
+    fn on_instruction(&self, addr: u64, codegen: &CodeGen<'ctx>) {
+        let addr = codegen.context.i64_type().const_int(addr, false);
+        codegen.write_special_register(register::Special::Pc, addr);
         // Call the `on_instruction` callback from the environment, used for the debugger.
         env_call!(codegen, RuntimeFunction::OnInstruction, []);
+    }
 
-        // Finally recompile the disassembled instruction.
-        recompile_instruction(codegen, instr, addr, executed_delay_slot)
+    fn index_to_virtual_address(&self, index: usize) -> u64 {
+        // Assumes the label start corresponds to a virtual address.
+        debug_assert!(self.label.len() > index);
+        ((self.label.start() + index) * INSTRUCTION_SIZE) as u64
     }
 }
 
@@ -152,9 +129,7 @@ pub fn generate_label_functions<'ctx>(
 ) -> Vec<LabelWithContext<'ctx>> {
     let mut result: Vec<LabelWithContext<'_>> = Vec::new();
 
-    for (i, label) in labels.iter().enumerate() {
-        println!("generating function for label {}/{}", i + 1, labels.len());
-
+    for label in labels.iter() {
         let existing_label = result
             .iter()
             .position(|existing| existing.label.start() == label.start());

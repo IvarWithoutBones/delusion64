@@ -326,13 +326,13 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.build_unreachable();
     }
 
-    pub fn print_string(&self, string: &str, storage_name: &str) {
+    pub fn build_panic(&self, string: &str, storage_name: &str) {
         let ptr = self
             .builder
             .build_global_string_ptr(string, storage_name)
             .as_pointer_value();
         let len = self.context.i64_type().const_int(string.len() as _, false);
-        env_call!(self, RuntimeFunction::PrintString, [ptr, len]);
+        env_call!(self, RuntimeFunction::Panic, [ptr, len]);
     }
 
     /// Performs a comparisons between two integers, returning the result as an i32.

@@ -389,14 +389,13 @@ where
     }
 }
 
-fn str_to_u64(mut str: &str) -> Result<u64, ParseIntError> {
-    const HEX_PREFIX: &str = "0x";
-    let radix = if str.starts_with(HEX_PREFIX) {
-        str = &str[HEX_PREFIX.len()..];
-        16
-    } else {
-        10
-    };
+fn str_to_u64(str: &str) -> Result<u64, ParseIntError> {
+    const RADIXES: &[(&str, u32)] = &[("0b", 2), ("0x", 16)];
+    let (str, radix) = RADIXES
+        .iter()
+        .find(|(prefix, _radix)| str.starts_with(prefix))
+        .map(|(prefix, radix)| (&str[prefix.len()..], *radix))
+        .unwrap_or((str, 10));
     // Read as a signed integer to support negative numbers
     Ok(i64::from_str_radix(str, radix)? as u64)
 }

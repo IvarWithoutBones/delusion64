@@ -1,39 +1,177 @@
 use crate::{codegen::CodeGen, runtime::RuntimeFunction};
-use inkwell::{basic_block::BasicBlock, values::IntValue, IntPredicate};
+use inkwell::{values::IntValue, IntPredicate};
 use mips_decomp::{
     instruction::{Mnenomic, ParsedInstruction},
     register, INSTRUCTION_SIZE,
 };
 
 fn stub(codegen: &CodeGen, name: &str) {
-    let output = format!("STUB: {name} instruction not executed");
+    let output = format!("{name} instruction not implemented");
     let storage_name = format!("{name}_stub");
-    codegen.print_string(&output, &storage_name);
-    env_call!(codegen, RuntimeFunction::Panic, []);
+    codegen.build_panic(&output, &storage_name);
 }
 
-/// A helper for various jump instructions (JAL, J) which calculates the target address at runtime.
+/// A helper to calculate the target for jump instructions (JAL, J).
 /// The 26-bit target is shifted left two bits and combined with the high-order four bits of the address of the delay slot.
-fn jump_address<'ctx>(
-    codegen: &CodeGen<'ctx>,
-    addr: IntValue<'ctx>,
-    target: u32,
-) -> IntValue<'ctx> {
-    let i64_type = codegen.context.i64_type();
-    let delay_slot = {
-        let mask = i64_type.const_int(0xFFFF_FFFF_F000_0000, false);
-        codegen.builder.build_and(addr, mask, "delay_slot")
-    };
-    let target = i64_type.const_int((target as u64) << 2, false);
-    codegen.builder.build_or(target, delay_slot, "jump_addr")
+fn jump_address(delay_slot_pc: u64, target: u32) -> u64 {
+    let masked_delay_slot = delay_slot_pc & 0xFFFF_FFFF_F000_0000;
+    let shifted_target = (target as u64) << 2;
+    shifted_target | masked_delay_slot
 }
 
-pub fn recompile_instruction<'ctx>(
+fn set_return_address(codegen: &CodeGen, return_address: u64) {
+    let return_address = codegen.context.i64_type().const_int(return_address, false);
+    codegen.write_general_register(register::GeneralPurpose::Ra, return_address);
+}
+
+pub fn compile_instruction_with_delay_slot(
+    codegen: &CodeGen,
+    pc: u64,
+    instr: &ParsedInstruction,
+    delay_slot_instr: &ParsedInstruction,
+    on_instruction: impl Fn(u64),
+) {
+    debug_assert!(instr.mnemonic().has_delay_slot());
+    let delay_slot_pc = pc + INSTRUCTION_SIZE as u64;
+
+    if instr.mnemonic().is_conditional_branch() {
+        // Evaluate the branch condition prior to running the delay slot instruction,
+        // as the delay slot instruction can influence the branch condition. TODO: Is this correct?
+        let name = &format!("{}_cmp", instr.mnemonic().name());
+        let comparison = {
+            let (pred, lhs, rhs) = evaluate_conditional_branch(codegen, instr, delay_slot_pc);
+            codegen.builder.build_int_compare(pred, lhs, rhs, name)
+        };
+
+        if !instr.mnemonic().discards_delay_slot() {
+            // If the delay slot instruction is not discarded, it gets executed regardless of the branch condition.
+            on_instruction(delay_slot_pc);
+            compile_instruction(codegen, delay_slot_instr);
+        }
+
+        on_instruction(pc);
+        codegen.build_if(name, comparison, || {
+            if instr.mnemonic().discards_delay_slot() {
+                // If the delay slot is discarded, the delay slot instruction only gets executed when the branch is taken.
+                on_instruction(delay_slot_pc);
+                compile_instruction(codegen, delay_slot_instr);
+            }
+
+            let target_pc = instr
+                .try_resolve_constant_jump(pc)
+                .expect("target address for branch instruction could not be resolved");
+            codegen.build_constant_jump(target_pc)
+        });
+    } else {
+        // Recompile the delay slot instruction first
+        on_instruction(delay_slot_pc);
+        compile_instruction(codegen, delay_slot_instr);
+        // Then the unconditional branch
+        on_instruction(pc);
+        compile_unconditional_branch(codegen, instr, delay_slot_pc)
+    }
+}
+
+fn compile_unconditional_branch(codegen: &CodeGen, instr: &ParsedInstruction, delay_slot_pc: u64) {
+    let i64_type = codegen.context.i64_type();
+    match instr.mnemonic() {
+        Mnenomic::J => {
+            // Jump to target address
+            let addr = jump_address(delay_slot_pc, instr.immediate());
+            codegen.build_constant_jump(addr);
+        }
+
+        Mnenomic::Jr => {
+            // Jump to address stored in rs
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            codegen.build_dynamic_jump(source);
+        }
+
+        Mnenomic::Jal => {
+            // Jump to target address, stores return address in r31 (ra)
+            set_return_address(codegen, delay_slot_pc + INSTRUCTION_SIZE as u64);
+            let addr = jump_address(delay_slot_pc, instr.immediate());
+            codegen.build_constant_jump(addr);
+        }
+
+        Mnenomic::Jalr => {
+            // Jump to address stored in rs, stores return address in rd
+            let return_address = i64_type.const_int(delay_slot_pc + INSTRUCTION_SIZE as u64, false);
+            codegen.write_general_register(instr.rd(), return_address);
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            codegen.build_dynamic_jump(source);
+        }
+
+        _ => stub(codegen, instr.mnemonic().name()),
+    }
+}
+
+fn evaluate_conditional_branch<'ctx>(
     codegen: &CodeGen<'ctx>,
     instr: &ParsedInstruction,
-    pc: u64,
-    executed_delay_slot: bool,
-) -> Option<BasicBlock<'ctx>> {
+    delay_slot_pc: u64,
+) -> (IntPredicate, IntValue<'ctx>, IntValue<'ctx>) {
+    let i64_type = codegen.context.i64_type();
+    // NOTE: The difference between regular and likely branches is taken care of in `compile_instruction_with_delay_slot`.
+    match instr.mnemonic() {
+        Mnenomic::Beq | Mnenomic::Beql => {
+            // If rs equals rt, branch to address.
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            let target = codegen.read_general_register(i64_type, instr.rt());
+            (IntPredicate::EQ, source, target)
+        }
+
+        Mnenomic::Bne | Mnenomic::Bnel => {
+            // If rs is not equal to rt, branch to address.
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            let target = codegen.read_general_register(i64_type, instr.rt());
+            (IntPredicate::NE, source, target)
+        }
+
+        Mnenomic::Blez | Mnenomic::Blezl => {
+            // If rs is less than or equal to zero, branch to address.
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            let zero = i64_type.const_zero();
+            (IntPredicate::SLE, source, zero)
+        }
+
+        Mnenomic::Bgez | Mnenomic::Bgezl => {
+            // If rs is greater than or equal to zero, branch to address.
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            (IntPredicate::SGE, source, i64_type.const_zero())
+        }
+
+        Mnenomic::Bgezal | Mnenomic::Bgezall => {
+            // If rs is greater than or equal to zero, branch to address. Unconditionally stores return address to r31 (ra).
+            set_return_address(codegen, delay_slot_pc + INSTRUCTION_SIZE as u64);
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            (IntPredicate::SGE, source, i64_type.const_zero())
+        }
+
+        Mnenomic::Bltz | Mnenomic::Bltzl => {
+            // If rs is less than zero, branch to address.
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            (IntPredicate::SLT, source, i64_type.const_zero())
+        }
+
+        Mnenomic::Bltzal | Mnenomic::Bltzall => {
+            // If rs is less than zero, branch to address. Unconditionally stores return address to r31 (ra).
+            set_return_address(codegen, delay_slot_pc + INSTRUCTION_SIZE as u64);
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            (IntPredicate::SLT, source, i64_type.const_zero())
+        }
+
+        Mnenomic::Bgtz | Mnenomic::Bgtzl => {
+            // If rs is greater than zero, branch to address.
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            (IntPredicate::SGT, source, i64_type.const_zero())
+        }
+
+        _ => todo!("evaluate_conditional_branch: {}", instr.mnemonic().name()),
+    }
+}
+
+pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) {
     let mnemonic = instr.mnemonic();
     let bool_type = codegen.context.bool_type();
     let i8_type = codegen.context.i8_type();
@@ -42,198 +180,7 @@ pub fn recompile_instruction<'ctx>(
     let i64_type = codegen.context.i64_type();
     let i128_type = codegen.context.i128_type();
 
-    let next_instruction_address = || {
-        // Delay slots need some extra care when calculating jumps, as we dont want to execute the delay slot instruction twice
-        let offset = i64_type.const_int(
-            INSTRUCTION_SIZE as u64 * (if executed_delay_slot { 2 } else { 1 }),
-            false,
-        );
-        let pc = codegen.read_register(i64_type, register::Special::Pc);
-        codegen.builder.build_int_add(pc, offset, "next_instr_addr")
-    };
-
     match mnemonic {
-        Mnenomic::Tltiu => {
-            // If unsigned rs is less than sign-extended immediate, cause a trap exception
-            stub(codegen, "tltiu");
-        }
-
-        Mnenomic::Tlti => {
-            // If signed rs is less than sign-extended immediate, cause a trap exception
-            stub(codegen, "tlti");
-        }
-
-        Mnenomic::Teqi => {
-            // If rs equals sign-extended immediate, cause a trap exception
-            stub(codegen, "teqi");
-        }
-
-        Mnenomic::Tgei => {
-            // If signed rs is greater than or equal to sign-extended immediate, cause a trap exception
-            stub(codegen, "tgei");
-        }
-
-        Mnenomic::Tnei => {
-            // If rs does not equal sign-extended immediate, cause a trap exception
-            stub(codegen, "tnei");
-        }
-
-        Mnenomic::Tge => {
-            // If signed rs is greater than or equal to signed rt, cause a trap exception
-            stub(codegen, "tge");
-        }
-
-        Mnenomic::Tgeu => {
-            // If unsigned rs is greater than or equals to unsigned rt, cause a trap exception
-            stub(codegen, "tgeu");
-        }
-
-        Mnenomic::Tgeiu => {
-            // If unsigned rs is greater than or equal to sign-extended immediate, cause a trap exception
-            stub(codegen, "tgeiu");
-        }
-
-        Mnenomic::Teq => {
-            // If rs equals rt, cause a trap exception
-            stub(codegen, "teq");
-        }
-
-        Mnenomic::Tlt => {
-            // If signed rs is less than signed rt, cause a trap exception
-            stub(codegen, "tlt");
-        }
-
-        Mnenomic::Tltu => {
-            // If unsigned rs is less than unsigned rt, cause a trap exception
-            stub(codegen, "tltu");
-        }
-
-        Mnenomic::Tne => {
-            // If rs does not equal rt, cause a trap exception
-            stub(codegen, "tne");
-        }
-
-        Mnenomic::CCondFmtFs => {
-            // Compares fs and ft using cond
-            stub(codegen, "ccondfmtfs");
-        }
-
-        Mnenomic::Syscall => {
-            // Causes system call exception
-            stub(codegen, "syscall");
-        }
-
-        Mnenomic::Break => {
-            // Causes breakpoint exception
-            stub(codegen, "break");
-        }
-
-        Mnenomic::Cop2 => {
-            // Perform a CP2 operation
-            stub(codegen, "cop2");
-        }
-
-        Mnenomic::Bczf => {
-            // If CPz's CpCond is false, branch to address (delay slot + offset)
-            stub(codegen, "bczf");
-        }
-
-        Mnenomic::Bczt => {
-            // If CPz's CpCond is true, branch to address (delay slot + offset)
-            stub(codegen, "bczt");
-        }
-
-        Mnenomic::Swc1 => {
-            // Copies word from CP1, to memory address (base + offset)
-            stub(codegen, "swc1");
-        }
-
-        Mnenomic::Swc2 => {
-            // Copies word from CP1, to memory address (base + offset)
-            stub(codegen, "swc2");
-        }
-
-        Mnenomic::Sdc1 => {
-            // Copies doubleword from CP1, to memory address (base + offset)
-            stub(codegen, "sdc1");
-        }
-
-        Mnenomic::Ldc1 => {
-            // Copies doubleword stored at memory address (base + offset), to CP1
-            stub(codegen, "ldc1");
-        }
-
-        Mnenomic::Ldl => {
-            // Loads a portion of a doubleword beginning at memory address (base + offset), stores 1-8 bytes in high-order portion of rt
-            stub(codegen, "ldl");
-        }
-
-        Mnenomic::Ldr => {
-            // Loads a portion of a doubleword beginning at memory address (base + offset), stores 1-8 bytes in low-order portion of rt
-            stub(codegen, "ldr");
-        }
-
-        Mnenomic::Swl => {
-            // Loads a portion of rt, stores 1-4 bytes in high-order portion of memory address (base + offset)
-            stub(codegen, "swl");
-        }
-
-        Mnenomic::Swr => {
-            // Loads a portion of rt, stores 1-4 bytes in low-order portion of memory address (base + offset)
-            stub(codegen, "swr");
-        }
-
-        Mnenomic::Lwl => {
-            // Loads a portion of a word beginning at memory address (base + offset), stores 1-4 bytes in high-order portion of rt
-            stub(codegen, "lwl");
-        }
-
-        Mnenomic::Ctc2 => {
-            // Copy contents of GPR rt, to CP2's control register rd
-            stub(codegen, "ctc2");
-        }
-
-        Mnenomic::Mfc2 => {
-            // Copy contents of CP2's coprocessor register rd, to GPR rt
-            stub(codegen, "mfc2");
-        }
-
-        Mnenomic::Mtc2 => {
-            // Copy contents of GPR rt, to CP2's coprocessor register rd
-            stub(codegen, "mtc2");
-        }
-
-        Mnenomic::Lwc1 => {
-            // Copies word stored at memory address (base + offset), to CP1's register rt
-            stub(codegen, "lwc1");
-        }
-
-        Mnenomic::Lwc2 => {
-            // Copies word stored at memory address (base + offset), to CP2's register rt
-            stub(codegen, "lwc2");
-        }
-
-        Mnenomic::Bczfl => {
-            // If CPz's CpCond is false, branch to address (delay slot + offset), otherwise discard delay slot instruction
-            stub(codegen, "bczfl");
-            // Stub needed because this is a likely branch
-            let curr_block = codegen.builder.get_insert_block().unwrap();
-            return Some(curr_block);
-        }
-
-        Mnenomic::Bcztl => {
-            // If CPz's CpCond is true, branch to address (delay slot + offset), otherwise discard delay slot instruction
-            stub(codegen, "bcztl");
-            // Stub needed because this is a likely branch
-            let curr_block = codegen.builder.get_insert_block().unwrap();
-            return Some(curr_block);
-        }
-
-        Mnenomic::AddFmt => {
-            // Add fs and ft, store result in fd
-            stub(codegen, "addfmt");
-        }
-
         Mnenomic::Sync => {
             // Executed as NOP on the VR4300
         }
@@ -297,27 +244,6 @@ pub fn recompile_instruction<'ctx>(
             // Copy doubleword contents of CP0's coprocessor register rd, to GPR rt
             let destination = codegen.read_cp0_register(i64_type, instr.rd());
             codegen.write_general_register(instr.rt(), destination);
-        }
-
-        Mnenomic::Jalr => {
-            // Jump to address stored in rs, stores return address in rd
-            let source = codegen.read_general_register(i64_type, instr.rs());
-            codegen.write_general_register(instr.rd(), next_instruction_address());
-            codegen.build_dynamic_jump(source);
-        }
-
-        Mnenomic::Jal => {
-            // Jump to target address, stores return address in r31 (ra)
-            let return_address = next_instruction_address();
-            codegen.write_general_register(register::GeneralPurpose::Ra, return_address);
-            let addr = jump_address(codegen, next_instruction_address(), instr.immediate());
-            codegen.build_dynamic_jump(addr);
-        }
-
-        Mnenomic::J => {
-            // Jump to target address
-            let addr = jump_address(codegen, next_instruction_address(), instr.immediate());
-            codegen.build_dynamic_jump(addr);
         }
 
         Mnenomic::Sc => {
@@ -796,12 +722,6 @@ pub fn recompile_instruction<'ctx>(
             codegen.write_general_register(instr.rd(), hi);
         }
 
-        Mnenomic::Jr => {
-            // Jump to address stored in rs
-            let source = codegen.read_general_register(i64_type, instr.rs());
-            codegen.build_dynamic_jump(source);
-        }
-
         Mnenomic::Lwr => {
             // Loads a portion of a word beginning at memory address (base + offset), stores 1-4 bytes in low-order portion of rt
             let address = codegen.base_plus_offset(instr, "lwr_addr");
@@ -1161,226 +1081,6 @@ pub fn recompile_instruction<'ctx>(
             codegen.write_general_register(instr.rd(), result);
         }
 
-        Mnenomic::Beq => {
-            // If rs equals rt, branch to address
-            let source = codegen.read_general_register(i64_type, instr.rs());
-            let target = codegen.read_general_register(i64_type, instr.rt());
-            let cmp =
-                codegen
-                    .builder
-                    .build_int_compare(IntPredicate::EQ, source, target, "beq_cmp");
-
-            let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch(cmp, target_pc);
-        }
-
-        Mnenomic::Bne => {
-            // If rs is not equal to rt, branch to address.
-            let source = codegen.read_general_register(i64_type, instr.rs());
-            let target = codegen.read_general_register(i64_type, instr.rt());
-            let cmp =
-                codegen
-                    .builder
-                    .build_int_compare(IntPredicate::NE, source, target, "bne_cmp");
-
-            let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch(cmp, target_pc);
-        }
-
-        Mnenomic::Bltz => {
-            // If rs is less than zero, branch to address (delay slot + offset)
-            let source = codegen.read_general_register(i64_type, instr.rs());
-            let zero = i64_type.const_zero();
-            let cmp =
-                codegen
-                    .builder
-                    .build_int_compare(IntPredicate::SLT, source, zero, "bltz_cmp");
-
-            let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch(cmp, target_pc);
-        }
-
-        Mnenomic::Bltzl => {
-            // If rs is less than zero, branch to address (delay slot + offset), otherwise discard delay slot instruction
-            let source = codegen.read_general_register(i64_type, instr.rs());
-            let zero = i64_type.const_zero();
-            let cmp =
-                codegen
-                    .builder
-                    .build_int_compare(IntPredicate::SLT, source, zero, "bltz_cmp");
-
-            let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            let then_block = codegen.build_conditional_branch(cmp, target_pc);
-            return Some(then_block);
-        }
-
-        Mnenomic::Beql => {
-            // If rs equals rt, branch to address (delay slot + offset), otherwise discard delay slot instruction
-            let source = codegen.read_general_register(i64_type, instr.rs());
-            let target = codegen.read_general_register(i64_type, instr.rt());
-            let cmp =
-                codegen
-                    .builder
-                    .build_int_compare(IntPredicate::EQ, source, target, "beql_cmp");
-
-            let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            let then_block = codegen.build_conditional_branch(cmp, target_pc);
-            return Some(then_block);
-        }
-
-        Mnenomic::Bgezal => {
-            // If rs is greater than or equal to zero, branch to address (delay slot + offset) and store next address to r31 (ra)
-            let source = codegen.read_general_register(i64_type, instr.rs());
-            let zero = i64_type.const_zero();
-            let cmp =
-                codegen
-                    .builder
-                    .build_int_compare(IntPredicate::SGE, source, zero, "bgezal_cmp");
-
-            let next = next_instruction_address();
-            let target = instr.try_resolve_static_jump(pc).unwrap();
-            return Some(codegen.build_conditional_branch_set_ra(cmp, target, next));
-        }
-
-        Mnenomic::Bgezall => {
-            // If rs is greater than or equal to zero, branch to address (delay slot + offset) and store next address to r31, otherwise discard delay slot instruction
-            let source = codegen.read_general_register(i64_type, instr.rs());
-            let zero = i64_type.const_zero();
-            let cmp =
-                codegen
-                    .builder
-                    .build_int_compare(IntPredicate::SGE, source, zero, "bgezall_cmp");
-
-            let next = next_instruction_address();
-            let target = instr.try_resolve_static_jump(pc).unwrap();
-            return Some(codegen.build_conditional_branch_set_ra(cmp, target, next));
-        }
-
-        Mnenomic::Bltzal => {
-            // If rs is less than zero, branch to address (delay slot + offset) and store next address to r31 (ra)
-            let source = codegen.read_general_register(i64_type, instr.rs());
-            let zero = i64_type.const_zero();
-            let cmp =
-                codegen
-                    .builder
-                    .build_int_compare(IntPredicate::SLT, source, zero, "bltzal_cmp");
-
-            let next = next_instruction_address();
-            let target = instr.try_resolve_static_jump(pc).unwrap();
-            return Some(codegen.build_conditional_branch_set_ra(cmp, target, next));
-        }
-
-        Mnenomic::Bltzall => {
-            // If rs is less than zero, branch to address (delay slot + offset) and store next address to r31, otherwise discard delay slot instruction
-            let source = codegen.read_general_register(i64_type, instr.rs());
-            let zero = i64_type.const_zero();
-            let cmp =
-                codegen
-                    .builder
-                    .build_int_compare(IntPredicate::SLT, source, zero, "bltzal_cmp");
-
-            let next = next_instruction_address();
-            let target = instr.try_resolve_static_jump(pc).unwrap();
-            return Some(codegen.build_conditional_branch_set_ra(cmp, target, next));
-        }
-
-        Mnenomic::Bnel => {
-            // If rs is not equal to rt, branch to address (delay slot + offset), otherwise discard delay slot instruction
-            let source = codegen.read_general_register(i64_type, instr.rs());
-            let target = codegen.read_general_register(i64_type, instr.rt());
-            let cmp =
-                codegen
-                    .builder
-                    .build_int_compare(IntPredicate::NE, source, target, "bnel_cmp");
-
-            let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            let then_block = codegen.build_conditional_branch(cmp, target_pc);
-            return Some(then_block);
-        }
-
-        Mnenomic::Blez => {
-            // If rs is less than or equal to zero, branch to address (delay slot + offset)
-            let source = codegen.read_general_register(i64_type, instr.rs());
-            let zero = i64_type.const_zero();
-            let cmp =
-                codegen
-                    .builder
-                    .build_int_compare(IntPredicate::SLE, source, zero, "blez_cmp");
-
-            let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch(cmp, target_pc);
-        }
-
-        Mnenomic::Blezl => {
-            // If rs is less than or equal to zero, branch to address (delay slot + offset), otherwise discard delay slot instruction
-            let source = codegen.read_general_register(i64_type, instr.rs());
-            let zero = i64_type.const_zero();
-            let cmp =
-                codegen
-                    .builder
-                    .build_int_compare(IntPredicate::SLE, source, zero, "blezl_cmp");
-
-            let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            let then_block = codegen.build_conditional_branch(cmp, target_pc);
-            return Some(then_block);
-        }
-
-        Mnenomic::Bgezl => {
-            // If rs is greater than or equal to zero, branch to address (delay slot + offset), otherwise discard delay slot instruction
-            let source = codegen.read_general_register(i64_type, instr.rs());
-            let zero = i64_type.const_zero();
-            let cmp =
-                codegen
-                    .builder
-                    .build_int_compare(IntPredicate::SGE, source, zero, "blezl_cmp");
-
-            let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            let then_block = codegen.build_conditional_branch(cmp, target_pc);
-            return Some(then_block);
-        }
-
-        Mnenomic::Bgez => {
-            // If rs is greater than or equal to zero, branch to address (delay slot + offset)
-            let source = codegen.read_general_register(i64_type, instr.rs());
-            let zero = i64_type.const_zero();
-            let cmp =
-                codegen
-                    .builder
-                    .build_int_compare(IntPredicate::SGE, source, zero, "bgez_cmp");
-
-            let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch(cmp, target_pc);
-        }
-
-        Mnenomic::Bgtz => {
-            // If rs is greater than zero, branch to address (delay slot + offset)
-            let source = codegen.read_general_register(i64_type, instr.rs());
-            let zero = i64_type.const_zero();
-            let cmp =
-                codegen
-                    .builder
-                    .build_int_compare(IntPredicate::SGT, source, zero, "bgtz_cmp");
-
-            let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            codegen.build_conditional_branch(cmp, target_pc);
-        }
-
-        Mnenomic::Bgtzl => {
-            // If rs is greater than zero, branch to address (delay slot + offset), otherwise discard delay slot instruction
-            let source = codegen.read_general_register(i64_type, instr.rs());
-            let zero = i64_type.const_zero();
-            let cmp =
-                codegen
-                    .builder
-                    .build_int_compare(IntPredicate::SGT, source, zero, "bgtz_cmp");
-
-            let target_pc = instr.try_resolve_static_jump(pc).unwrap();
-            let then_block = codegen.build_conditional_branch(cmp, target_pc);
-            return Some(then_block);
-        }
-
         _ => stub(codegen, instr.mnemonic().name()),
     };
-
-    None
 }

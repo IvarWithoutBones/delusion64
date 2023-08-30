@@ -8,20 +8,18 @@ gdb:
     gdb --quiet || stty -onlcr
 
 # Show a disassembly of a MIPS ELF file.
-disassemble elf:
+disassemble elf *args:
     mips64-unknown-linux-gnuabi64-objdump "{{elf}}" \
       --architecture mips:4300 \
-      --disassemble \
+      --disassemble-all \
       --disassembler-color=on \
       --disassembler-options=no-aliases \
-      --visualize-jumps=extended-color
+      --visualize-jumps=extended-color \
+      {{args}}
 
 # Builds a human-readable LLVM IR file from a C/C++ source.
-llvm-ir input-c output-ll:
-    clang \
-        -S -emit-llvm \
-        -mcpu=mips3 -target mips64 \
-        "{{input-c}}" -o "{{output-ll}}"
+llvm-ir input-c output-ll *args:
+    clang -S -emit-llvm -mcpu=mips3 -target mips64 "{{input-c}}" -o "{{output-ll}}" {{args}}
 
 # Compiles an LLVM IR file to a flat binary (only the .text section).
 compile-ll input-ll output-bin:
