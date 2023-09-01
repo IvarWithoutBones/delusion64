@@ -25,6 +25,35 @@ impl From<u8> for OperatingMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bits {
+    Bits32,
+    Bits64,
+}
+
+bitfield! {
+    /// The format of the CP0 register Index.
+    #[derive(Ord, PartialOrd, Hash)]
+    pub struct Index(u32) {
+        /// Index of the TLB entry affected by the TLBR and TLBWI instructions.
+        [0..=6] pub index: u8,
+        /// Set to 1 when the previous TLBP instruction was unsuccessful, and set to 0 when successful
+        [31] pub probe_successfull,
+    }
+}
+
+impl Index {
+    pub const fn new(raw: u32) -> Self {
+        Self(raw)
+    }
+}
+
+impl From<Index> for u64 {
+    fn from(value: Index) -> Self {
+        value.0 as u64
+    }
+}
+
 bitfield! {
     /// The format of the CP0 register and TLB entry, EntryHi.
     #[derive(Ord, PartialOrd, Hash)]
@@ -45,6 +74,13 @@ bitfield! {
 impl EntryHi {
     pub const fn new(raw: u64) -> Self {
         Self(raw)
+    }
+
+    pub fn virtual_page_number(&self, bits: Bits) -> u32 {
+        match bits {
+            Bits::Bits32 => self.virtual_page_number_32(),
+            Bits::Bits64 => self.virtual_page_number_64(),
+        }
     }
 }
 

@@ -159,8 +159,10 @@ where
             let ptr: *const u8 = match func {
                 RuntimeFunction::Panic => Self::panic as _,
                 RuntimeFunction::OnInstruction => Self::on_instruction as _,
-
                 RuntimeFunction::GetFunctionPtr => Self::get_function_ptr as _,
+
+                RuntimeFunction::ProbeTlbEntry => Self::probe_tlb_entry as _,
+                RuntimeFunction::ReadTlbEntry => Self::read_tlb_entry as _,
                 RuntimeFunction::WriteTlbEntry => Self::write_tlb_entry as _,
 
                 RuntimeFunction::ReadI8 => Self::read_u8 as _,
@@ -354,6 +356,7 @@ where
         println!("{pc_vaddr:06x}: {instr}");
 
         if self.debugger.is_some() {
+            self.update_debugger();
             self.debugger.as_mut().unwrap().on_instruction(pc_vaddr);
             self.update_debugger();
             while self.debugger.as_ref().unwrap().is_paused() {
@@ -371,9 +374,22 @@ where
         self.panic_update_debugger(&format!("Environment::panic called: {string}"));
     }
 
+    unsafe extern "C" fn probe_tlb_entry(&mut self) {
+        self.registers[register::Cp0::Index] = self.tlb.probe(&self.registers).into();
+    }
+
+    unsafe extern "C" fn read_tlb_entry(&mut self, index: u64) {
+        self.tlb
+            .read_entry(index as usize, &mut self.registers)
+            .unwrap_or_else(|| {
+                let msg = format!("failed to set tlb entry at {index:#x}");
+                self.panic_update_debugger(&msg)
+            });
+    }
+
     unsafe extern "C" fn write_tlb_entry(&mut self, index: u64) {
         self.tlb
-            .set_entry(index as usize, &self.registers)
+            .write_entry(index as usize, &self.registers)
             .unwrap_or_else(|| {
                 let msg = format!("failed to set tlb entry at {index:#x}");
                 self.panic_update_debugger(&msg)

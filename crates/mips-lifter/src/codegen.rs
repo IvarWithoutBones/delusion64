@@ -219,7 +219,10 @@ impl<'ctx> CodeGen<'ctx> {
 
     /// Verify our module is valid.
     pub fn verify(&self) -> Result<(), String> {
-        self.module.verify().map_err(|e| e.to_string())
+        self.module.verify().map_err(|e| {
+            self.module.print_to_file("./test/a.ll").unwrap();
+            e.to_string()
+        })
     }
 
     /// Recompile the module into the execution engine, generating instructions.
@@ -274,13 +277,12 @@ impl<'ctx> CodeGen<'ctx> {
         func
     }
 
+    pub fn get_insert_block(&self) -> BasicBlock<'ctx> {
+        self.builder.get_insert_block().unwrap()
+    }
+
     fn append_basic_block(&self, name: &str) -> BasicBlock<'ctx> {
-        let current_func = self
-            .builder
-            .get_insert_block()
-            .unwrap()
-            .get_parent()
-            .unwrap();
+        let current_func = self.get_insert_block().get_parent().unwrap();
         self.context.append_basic_block(current_func, name)
     }
 
@@ -315,6 +317,7 @@ impl<'ctx> CodeGen<'ctx> {
         {
             // Check if we have previously compiled this function.
             self.set_call_attrs(self.builder.build_call(lab.function, &[], "constant_jump"));
+            self.builder.build_unreachable();
         } else {
             // Let the runtime environment JIT it, then jump to it.
             self.build_dynamic_jump(self.context.i64_type().const_int(address, false));
@@ -333,6 +336,7 @@ impl<'ctx> CodeGen<'ctx> {
             .as_pointer_value();
         let len = self.context.i64_type().const_int(string.len() as _, false);
         env_call!(self, RuntimeFunction::Panic, [ptr, len]);
+        self.builder.build_unreachable();
     }
 
     /// Performs a comparisons between two integers, returning the result as an i32.

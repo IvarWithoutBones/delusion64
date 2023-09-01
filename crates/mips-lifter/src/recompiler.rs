@@ -171,7 +171,7 @@ fn evaluate_conditional_branch<'ctx>(
     }
 }
 
-pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) {
+pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Option<()> {
     let mnemonic = instr.mnemonic();
     let bool_type = codegen.context.bool_type();
     let i8_type = codegen.context.i8_type();
@@ -190,10 +190,62 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) {
             // There is no need to emulate the instruction/data cache, so we'll ignore it for now.
         }
 
+        Mnenomic::Eret => {
+            // Return from interrupt, exception, or error exception. Unsets the LL bit.
+            codegen.write_register(register::Special::LoadLink, bool_type.const_zero());
+
+            let status = codegen.read_register(i64_type, register::Cp0::Status);
+            let erl_mask = i64_type.const_int(0b100, false);
+            let erl_set = {
+                let status = codegen.builder.build_and(status, erl_mask, "eret_erl_mask");
+                codegen.builder.build_int_compare(
+                    IntPredicate::EQ,
+                    status,
+                    erl_mask,
+                    "eret_erl_set",
+                )
+            };
+
+            codegen.build_if_else(
+                "eret_erl_set",
+                erl_set,
+                || {
+                    // Clear the ERL bit of the CP0 register Status to zero.
+                    let not_erl = erl_mask.const_not();
+                    let new_status = codegen.builder.build_and(status, not_erl, "eret_clear_erl");
+                    codegen.write_register(register::Cp0::Status, new_status);
+                    // Load the contents of the CP0 register ErrorEPC to the PC
+                    let error_epc = codegen.read_register(i64_type, register::Cp0::ErrorEPC);
+                    codegen.build_dynamic_jump(error_epc);
+                },
+                || {
+                    // Clear the EXL bit of the CP0 register Status to zero.
+                    let not_exl = i64_type.const_int(0b10, false).const_not();
+                    let new_status = codegen.builder.build_and(status, not_exl, "eret_clear_exl");
+                    codegen.write_register(register::Cp0::Status, new_status);
+                    // Load the contents of the CP0 register EPC to the PC
+                    let epc = codegen.read_register(i64_type, register::Cp0::EPC);
+                    codegen.build_dynamic_jump(epc);
+                },
+            );
+            codegen.builder.build_unreachable();
+        }
+
+        Mnenomic::Tlbp => {
+            // Searches for a TLB entry that matches the EntryHi register, and sets the Index register to the index of the matching entry.
+            env_call!(codegen, RuntimeFunction::ProbeTlbEntry, []);
+        }
+
         Mnenomic::Tlbwi => {
             // Stores the contents of EntryHi and EntryLo registers into the TLB entry pointed at by the Index register
             let index = codegen.read_register(i64_type, register::Cp0::Index);
             env_call!(codegen, RuntimeFunction::WriteTlbEntry, [index]);
+        }
+
+        Mnenomic::Tlbr => {
+            // Loads EntryHi and EntryLo registers with the TLB entry pointed at by the Index register.
+            let index = codegen.read_register(i64_type, register::Cp0::Index);
+            env_call!(codegen, RuntimeFunction::ReadTlbEntry, [index]);
         }
 
         Mnenomic::Ctc1 => {
@@ -1081,6 +1133,11 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) {
             codegen.write_general_register(instr.rd(), result);
         }
 
-        _ => stub(codegen, instr.mnemonic().name()),
+        _ => {
+            stub(codegen, instr.mnemonic().name());
+            return None;
+        }
     };
+
+    Some(())
 }

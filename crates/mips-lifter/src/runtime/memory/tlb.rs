@@ -1,7 +1,7 @@
 use crate::runtime::Registers;
 use mips_decomp::register::{
     self,
-    cp0::{EntryHi, EntryLo, OperatingMode, PageMask},
+    cp0::{Bits, EntryHi, EntryLo, Index, OperatingMode, PageMask},
 };
 use std::ops::Range;
 use tartan_bitfield::bitfield;
@@ -24,12 +24,6 @@ pub enum TranslationError {
 pub enum AccessMode {
     Read,
     Write,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Bits {
-    Bits32,
-    Bits64,
 }
 
 impl<'a> From<&'a Registers> for Bits {
@@ -101,11 +95,7 @@ impl Entry {
     }
 
     fn matches(&self, vaddr: VirtualAddress, bits: Bits, cp0_hi: Option<EntryHi>) -> bool {
-        let vpn = match bits {
-            Bits::Bits32 => self.hi.virtual_page_number_32(),
-            Bits::Bits64 => self.hi.virtual_page_number_64(),
-        };
-        if vaddr.virtual_page_number(self.page_mask, bits) != vpn {
+        if vaddr.virtual_page_number(self.page_mask, bits) != self.hi.virtual_page_number(bits) {
             return false;
         }
 
@@ -165,7 +155,38 @@ impl TranslationLookasideBuffer {
             .and_then(|pte| pte.physical_address(vaddr, bits, mode))
     }
 
-    pub fn set_entry(&mut self, index: usize, registers: &Registers) -> Option<()> {
+    pub fn probe(&mut self, regs: &Registers) -> Index {
+        let bits = Bits::from(regs);
+        let hi = EntryHi::new(regs[register::Cp0::EntryHi]);
+
+        let mut index = Index::new(regs[register::Cp0::Index] as u32);
+        let mut found = false;
+        for (i, entry) in self.entries.iter().enumerate() {
+            if entry.hi.virtual_page_number(bits) != hi.virtual_page_number(bits) {
+                continue;
+            }
+            if !entry.hi.global() && (hi.address_space_id() != entry.hi.address_space_id()) {
+                continue;
+            }
+
+            found = true;
+            index.set_index(i as u8);
+            break;
+        }
+        index.with_probe_successfull(found)
+    }
+
+    pub fn read_entry(&mut self, index: usize, registers: &mut Registers) -> Option<()> {
+        self.entries.get(index).map(|entry| {
+            registers[register::Cp0::EntryHi] = entry.hi.into();
+            // For TLBR: The G bit read from the TLB is written into both of the EntryLo0 and EntryLo1 registers.
+            let global = entry.hi.global();
+            registers[register::Cp0::EntryLo0] = entry.lo[0].clone().with_global(global).into();
+            registers[register::Cp0::EntryLo1] = entry.lo[1].clone().with_global(global).into();
+        })
+    }
+
+    pub fn write_entry(&mut self, index: usize, registers: &Registers) -> Option<()> {
         self.entries.get_mut(index).map(|entry| {
             *entry = Entry {
                 page_mask: PageMask::new(registers[register::Cp0::PageMask] as u32),

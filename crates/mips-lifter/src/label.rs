@@ -58,7 +58,11 @@ impl<'ctx> LabelWithContext<'ctx> {
         while i < len {
             let instr = &self.label.instructions[i];
             if !instr.has_delay_slot() {
-                self.compile_instruction(i, instr, codegen);
+                if self.compile_instruction(i, instr, codegen).is_none() {
+                    // Stubbed instruction encountered in the middle of the basic block, stop now so our runtime panic can take care of it.
+                    // Note that we do not panic here because the runtime environment has the ability to update the debugger connection post panic.
+                    break;
+                }
                 i += 1;
             } else {
                 let next_instr = if i == (len - 1) {
@@ -82,13 +86,7 @@ impl<'ctx> LabelWithContext<'ctx> {
             }
         }
 
-        if codegen
-            .builder
-            .get_insert_block()
-            .unwrap()
-            .get_terminator()
-            .is_none()
-        {
+        if codegen.get_insert_block().get_terminator().is_none() {
             if let Some(fallthrough_fn) = self.fallthrough_fn {
                 codegen.call_function(fallthrough_fn);
             } else {
@@ -103,7 +101,7 @@ impl<'ctx> LabelWithContext<'ctx> {
         index: usize,
         instr: &ParsedInstruction,
         codegen: &CodeGen<'ctx>,
-    ) {
+    ) -> Option<()> {
         self.on_instruction(self.index_to_virtual_address(index), codegen);
         compile_instruction(codegen, instr)
     }

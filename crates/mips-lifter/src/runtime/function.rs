@@ -10,8 +10,10 @@ use strum::{EnumIter, EnumVariantNames, VariantNames};
 pub enum RuntimeFunction {
     Panic,
     OnInstruction,
-
     GetFunctionPtr,
+
+    ProbeTlbEntry,
+    ReadTlbEntry,
     WriteTlbEntry,
 
     ReadI8,
@@ -58,11 +60,15 @@ impl RuntimeFunction {
             Self::Panic => sig!(void_type, [string_ptr: ptr_type, len: i64_type]),
             // `Environment::on_instruction(&mut self)`
             Self::OnInstruction => sig!(void_type, []),
-
             // `Environment::get_function_ptr(&mut self, vaddr: u64) -> u64
             Self::GetFunctionPtr => sig!(i64_type, [vaddr: i64_type]),
+
+            // `Environment::probe_tlb_entry(&mut self, index: u64)`
+            Self::ProbeTlbEntry => sig!(void_type, []),
             // `Environment::write_tlb_entry(&mut self, index: u64)`
             Self::WriteTlbEntry => sig!(void_type, [index: i64_type]),
+            // `Environment::read_tlb_entry(&mut self, index: u64)`
+            Self::ReadTlbEntry => sig!(void_type, [index: i64_type]),
 
             // `Environment::read_u8(&mut self, vaddr: u64) -> u8`
             Self::ReadI8 => sig!(i8_type, [vaddr: i64_type]),
