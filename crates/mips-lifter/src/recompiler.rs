@@ -102,7 +102,7 @@ fn compile_unconditional_branch(codegen: &CodeGen, instr: &ParsedInstruction, de
             codegen.build_dynamic_jump(source);
         }
 
-        _ => stub(codegen, instr.mnemonic().name()),
+        _ => unreachable!(),
     }
 }
 
@@ -507,7 +507,10 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             // Shift rt left by sa bits, store result in rd (32-bits)
             let shift = i32_type.const_int(instr.sa() as _, false);
             let target = codegen.read_general_register(i32_type, instr.rt());
-            let result = codegen.builder.build_left_shift(target, shift, "sll_shift");
+            let result = codegen.sign_extend_to(
+                i64_type,
+                codegen.builder.build_left_shift(target, shift, "sll_shift"),
+            );
             codegen.write_general_register(instr.rd(), result);
         }
 
@@ -519,7 +522,6 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
                 let mask = i32_type.const_int(0b11111, false);
                 codegen.builder.build_and(raw, mask, "sllv_rs_mask")
             };
-
             let result = codegen.sign_extend_to(
                 i64_type,
                 codegen
@@ -637,16 +639,17 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
 
         Mnenomic::Sra => {
             // Shift rt right by sa bits, store sign-extended result in rd
-            let target = codegen.read_general_register(i32_type, instr.rt());
-            let shift = i32_type.const_int(instr.sa() as _, false);
+            let target = codegen.read_general_register(i64_type, instr.rt());
+            let shift = i64_type.const_int(instr.sa() as _, false);
 
-            let result = codegen.sign_extend_to(
-                i64_type,
+            // Sign-extend the upper 32 bits by truncating to an u32, then sign-extending to an i64
+            let result = codegen.truncate_to(
+                i32_type,
                 codegen
                     .builder
                     .build_right_shift(target, shift, true, "sra_shift"),
             );
-            codegen.write_general_register(instr.rd(), result);
+            codegen.write_general_register(instr.rd(), codegen.sign_extend_to(i64_type, result));
         }
 
         Mnenomic::Srav => {
@@ -658,19 +661,14 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
                 codegen.builder.build_and(value, mask, "srav_rs_mask")
             };
 
-            let result = {
-                let shifted = codegen.truncate_to(
-                    i32_type,
-                    codegen
-                        .builder
-                        .build_right_shift(target, source, true, "srav_shift"),
-                );
-
-                // Zero out the upper 32 bits
-                codegen.sign_extend_to(i64_type, shifted)
-            };
-
-            codegen.write_general_register(instr.rd(), result);
+            // Sign-extend the upper 32 bits by truncating to an u32, then sign-extending to an i64
+            let result = codegen.truncate_to(
+                i32_type,
+                codegen
+                    .builder
+                    .build_right_shift(target, source, true, "srav_shift"),
+            );
+            codegen.write_general_register(instr.rd(), codegen.sign_extend_to(i64_type, result));
         }
 
         Mnenomic::Dmult => {
@@ -1025,7 +1023,6 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             // Add rs and rt, store result in rd
             let source = codegen.read_general_register(i32_type, instr.rs());
             let target = codegen.read_general_register(i32_type, instr.rt());
-
             let result = codegen.sign_extend_to(
                 i64_type,
                 codegen.builder.build_int_add(source, target, "add_res"),
@@ -1075,7 +1072,12 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             // If signed rs is less than signed rt, store one in rd, otherwise store zero
             let source = codegen.read_general_register(i64_type, instr.rs());
             let target = codegen.read_general_register(i64_type, instr.rt());
-            let cmp = codegen.build_compare_as_i32(IntPredicate::SLT, source, target, "slt_cmp");
+            let cmp = codegen.zero_extend_to(
+                i64_type,
+                codegen
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, source, target, "slt_cmp"),
+            );
             codegen.write_general_register(instr.rd(), cmp);
         }
 
@@ -1084,7 +1086,13 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             let imm =
                 codegen.sign_extend_to(i32_type, i16_type.const_int(instr.immediate() as _, true));
             let source = codegen.read_general_register(i32_type, instr.rs());
-            let cmp = codegen.build_compare_as_i32(IntPredicate::SLT, source, imm, "slti_cmp");
+            let cmp = codegen.zero_extend_to(
+                i64_type,
+                codegen
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, source, imm, "slti_cmp"),
+            );
+
             codegen.write_general_register(instr.rt(), cmp);
         }
 
@@ -1092,7 +1100,6 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             // If unsigned rs is less than unsigned rt, store one in rd, otherwise store zero.
             let source = codegen.read_general_register(i64_type, instr.rs());
             let target = codegen.read_general_register(i64_type, instr.rt());
-
             let cmp = codegen.zero_extend_to(
                 i64_type,
                 codegen
@@ -1108,7 +1115,13 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             let imm =
                 codegen.sign_extend_to(i64_type, i16_type.const_int(instr.immediate() as _, true));
             let source = codegen.read_general_register(i64_type, instr.rs());
-            let cmp = codegen.build_compare_as_i32(IntPredicate::ULT, source, imm, "sltiu_cmp");
+            let cmp = codegen.zero_extend_to(
+                i64_type,
+                codegen
+                    .builder
+                    .build_int_compare(IntPredicate::ULT, source, imm, "sltiu_cmp"),
+            );
+
             codegen.write_general_register(instr.rt(), cmp);
         }
 

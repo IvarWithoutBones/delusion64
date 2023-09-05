@@ -9,7 +9,6 @@ use inkwell::{
     module::Module,
     types::IntType,
     values::{CallSiteValue, FunctionValue, GlobalValue, IntValue, PointerValue},
-    IntPredicate,
 };
 use mips_decomp::{
     instruction::ParsedInstruction,
@@ -339,20 +338,6 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.build_unreachable();
     }
 
-    /// Performs a comparisons between two integers, returning the result as an i32.
-    pub fn build_compare_as_i32(
-        &self,
-        op: IntPredicate,
-        lhs: IntValue<'ctx>,
-        rhs: IntValue<'ctx>,
-        cmp_name: &str,
-    ) -> IntValue<'ctx> {
-        self.zero_extend_to(
-            self.context.i32_type(),
-            self.builder.build_int_compare(op, lhs, rhs, cmp_name),
-        )
-    }
-
     /// If the comparison is true, execute the function generated within the given closure, otherwise skip it.
     /// When the true block does not already have a terminator, a jump to the false block is generated.
     /// This positions the builder at the false case. The true case is returned.
@@ -406,28 +391,6 @@ impl<'ctx> CodeGen<'ctx> {
 
         self.builder.position_at_end(merge_block);
         (then_block, else_block)
-    }
-
-    pub fn build_conditional_branch_set_ra(
-        &self,
-        cmp: IntValue<'ctx>,
-        target_pc: u64,
-        next_instr_pc: IntValue<'ctx>,
-    ) -> BasicBlock<'ctx> {
-        self.build_if("conditional_branch_set_ra", cmp, || {
-            self.write_register(register::GeneralPurpose::Ra, next_instr_pc);
-            self.build_constant_jump(target_pc);
-        })
-    }
-
-    pub fn build_conditional_branch(
-        &self,
-        cmp: IntValue<'ctx>,
-        target_pc: u64,
-    ) -> BasicBlock<'ctx> {
-        self.build_if("conditional_branch", cmp, || {
-            self.build_constant_jump(target_pc);
-        })
     }
 
     /// Sign-extends the given value to the given type.
