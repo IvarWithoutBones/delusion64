@@ -21,11 +21,11 @@ impl Cartridge {
         Self::read_be(&mut cursor).map_err(|e| e.to_string())
     }
 
-    pub fn read(&self) -> Option<Vec<u8>> {
+    pub fn read(&self) -> Option<Box<[u8]>> {
         let mut buf = Vec::new();
         let mut cursor = Cursor::new(&mut buf);
         self.write_be(&mut cursor).ok()?;
-        Some(buf)
+        Some(buf.into_boxed_slice())
     }
 
     #[binrw::parser(reader, endian)]

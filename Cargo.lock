@@ -174,8 +174,8 @@ dependencies = [
  "clap",
  "mips-lifter",
  "n64-cartridge",
+ "n64-pi",
  "strum",
- "tartan-bitfield",
 ]
 
 [[package]]
@@ -373,6 +373,13 @@ name = "n64-cartridge"
 version = "0.1.0"
 dependencies = [
  "binrw",
+]
+
+[[package]]
+name = "n64-pi"
+version = "0.1.0"
+dependencies = [
+ "tartan-bitfield",
 ]
 
 [[package]]

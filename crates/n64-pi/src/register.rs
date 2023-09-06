@@ -23,20 +23,30 @@ bitfield! {
 
 bitfield! {
     /// https://n64brew.dev/wiki/Peripheral_Interface#0x0460_0008_-_PI_RD_LEN
-    /// Writing to this register will start the DMA transfer. Reading appears to always return `0x7F`.
+    /// Writing to this register will start the DMA transfer.
     pub struct ReadLength(u32) {
         /// Number of bytes, minus one, to be transferred from RDRAM, to the PI bus.
         [0..=23] pub length: u32,
     }
 }
 
+impl ReadLength {
+    // According to n64brew, reading appears to always return this.
+    pub const READ_VALUE: u32 = 0x7F;
+}
+
 bitfield! {
     /// https://n64brew.dev/wiki/Peripheral_Interface#0x0460_000C_-_PI_WR_LEN
-    /// Writing to this register will start the DMA transfer. Reading appears to always return `0x7F`.
+    /// Writing to this register will start the DMA transfer.
     pub struct WriteLength(u32) {
         /// Number of bytes, minus one, to be transferred from the PI bus, into RDRAM.
         [0..=23] pub length: u32,
     }
+}
+
+impl WriteLength {
+    // According to n64brew, reading appears to always return this.
+    pub const READ_VALUE: u32 = 0x7F;
 }
 
 bitfield! {
@@ -73,8 +83,7 @@ bitfield! {
 }
 
 bitfield! {
-    /// During IPL2, the N64 will initialize `Domain::One`'s `PageSize` using data read from the ROM header.
-    /// Page Size only matters for DMA transfers; all direct accesses via the PI are only ever 32 bits wide.
+    /// Only matters for DMA transfers; all direct accesses via the PI are only ever 32 bits wide.
     /// https://n64brew.dev/wiki/Peripheral_Interface#0x0460_00nC_-_PI_BSD_DOMn_PGS
     pub struct PageSize(u32) {
         /// The number of bytes that can be sequentially read/written on the bus, before sending the next base address.
@@ -100,7 +109,7 @@ bitfield! {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum Register {
+pub(crate) enum Register {
     DramAddress,
     CartAddress,
     ReadLength,

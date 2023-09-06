@@ -8,8 +8,6 @@ use std::{
 };
 
 pub mod bus;
-// TODO: move this to a separate crate
-pub mod pi;
 
 /// Blocks until a GDB client connects via TCP
 fn wait_for_gdb_connection(port: u16) -> io::Result<TcpStream> {
@@ -44,18 +42,19 @@ fn main() {
         eprintln!("failed to parse cartridge: {e}");
         std::process::exit(1);
     });
-    println!("{cart:#?}");
 
     if cli.show_cartridge {
+        println!("{cart:#?}");
         std::process::exit(0);
     }
-
-    let bus = Bus::new(bin.into());
 
     let maybe_gdb_stream = cli.gdb.map(|port| {
         wait_for_gdb_connection(port.unwrap_or(DEFAULT_GDB_PORT))
             .expect("failed to wait for GDB connection")
     });
+
+    // This will copy the first 0x1000 bytes of the PIF ROM to the RSP DMEM, simulating IPL2.
+    let bus = Bus::new(cart);
 
     // The initial state of the registers, simulating the effects of IPL 1+2.
     let regs = &[

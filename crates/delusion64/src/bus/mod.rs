@@ -1,11 +1,12 @@
 use self::location::{MemoryLocation, MemoryRegion, MemoryType, MemoryValue};
-use crate::pi::PeripheralInterface;
 use mips_lifter::runtime::Memory;
+use n64_cartridge::Cartridge;
+use n64_pi::PeripheralInterface;
 use std::fmt;
 
 pub mod location;
 
-/// Allocates a fixed-sized boxed slice of a given length.
+/// Allocates a fixed-sized boxed array of a given length.
 fn boxed_array<T: Default + Clone, const LEN: usize>() -> Box<[T; LEN]> {
     // Use a Vec to allocate directly onto the heap. Using an array will allocate on the stack,
     // which can cause a stack overflow. SAFETY: We're sure the input size matches the output size.
@@ -22,7 +23,9 @@ pub struct Bus {
 }
 
 impl Bus {
-    pub fn new(cartridge_rom: Box<[u8]>) -> Self {
+    pub fn new(cartridge: Cartridge) -> Self {
+        let cartridge_rom = cartridge.read().unwrap();
+
         // Copy the first 0x1000 bytes of the PIF ROM to the RSP DMEM, simulating IPL2.
         let mut rsp_dmem = boxed_array();
         let len = rsp_dmem.len().min(cartridge_rom.len());
@@ -33,7 +36,7 @@ impl Bus {
             rsp_imem: boxed_array(),
             rsp_dmem,
             cartridge_rom,
-            pi: PeripheralInterface::new(),
+            pi: PeripheralInterface::new(cartridge.header.pi_bsd_domain_1_flags),
         }
     }
 

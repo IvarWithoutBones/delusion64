@@ -8,22 +8,16 @@ use self::register::{
 
 mod register;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum DmaType {
-    FromMemory,
-    ToMemory,
-}
-
 /// See https://n64brew.dev/wiki/Peripheral_Interface#Domains.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum Domain {
+enum Domain {
     One,
     Two,
 }
 
 /// See https://n64brew.dev/wiki/Peripheral_Interface#Domains.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum Region {
+enum Region {
     /// Writes to this region will be ignored, while reads will return open-bus data.
     /// See https://n64brew.dev/wiki/Peripheral_Interface#Open_bus_behavior.
     Unknown,
@@ -44,7 +38,16 @@ impl Region {
         }
     }
 
-    // TODO: do we need this?
+    pub const fn offset(&self, addr: u32) -> u32 {
+        match self {
+            Region::Unknown => addr,
+            Region::DiskDriveRegisters => addr - 0x0500_0000,
+            Region::DiskDriveRom => addr - 0x0600_0000,
+            Region::SRam => addr - 0x0800_0000,
+            Region::CartridgeRom => addr - 0x1000_0000,
+        }
+    }
+
     pub const fn domain(&self) -> Domain {
         match self {
             // This is hardcoded in the PI itself, according to n64brew.
@@ -61,32 +64,50 @@ impl Region {
 /// See https://n64brew.dev/wiki/Peripheral_Interface, and https://github.com/Dillonb/n64-resources/blob/master/pi_dma.org.
 #[derive(Default, Debug, PartialEq, Eq)]
 pub struct PeripheralInterface {
-    pub dram_address: DramAddress,
-    pub cart_address: CartAddress,
-    pub read_length: ReadLength,
-    pub write_length: WriteLength,
+    dram_address: DramAddress,
+    cart_address: CartAddress,
+    read_length: ReadLength,
+    write_length: WriteLength,
 
     // NOTE: Differentiates when reading or writing to it.
-    pub status_read: Status,
-    pub status_write: Status,
+    status_read: Status,
+    status_write: Status,
 
-    pub domain_1_latch: Latch,
-    pub domain_2_latch: Latch,
+    domain_1_latch: Latch,
+    domain_2_latch: Latch,
 
-    pub domain_1_pulse_width: PulseWidth,
-    pub domain_2_pulse_width: PulseWidth,
+    domain_1_pulse_width: PulseWidth,
+    domain_2_pulse_width: PulseWidth,
 
-    pub domain_1_page_size: PageSize,
-    pub domain_2_page_size: PageSize,
+    domain_1_page_size: PageSize,
+    domain_2_page_size: PageSize,
 
-    pub domain_1_release: Release,
-    pub domain_2_release: Release,
+    domain_1_release: Release,
+    domain_2_release: Release,
 }
 
 impl PeripheralInterface {
-    pub fn new() -> Self {
-        // TODO: configure the BSD registers based on the cartridge header.
-        Default::default()
+    pub fn new(bsd_domain_1_flags: u32) -> Self {
+        // Initialize the PI registers based on the flags from the cartridge header.
+        let mut pi = Self::default();
+        for (i, byte) in bsd_domain_1_flags
+            .to_be_bytes()
+            .iter()
+            .enumerate()
+            .skip(1) // Unsure what the first byte is used for? Matches amount of bytes for unaligned DMA, and ReadLength/WriteLength read values.
+            .map(|(i, b)| (i, *b as u32))
+        {
+            match i {
+                1 => {
+                    pi.domain_1_page_size = PageSize::from(byte);
+                    pi.domain_1_release = Release::from(byte);
+                }
+                2 => pi.domain_1_pulse_width = PulseWidth::from(byte),
+                3 => pi.domain_1_latch = Latch::from(byte),
+                _ => unreachable!(),
+            }
+        }
+        pi
     }
 
     pub fn read(&self, offset: usize) -> Option<u32> {
@@ -94,10 +115,8 @@ impl PeripheralInterface {
             Register::DramAddress => Some(self.dram_address.into()),
             Register::CartAddress => Some(self.cart_address.into()),
             Register::Status => Some(self.status_read.into()),
-
-            // Reading these registers appears to always return 0x7F, according to n64brew.
-            Register::ReadLength => Some(0x7F),
-            Register::WriteLength => Some(0x7F),
+            Register::ReadLength => Some(ReadLength::READ_VALUE),
+            Register::WriteLength => Some(WriteLength::READ_VALUE),
 
             Register::Latch(dom) => Some(match dom {
                 Domain::One => self.domain_1_latch.into(),
@@ -134,13 +153,12 @@ impl PeripheralInterface {
 
             Register::ReadLength => {
                 self.read_length = ReadLength::from(value);
-                self.start_dma(DmaType::FromMemory, rdram, cart);
-                panic!("PI: started read DMA {self:#x?}");
+                todo!("PI: read DMA {self:#x?}");
             }
 
             Register::WriteLength => {
                 self.write_length = WriteLength::from(value);
-                self.start_dma(DmaType::ToMemory, rdram, cart);
+                self.dma_to_memory(rdram, cart);
             }
 
             Register::Status => self.status_write = Status::from(value),
@@ -169,25 +187,27 @@ impl PeripheralInterface {
         Some(())
     }
 
-    pub fn start_dma(&mut self, ty: DmaType, rdram: &mut [u8], cart: &mut [u8]) {
-        assert!(ty == DmaType::ToMemory); // TODO: implement DMA to cartridge.
+    fn dma_to_memory(&mut self, rdram: &mut [u8], cart: &[u8]) {
         let cart_address = self.cart_address.address() as usize;
-        let region = Region::new(cart_address as _);
-        let domain = region.domain();
-        match region {
+        match Region::new(cart_address as u32) {
             Region::CartridgeRom => {
-                // TODO: use the configured `PageSize` for the given domain, prettify
-                let cart_offset = cart_address - 0x1000_0000;
-                let rdram_offset = self.dram_address.address() as usize;
+                // TODO: use the configured `PageSize`
                 let length = self.write_length.length() as usize;
-                rdram[rdram_offset..=rdram_offset + length]
-                    .copy_from_slice(&cart[cart_offset..=cart_offset + length]);
+
+                let rdram_offset = self.dram_address.address() as usize;
+                let rdram_slice = &mut rdram[rdram_offset..=rdram_offset + length];
+
+                let cart_offset = Region::CartridgeRom.offset(cart_address as u32) as usize;
+                let cart_slice = &cart[cart_offset..=cart_offset + length];
+
+                rdram_slice.copy_from_slice(cart_slice);
                 println!("PI: DMA from cart {cart_offset:#x} to rdram {rdram_offset:#x} (length {length:#x})");
             }
 
-            _ => panic!(
-                "PI: DMA to unknown address {cart_address:#x} (region {region:?}, domain {domain:?})"
-            ),
+            region => {
+                let domain = region.domain();
+                panic!("PI: DMA to unknown address {cart_address:#x} (region {region:?}, domain {domain:?})")
+            }
         }
     }
 }

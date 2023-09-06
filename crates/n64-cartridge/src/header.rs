@@ -92,7 +92,7 @@ pub struct GameCode {
 #[binrw]
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub struct Header {
-    pub pi_bsd_dom_flags: u32,
+    pub pi_bsd_domain_1_flags: u32,
 
     // The clock rate is manipulated when parsing, keep the original so that we can write it back.
     _raw_clock_rate: u32,
@@ -144,8 +144,8 @@ impl fmt::Debug for Header {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Header")
             .field(
-                "pi_bsd_dom_flags",
-                &format_args!("{:#08X}", self.pi_bsd_dom_flags),
+                "pi_bsd_domain_1_flags",
+                &format_args!("{:#08X}", self.pi_bsd_domain_1_flags),
             )
             .field("clock_rate", &self.clock_rate)
             .field("boot_address", &format_args!("{:#08X}", self.boot_address))
