@@ -13,3 +13,4 @@ strum = { version = "0.25.0", features = ["derive"] }
 mips-lifter = { path = "../mips-lifter" }
 n64-cartridge = { path = "../n64-cartridge" }
 n64-pi = { path = "../n64-pi" }
+n64-mi = { path = "../n64-mi" }

@@ -1,6 +1,7 @@
 use self::location::{MemoryLocation, MemoryRegion, MemoryType, MemoryValue};
 use mips_lifter::runtime::Memory;
 use n64_cartridge::Cartridge;
+use n64_mi::{MiError, MipsInterface};
 use n64_pi::PeripheralInterface;
 use std::fmt;
 
@@ -20,6 +21,7 @@ pub struct Bus {
     pub rsp_imem: Box<[u8; MemoryRegion::RspIMemory.len()]>,
     pub cartridge_rom: Box<[u8]>,
     pub pi: PeripheralInterface,
+    pub mi: MipsInterface,
 }
 
 impl Bus {
@@ -37,6 +39,7 @@ impl Bus {
             rsp_dmem,
             cartridge_rom,
             pi: PeripheralInterface::new(cartridge.header.pi_bsd_domain_1_flags),
+            mi: MipsInterface::new(),
         }
     }
 
@@ -69,6 +72,11 @@ impl Bus {
                 self.cartridge_rom.as_mut(),
             )),
 
+            MemoryRegion::MipsInterface => self
+                .mi
+                .write(offset, value.try_into().unwrap())
+                .map_err(BusError::MipsInterfaceError),
+
             MemoryRegion::CartridgeRom | MemoryRegion::DiskDriveIpl4Rom | MemoryRegion::PifRom => {
                 Err(BusError::ReadOnlyRegionWrite(region))
             }
@@ -94,6 +102,12 @@ impl Bus {
             MemoryRegion::PeripheralInterface => {
                 map_err(self.pi.read(offset).map(|value| value.into()))
             }
+
+            MemoryRegion::MipsInterface => self
+                .mi
+                .read(offset)
+                .map_err(BusError::MipsInterfaceError)
+                .map(|value| value.into()),
 
             MemoryRegion::CartridgeRom => Ok(
                 // An address not within the mapped cartridge ROM range should return zero.
@@ -121,6 +135,8 @@ pub enum BusError {
     ReadOnlyRegionWrite(MemoryRegion),
     /// A write-only region was read from.
     WriteOnlyRegionRead(MemoryRegion),
+    /// An error occurred while accessing the mips interface.
+    MipsInterfaceError(MiError),
     /// The offset is out of bounds for the given region.
     /// This is an internal error which can only occur if the `MemoryLocation` was improperly created.
     OffsetOutOfBounds(MemoryLocation),
@@ -134,6 +150,7 @@ impl fmt::Debug for BusError {
             BusError::UnmappedAddress(addr) => write!(f, "unmapped address {addr:#x}"),
             BusError::ReadOnlyRegionWrite(region) => write!(f, "read-only region {region:?}"),
             BusError::WriteOnlyRegionRead(region) => write!(f, "write-only region {region:?}"),
+            BusError::MipsInterfaceError(err) => write!(f, "MI error: {err:?}"),
             BusError::Unimplemented => write!(f, "unimplemented (cannot stub)"),
             BusError::OffsetOutOfBounds(location) => {
                 write!(
