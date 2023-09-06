@@ -17,7 +17,7 @@ const LLVM_CALLING_CONVENTION_FAST: u32 = 8;
 
 pub type InitialRegisters<'a> = &'a [(register::Register, u64)];
 
-pub fn run<Mem>(mem: Mem, regs: InitialRegisters, gdb_stream: Option<TcpStream>)
+pub fn run<Mem>(mem: Mem, regs: InitialRegisters, gdb_stream: Option<TcpStream>) -> !
 where
     Mem: runtime::Memory,
 {
@@ -64,5 +64,5 @@ where
 
     // Run the generated code!
     unsafe { main_fn.call() };
-    println!("finished executing code:{:?}", env.registers);
+    unreachable!()
 }

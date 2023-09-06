@@ -165,11 +165,11 @@ where
                 RuntimeFunction::ReadTlbEntry => Self::read_tlb_entry as _,
                 RuntimeFunction::WriteTlbEntry => Self::write_tlb_entry as _,
 
+                // See `runtime/memory/mod.rs`.
                 RuntimeFunction::ReadI8 => Self::read_u8 as _,
                 RuntimeFunction::ReadI16 => Self::read_u16 as _,
                 RuntimeFunction::ReadI32 => Self::read_u32 as _,
                 RuntimeFunction::ReadI64 => Self::read_u64 as _,
-
                 RuntimeFunction::WriteI8 => Self::write_u8 as _,
                 RuntimeFunction::WriteI16 => Self::write_u16 as _,
                 RuntimeFunction::WriteI32 => Self::write_u32 as _,
@@ -211,27 +211,8 @@ where
         }
     }
 
-    fn panic_read_failed<E>(&mut self, err: E, vaddr: u64, paddr: u32) -> !
-    where
-        E: fmt::Debug,
-    {
-        let message = format!("memory read failed at vaddr={vaddr:#x} paddr={paddr:#x}: {err:?}");
-        self.panic_update_debugger(&message)
-    }
-
-    fn panic_write_failed<T, E>(&mut self, err: E, vaddr: u64, paddr: u32, value: T) -> !
-    where
-        T: fmt::LowerHex,
-        E: fmt::Debug,
-    {
-        let message = format!(
-            "memory write of {value:#x} failed at vaddr={vaddr:#x} paddr={paddr:#x}: {err:?}",
-        );
-        self.panic_update_debugger(&message)
-    }
-
     /*
-        Runtime functions. These are not meant to be called directly, but rather by generated code.
+        Runtime functions. These are not meant to be called directly, but rather by JIT'ed code.
     */
 
     // TODO: split this up and prettify it a bit, it is rather unwieldy right now.
@@ -394,62 +375,6 @@ where
                 let msg = format!("failed to set tlb entry at {index:#x}");
                 self.panic_update_debugger(&msg)
             });
-    }
-
-    unsafe extern "C" fn read_u8(&mut self, vaddr: u64) -> u8 {
-        let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
-        self.memory
-            .read_u8(paddr)
-            .unwrap_or_else(|err| self.panic_read_failed(err, vaddr, paddr))
-    }
-
-    unsafe extern "C" fn read_u16(&mut self, vaddr: u64) -> u16 {
-        let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
-        self.memory
-            .read_u16(paddr)
-            .unwrap_or_else(|err| self.panic_read_failed(err, vaddr, paddr))
-    }
-
-    unsafe extern "C" fn read_u32(&mut self, vaddr: u64) -> u32 {
-        let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
-        self.memory
-            .read_u32(paddr)
-            .unwrap_or_else(|err| self.panic_read_failed(err, vaddr, paddr))
-    }
-
-    unsafe extern "C" fn read_u64(&mut self, vaddr: u64) -> u64 {
-        let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
-        self.memory
-            .read_u64(paddr)
-            .unwrap_or_else(|err| self.panic_read_failed(err, vaddr, paddr))
-    }
-
-    unsafe extern "C" fn write_u8(&mut self, vaddr: u64, value: u8) {
-        let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Write);
-        self.memory
-            .write_u8(paddr, value)
-            .unwrap_or_else(|err| self.panic_write_failed(err, vaddr, paddr, value))
-    }
-
-    unsafe extern "C" fn write_u16(&mut self, vaddr: u64, value: u16) {
-        let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Write);
-        self.memory
-            .write_u16(paddr, value)
-            .unwrap_or_else(|err| self.panic_write_failed(err, vaddr, paddr, value))
-    }
-
-    unsafe extern "C" fn write_u32(&mut self, vaddr: u64, value: u32) {
-        let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Write);
-        self.memory
-            .write_u32(paddr, value)
-            .unwrap_or_else(|err| self.panic_write_failed(err, vaddr, paddr, value))
-    }
-
-    unsafe extern "C" fn write_u64(&mut self, vaddr: u64, value: u64) {
-        let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Write);
-        self.memory
-            .write_u64(paddr, value)
-            .unwrap_or_else(|err| self.panic_write_failed(err, vaddr, paddr, value))
     }
 }
 

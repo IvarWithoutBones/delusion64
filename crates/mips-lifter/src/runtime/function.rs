@@ -20,7 +20,6 @@ pub enum RuntimeFunction {
     ReadI16,
     ReadI32,
     ReadI64,
-
     WriteI8,
     WriteI16,
     WriteI32,
@@ -54,7 +53,7 @@ impl RuntimeFunction {
             };
         }
 
-        // NOTE: Must match the specified functions signature in `runtime/mod.rs`!
+        // NOTE: Must match the signature in `runtime/{mod.rs,memory/mod.rs}`!
         match self {
             // `Environment::panic(&mut self)`
             Self::Panic => sig!(void_type, [string_ptr: ptr_type, len: i64_type]),
@@ -99,6 +98,6 @@ impl RuntimeFunction {
         ptr: *const u8,
     ) {
         let func = module.add_function(self.name(), self.signature(context), None);
-        execution_engine.add_global_mapping(&func, ptr as _);
+        execution_engine.add_global_mapping(&func, ptr as usize);
     }
 }
