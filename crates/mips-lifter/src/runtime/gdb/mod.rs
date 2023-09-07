@@ -1,22 +1,77 @@
+use self::command::{Command, MonitorCommand, MonitorCommandMap};
 use super::{memory::tlb::AccessMode, Environment, Memory};
 use gdbstub::{
     conn::ConnectionExt,
-    outputln,
     stub::{state_machine::GdbStubStateMachine, GdbStub, SingleThreadStopReason},
     target::{
         self,
         ext::{
             base::singlethread::{SingleThreadBase, SingleThreadResume, SingleThreadSingleStep},
             breakpoints::{Breakpoints, SwBreakpoint},
-            monitor_cmd::MonitorCmd,
         },
         Target, TargetResult,
     },
 };
 use mips_decomp::register;
-use std::{collections::HashSet, net::TcpStream, num::ParseIntError};
+use std::{collections::HashSet, net::TcpStream};
 
-type Connection = Box<dyn ConnectionExt<Error = std::io::Error>>;
+pub(crate) mod command;
+
+/// An error that can occur when creating a GDB connection.
+pub enum GdbConnectionError {
+    EmptyCommandName(usize),
+    DuplicateCommand(&'static str),
+    RedefinedInternalCommand(&'static str),
+}
+
+impl std::fmt::Debug for GdbConnectionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GdbConnectionError::EmptyCommandName(i) => write!(f, "empty name at index {i}"),
+            GdbConnectionError::DuplicateCommand(name) => {
+                write!(f, "duplicate command name {name:?}")
+            }
+            GdbConnectionError::RedefinedInternalCommand(name) => {
+                write!(f, "redefined internal command {name:?}",)
+            }
+        }
+    }
+}
+
+/// A connection to a GDB client.
+pub struct Connection<Mem: Memory> {
+    stream: TcpStream,
+    monitor_commands: Option<Vec<MonitorCommand<Mem>>>,
+}
+
+impl<Mem: Memory> Connection<Mem> {
+    /// Create a new GDB connection, and optionally register custom monitor commands.
+    pub fn new(
+        stream: TcpStream,
+        monitor_commands: Option<Vec<MonitorCommand<Mem>>>,
+    ) -> Result<Self, GdbConnectionError> {
+        if let Some(cmds) = &monitor_commands {
+            for (i, cmd) in cmds.iter().enumerate() {
+                if cmd.name.is_empty() {
+                    return Err(GdbConnectionError::EmptyCommandName(i));
+                }
+                if cmds.iter().skip(i + 1).any(|other| other.name == cmd.name) {
+                    return Err(GdbConnectionError::DuplicateCommand(cmd.name));
+                }
+                if Environment::<'_, Mem>::monitor_commands()
+                    .iter()
+                    .any(|other| other.name == cmd.name)
+                {
+                    return Err(GdbConnectionError::RedefinedInternalCommand(cmd.name));
+                }
+            }
+        }
+        Ok(Self {
+            stream,
+            monitor_commands,
+        })
+    }
+}
 
 #[derive(Default)]
 enum State {
@@ -32,23 +87,26 @@ where
 {
     state: State,
     breakpoints: HashSet<u64>,
-    state_machine: Option<GdbStubStateMachine<'ctx, Environment<'ctx, Mem>, Connection>>,
+    state_machine: Option<GdbStubStateMachine<'ctx, Environment<'ctx, Mem>, TcpStream>>,
     stop_reason: Option<SingleThreadStopReason<u32>>,
+    monitor_commands: MonitorCommandMap<'ctx, Mem>,
 }
 
 impl<'ctx, Mem> Debugger<'ctx, Mem>
 where
     Mem: Memory,
 {
-    pub fn new(env: &mut Environment<'ctx, Mem>, gdb_stream: TcpStream) -> Self {
-        let conn: Connection = Box::new(gdb_stream);
-        let state_machine = GdbStub::new(conn).run_state_machine(env).unwrap();
+    pub fn new(env: &mut Environment<'ctx, Mem>, gdb: Connection<Mem>) -> Self {
+        let state_machine = GdbStub::new(gdb.stream).run_state_machine(env).unwrap();
+        let monitor_commands =
+            Command::monitor_command_map(gdb.monitor_commands.unwrap_or_default());
 
         Self {
             state: State::default(),
             breakpoints: HashSet::new(),
             stop_reason: None,
             state_machine: Some(state_machine),
+            monitor_commands,
         }
     }
 
@@ -154,6 +212,7 @@ where
 
     #[inline(always)]
     fn support_monitor_cmd(&mut self) -> Option<target::ext::monitor_cmd::MonitorCmdOps<'_, Self>> {
+        // See `src/runtime/gdb/command.rs`.
         Some(self)
     }
 
@@ -336,66 +395,4 @@ where
         self.debugger.as_mut().unwrap().state = State::SingleStep;
         Ok(())
     }
-}
-
-impl<Mem> MonitorCmd for Environment<'_, Mem>
-where
-    Mem: Memory,
-{
-    fn handle_monitor_cmd(
-        &mut self,
-        cmd: &[u8],
-        mut out: target::ext::monitor_cmd::ConsoleOutput<'_>,
-    ) -> Result<(), Self::Error> {
-        // This is a closure so that we can early-return using `?`, without propagating the error.
-        let _ = || -> Result<(), ()> {
-            let cmd = std::str::from_utf8(cmd).map_err(|_| {
-                outputln!(out, "monitor command is not valid UTF-8");
-            })?;
-
-            // Could be much more elegant, but this works fine for now.
-            let mut iter = cmd.split_whitespace().peekable();
-            match iter.next().unwrap_or("") {
-                "registers" | "regs" => outputln!(out, "{:?}", self.registers),
-                "status" => outputln!(out, "{:#?}", self.registers.status()),
-                "dump-tlb" => outputln!(out, "{:#x?}", self.tlb),
-
-                "physical-address" | "paddr" => {
-                    let vaddr = str_to_u64(
-                        iter.next()
-                            .ok_or_else(|| outputln!(out, "expected virtual address"))?,
-                    )
-                    .map_err(|e| outputln!(out, "failed to parse virtual address: {e}"))?;
-
-                    let paddr = self
-                        .tlb
-                        .translate(vaddr, AccessMode::Read, &self.registers)
-                        .map_err(|e| {
-                            outputln!(out, "virtual address {vaddr:#x} is not mapped: {e:#?}");
-                        })?;
-                    outputln!(out, "{paddr:#x}");
-                }
-
-                _ => outputln!(out, "unrecognized command: '{cmd}'"),
-            };
-
-            if iter.peek().is_some() {
-                outputln!(out, "warning: ignoring extra arguments");
-            }
-
-            Ok(())
-        }();
-        Ok(())
-    }
-}
-
-fn str_to_u64(str: &str) -> Result<u64, ParseIntError> {
-    const RADIXES: &[(&str, u32)] = &[("0b", 2), ("0x", 16)];
-    let (str, radix) = RADIXES
-        .iter()
-        .find(|(prefix, _radix)| str.starts_with(prefix))
-        .map(|(prefix, radix)| (&str[prefix.len()..], *radix))
-        .unwrap_or((str, 10));
-    // Read as a signed integer to support negative numbers
-    Ok(i64::from_str_radix(str, radix)? as u64)
 }

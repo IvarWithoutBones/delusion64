@@ -1,5 +1,5 @@
 use self::location::{MemoryLocation, MemoryRegion, MemoryType, MemoryValue};
-use mips_lifter::runtime::Memory;
+use mips_lifter::{gdb::MonitorCommand, runtime::Memory};
 use n64_cartridge::Cartridge;
 use n64_mi::{MiError, MipsInterface};
 use n64_pi::PeripheralInterface;
@@ -41,6 +41,25 @@ impl Bus {
             pi: PeripheralInterface::new(cartridge.header.pi_bsd_domain_1_flags),
             mi: MipsInterface::new(),
         }
+    }
+
+    pub fn gdb_monitor_commands() -> Vec<MonitorCommand<Self>> {
+        vec![
+            MonitorCommand {
+                name: "mi",
+                handler: Box::new(|bus, out, _args| {
+                    writeln!(out, "{:#?}", bus.mi)?;
+                    Ok(())
+                }),
+            },
+            MonitorCommand {
+                name: "pi",
+                handler: Box::new(|bus, out, _args| {
+                    writeln!(out, "{:#?}", bus.pi)?;
+                    Ok(())
+                }),
+            },
+        ]
     }
 
     fn write<MemVal>(&mut self, location: MemoryLocation, raw_value: MemVal) -> Result<(), BusError>
@@ -167,7 +186,6 @@ impl fmt::Debug for BusError {
 impl Memory for Bus {
     type AccessError = BusError;
 
-    #[inline]
     fn read_u8(&self, paddr: u32) -> Result<u8, Self::AccessError> {
         self.read(paddr.try_into()?, MemoryType::U8).map(|value| {
             // SAFETY: we're sure the returned value matches the MemoryType.
@@ -175,7 +193,6 @@ impl Memory for Bus {
         })
     }
 
-    #[inline]
     fn read_u16(&self, paddr: u32) -> Result<u16, Self::AccessError> {
         self.read(paddr.try_into()?, MemoryType::U16).map(|value| {
             // SAFETY: we're sure the returned value matches the MemoryType.
@@ -183,7 +200,6 @@ impl Memory for Bus {
         })
     }
 
-    #[inline]
     fn read_u32(&self, paddr: u32) -> Result<u32, Self::AccessError> {
         self.read(paddr.try_into()?, MemoryType::U32).map(|value| {
             // SAFETY: we're sure the returned value matches the MemoryType.
@@ -191,7 +207,6 @@ impl Memory for Bus {
         })
     }
 
-    #[inline]
     fn read_u64(&self, paddr: u32) -> Result<u64, Self::AccessError> {
         self.read(paddr.try_into()?, MemoryType::U64).map(|value| {
             // SAFETY: we're sure the returned value matches the MemoryType.
@@ -199,22 +214,18 @@ impl Memory for Bus {
         })
     }
 
-    #[inline]
     fn write_u8(&mut self, paddr: u32, value: u8) -> Result<(), Self::AccessError> {
         self.write(paddr.try_into()?, value)
     }
 
-    #[inline]
     fn write_u16(&mut self, paddr: u32, value: u16) -> Result<(), Self::AccessError> {
         self.write(paddr.try_into()?, value)
     }
 
-    #[inline]
     fn write_u32(&mut self, paddr: u32, value: u32) -> Result<(), Self::AccessError> {
         self.write(paddr.try_into()?, value)
     }
 
-    #[inline]
     fn write_u64(&mut self, paddr: u32, value: u64) -> Result<(), Self::AccessError> {
         self.write(paddr.try_into()?, value)
     }

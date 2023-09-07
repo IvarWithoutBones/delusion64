@@ -1,6 +1,6 @@
 use crate::bus::Bus;
 use clap::Parser;
-use mips_lifter::register;
+use mips_lifter::{gdb, register};
 use n64_cartridge::Cartridge;
 use std::{
     io,
@@ -48,11 +48,6 @@ fn main() {
         std::process::exit(0);
     }
 
-    let maybe_gdb_stream = cli.gdb.map(|port| {
-        wait_for_gdb_connection(port.unwrap_or(DEFAULT_GDB_PORT))
-            .expect("failed to wait for GDB connection")
-    });
-
     // This will copy the first 0x1000 bytes of the PIF ROM to the RSP DMEM, simulating IPL2.
     let bus = Bus::new(cart);
 
@@ -69,5 +64,11 @@ fn main() {
         (register::Special::Pc.into(), 0x0000_0000_A400_0040),
     ];
 
-    mips_lifter::run(bus, regs, maybe_gdb_stream)
+    let gdb = cli.gdb.map(|port| {
+        let stream = wait_for_gdb_connection(port.unwrap_or(DEFAULT_GDB_PORT))
+            .expect("failed to wait for GDB connection");
+        gdb::Connection::new(stream, Some(Bus::gdb_monitor_commands())).unwrap()
+    });
+
+    mips_lifter::run(bus, regs, gdb)
 }

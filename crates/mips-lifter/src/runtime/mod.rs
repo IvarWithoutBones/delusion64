@@ -18,7 +18,6 @@ use mips_decomp::{
 use std::{
     cell::{Cell, UnsafeCell},
     fmt,
-    net::TcpStream,
     pin::Pin,
 };
 use strum::IntoEnumIterator;
@@ -27,7 +26,7 @@ pub(crate) use self::function::RuntimeFunction;
 pub use self::memory::Memory;
 
 mod function;
-mod gdb;
+pub(crate) mod gdb;
 mod memory;
 
 pub(crate) struct Registers {
@@ -112,7 +111,7 @@ where
     pub fn new(
         memory: Mem,
         regs: InitialRegisters,
-        gdb_stream: Option<TcpStream>,
+        gdb: Option<gdb::Connection<Mem>>,
     ) -> Pin<Box<Self>> {
         let mut registers = Registers::default();
         for (reg, val) in regs {
@@ -127,8 +126,8 @@ where
             memory,
         };
 
-        if let Some(stream) = gdb_stream {
-            env.debugger = Some(gdb::Debugger::new(&mut env, stream));
+        if let Some(gdb) = gdb {
+            env.debugger = Some(gdb::Debugger::new(&mut env, gdb));
         }
 
         Box::pin(env)
