@@ -8,6 +8,11 @@ pub mod gdb {
         command::{MonitorCommand, MonitorCommandHandler, MonitorCommandHandlerError},
         Connection,
     };
+
+    pub mod util {
+        //! Utilities for parsing GDB commands.
+        pub use crate::runtime::gdb::command::str_to_u64;
+    }
 }
 
 #[macro_use]

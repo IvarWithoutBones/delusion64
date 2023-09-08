@@ -1,0 +1,8 @@
+[package]
+name = "n64-vi"
+description = "The Video Interface for the N64, also known as VI"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tartan-bitfield = "1.2.0"

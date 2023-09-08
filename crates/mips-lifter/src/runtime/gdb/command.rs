@@ -23,6 +23,20 @@ impl<'ctx, Mem: Memory> Command<'ctx, Mem> {
             .collect()
     }
 
+    pub fn name(&self) -> &'static str {
+        match self {
+            Command::Internal(cmd) => cmd.name,
+            Command::External(cmd) => cmd.name,
+        }
+    }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            Command::Internal(cmd) => cmd.description,
+            Command::External(cmd) => cmd.description,
+        }
+    }
+
     pub fn handle(
         &mut self,
         env: &mut Environment<'ctx, Mem>,
@@ -86,6 +100,7 @@ pub type MonitorCommandHandler<This> = dyn FnMut(
 
 pub struct MonitorCommand<This> {
     pub name: &'static str,
+    pub description: &'static str,
     pub handler: Box<MonitorCommandHandler<This>>,
 }
 
@@ -94,7 +109,19 @@ impl<Mem: Memory> Environment<'_, Mem> {
     pub(crate) fn monitor_commands() -> Vec<MonitorCommand<Self>> {
         vec![
             MonitorCommand {
+                name: "help",
+                description: "print this help message",
+                handler: Box::new(|env, out, _args| {
+                    for cmd in env.debugger.as_ref().unwrap().monitor_commands.values() {
+                        let name = format!("{}:", cmd.name());
+                        writeln!(out, "{name: <12} {}", cmd.description())?;
+                    }
+                    Ok(())
+                }),
+            },
+            MonitorCommand {
                 name: "regs",
+                description: "print all the CPU registers",
                 handler: Box::new(|env, out, _args| {
                     writeln!(out, "{:#?}", env.registers)?;
                     Ok(())
@@ -102,6 +129,7 @@ impl<Mem: Memory> Environment<'_, Mem> {
             },
             MonitorCommand {
                 name: "status",
+                description: "print the CPU status register",
                 handler: Box::new(|env, out, _args| {
                     writeln!(out, "{:#?}", env.registers.status())?;
                     Ok(())
@@ -109,6 +137,7 @@ impl<Mem: Memory> Environment<'_, Mem> {
             },
             MonitorCommand {
                 name: "tlb",
+                description: "print every entry in the TLB",
                 handler: Box::new(|env, out, _args| {
                     writeln!(out, "{:#?}", env.tlb)?;
                     Ok(())
@@ -116,6 +145,8 @@ impl<Mem: Memory> Environment<'_, Mem> {
             },
             MonitorCommand {
                 name: "paddr",
+                description:
+                    "translate a virtual address to a physical address. usage: paddr <vaddr>",
                 handler: Box::new(|env, out, args| {
                     let vaddr = str_to_u64(args.next().ok_or("expected virtual address")?)
                         .map_err(|err| format!("invalid virtual address: {err}"))?;
@@ -146,20 +177,32 @@ impl<Mem: Memory> gdbstub::target::ext::monitor_cmd::MonitorCmd for Environment<
             })?;
             let mut iter = cmd.split_whitespace().peekable();
 
-            // Juggle around the debugger to appease the borrow checker
-            let mut debugger = self.debugger.take().unwrap();
-            if let Some(name) = iter.next() {
-                if let Some(cmd) = debugger.monitor_commands.get_mut(name) {
+            // Juggle around the command to appease the borrow checker
+            let cmd = if let Some(name) = iter.next() {
+                if let Some(mut cmd) = self
+                    .debugger
+                    .as_mut()
+                    .unwrap()
+                    .monitor_commands
+                    .remove(name)
+                {
                     cmd.handle(self, &mut out, &mut iter).unwrap_or_else(|err| {
                         outputln!(out, "{err:#?}");
                     });
+                    Some(cmd)
                 } else {
                     outputln!(out, "unrecognized command: '{cmd}'");
+                    None
                 }
             } else {
                 outputln!(out, "no command specified");
+                None
+            };
+            if let Some(cmd) = cmd {
+                // Put the command back into the debugger
+                let debugger = self.debugger.as_mut().unwrap();
+                debugger.monitor_commands.insert(cmd.name(), cmd);
             }
-            self.debugger = Some(debugger);
 
             if iter.peek().is_some() {
                 outputln!(out, "warning: ignoring extra arguments");
@@ -171,7 +214,7 @@ impl<Mem: Memory> gdbstub::target::ext::monitor_cmd::MonitorCmd for Environment<
 }
 
 /// Converts a string to a u64, supporting binary and hexadecimal prefixes.
-fn str_to_u64(str: &str) -> Result<u64, ParseIntError> {
+pub fn str_to_u64(str: &str) -> Result<u64, ParseIntError> {
     const RADIXES: &[(&str, u32)] = &[("0b", 2), ("0x", 16)];
     let (str, radix) = RADIXES
         .iter()

@@ -1,8 +1,12 @@
 use self::location::{MemoryLocation, MemoryRegion, MemoryType, MemoryValue};
-use mips_lifter::{gdb::MonitorCommand, runtime::Memory};
+use mips_lifter::{
+    gdb::{util::str_to_u64, MonitorCommand},
+    runtime::Memory,
+};
 use n64_cartridge::Cartridge;
 use n64_mi::{MiError, MipsInterface};
 use n64_pi::PeripheralInterface;
+use n64_vi::VideoInterface;
 use std::fmt;
 
 pub mod location;
@@ -22,6 +26,7 @@ pub struct Bus {
     pub cartridge_rom: Box<[u8]>,
     pub pi: PeripheralInterface,
     pub mi: MipsInterface,
+    pub vi: VideoInterface,
 }
 
 impl Bus {
@@ -40,6 +45,7 @@ impl Bus {
             cartridge_rom,
             pi: PeripheralInterface::new(cartridge.header.pi_bsd_domain_1_flags),
             mi: MipsInterface::new(),
+            vi: VideoInterface::new(),
         }
     }
 
@@ -47,15 +53,41 @@ impl Bus {
         vec![
             MonitorCommand {
                 name: "mi",
+                description: "print the MIPS interface registers",
                 handler: Box::new(|bus, out, _args| {
-                    writeln!(out, "{:#?}", bus.mi)?;
+                    writeln!(out, "{:#x?}", bus.mi)?;
                     Ok(())
                 }),
             },
             MonitorCommand {
                 name: "pi",
+                description: "print the peripheral interface registers",
                 handler: Box::new(|bus, out, _args| {
-                    writeln!(out, "{:#?}", bus.pi)?;
+                    writeln!(out, "{:#x?}", bus.pi)?;
+                    Ok(())
+                }),
+            },
+            MonitorCommand {
+                name: "vi",
+                description: "print the video interface registers",
+                handler: Box::new(|bus, out, _args| {
+                    writeln!(out, "{:#x?}", bus.vi)?;
+                    Ok(())
+                }),
+            },
+            MonitorCommand {
+                name: "read-paddr",
+                description: "read a u32 from a physical address. usage: read-paddr <paddr>",
+                handler: Box::new(|bus, out, args| {
+                    let location = str_to_u64(args.next().ok_or("expected physical address")?)
+                        .map(|addr| addr as u32)
+                        .map_err(|err| format!("invalid physical address: {err}"))?
+                        .try_into()
+                        .map_err(|err| format!("error: {err:#?}"))?;
+                    let value = bus.read(location, MemoryType::U32).map_err(|err| {
+                        format!("failed to read from location {location:#?}: {err:#?}")
+                    })?;
+                    writeln!(out, "{value:#x?}")?;
                     Ok(())
                 }),
             },
@@ -96,6 +128,10 @@ impl Bus {
                 .write(offset, value.try_into().unwrap())
                 .map_err(BusError::MipsInterfaceError),
 
+            MemoryRegion::VideoInterface => {
+                map_err(self.vi.write(offset, value.try_into().unwrap()))
+            }
+
             MemoryRegion::CartridgeRom | MemoryRegion::DiskDriveIpl4Rom | MemoryRegion::PifRom => {
                 Err(BusError::ReadOnlyRegionWrite(region))
             }
@@ -133,6 +169,8 @@ impl Bus {
                 ty.read_from(&self.cartridge_rom, offset)
                     .unwrap_or(ty.zero()),
             ),
+
+            MemoryRegion::VideoInterface => map_err(self.vi.read(offset).map(|value| value.into())),
 
             MemoryRegion::RdramRegistersWriteOnly => Err(BusError::WriteOnlyRegionRead(region)),
 
