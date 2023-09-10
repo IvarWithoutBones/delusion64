@@ -1,5 +1,6 @@
 //! The Video Interface (VI), used to control the frame buffer of the N64.
 
+use std::ops::RangeInclusive;
 use tartan_bitfield::bitfield;
 
 const fn offset(index: usize) -> usize {
@@ -241,6 +242,7 @@ impl VerticalBurst {
 bitfield! {
     /// https://n64brew.dev/wiki/Video_Interface#0x0440_0030_-_VI_X_SCALE
     pub struct XScale(u32) {
+        // TODO: parse 2.10 format
         [0..=11] scale_factor: u16,
         [16..=27] subpixel_offset: u16,
     }
@@ -253,6 +255,7 @@ impl XScale {
 bitfield! {
     /// https://n64brew.dev/wiki/Video_Interface#0x0440_0034_-_VI_Y_SCALE
     pub struct YScale(u32) {
+        // TODO: parse 2.10 format
         [0..=11] scale_factor: u16,
         [16..=27] subpixel_offset: u16,
     }
@@ -376,6 +379,33 @@ impl VideoInterface {
             _ => unreachable!(),
         }
         Some(())
+    }
+
+    pub fn origin(&self) -> usize {
+        // TODO: this is a hack to get the vaddr instead of paddr, assumes the entire vaddr is written
+        self.origin.0 as usize
+    }
+
+    pub fn width(&self) -> usize {
+        let scale = (self.xscale.scale_factor() / 1024) as usize;
+        let length = (self.horizontal_video.end() - self.horizontal_video.start()) as usize;
+        length * scale
+    }
+
+    pub fn height(&self) -> usize {
+        let scale = (self.yscale.scale_factor() / 1024) as usize;
+        let length = ((self.vertical_video.end() - self.vertical_video.start()) >> 1) as usize;
+        let result = length * scale;
+        match result {
+            474 => 480, // TODO: this is obviously wrong, maybe because we're not parsing the 2.10 format?
+            _ => result,
+        }
+    }
+
+    pub fn framebuffer_range(&self) -> RangeInclusive<usize> {
+        let origin = self.origin.origin() as usize;
+        let pixel_size = 4; // TODO: dont assume 32-bit RGBA
+        origin..=(origin + (self.width() * self.height()) * pixel_size)
     }
 }
 

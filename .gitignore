@@ -13,4 +13,5 @@
 .gdb_history
 
 # Emulator
+/roms
 *.z64

@@ -76,6 +76,18 @@ impl Bus {
                 }),
             },
             MonitorCommand {
+                name: "dump-fb",
+                description: "dump the VI framebuffer to a file. usage: dump-fb <filename>",
+                handler: Box::new(|bus, out, args| {
+                    let path = std::path::Path::new(args.next().ok_or("expected filename")?);
+                    let fb = &bus.rdram[bus.vi.framebuffer_range()];
+                    std::fs::write(path, fb)
+                        .map_err(|err| format!("failed to write file: {err}"))?;
+                    writeln!(out, "wrote raw framebuffer to {path:?}")?;
+                    Ok(())
+                }),
+            },
+            MonitorCommand {
                 name: "read-paddr",
                 description: "read a u32 from a physical address. usage: read-paddr <paddr>",
                 handler: Box::new(|bus, out, args| {

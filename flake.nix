@@ -84,6 +84,9 @@
           pkgs.gdb
           llvmPackages.clang
           mipsBinutils
+          # Temporary tools to convert and view the framebuffer, will be removed with actual rendering.
+          pkgs.imagemagick
+          pkgs.feh
         ];
       };
     });
