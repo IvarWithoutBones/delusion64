@@ -1,5 +1,5 @@
 use crate::{
-    codegen::{function_attributes, CodeGen},
+    codegen::{function_attributes, CodeGen, FUNCTION_PREFIX},
     recompiler::{compile_instruction, compile_instruction_with_delay_slot},
     runtime::RuntimeFunction,
     LLVM_CALLING_CONVENTION_FAST,
@@ -29,7 +29,7 @@ impl<'ctx> LabelWithContext<'ctx> {
     ) -> LabelWithContext<'ctx> {
         let name = {
             let start = label.start() * INSTRUCTION_SIZE;
-            format!("function_{start:06x}")
+            format!("{FUNCTION_PREFIX}{start:06x}")
         };
 
         let void_fn_type = context.void_type().fn_type(&[], false);

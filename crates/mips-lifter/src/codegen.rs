@@ -16,6 +16,8 @@ use mips_decomp::{
     INSTRUCTION_SIZE,
 };
 
+pub const FUNCTION_PREFIX: &str = "delusion64_jit_";
+
 #[macro_export]
 macro_rules! env_call {
     ($codegen:expr, $func:expr, [$($args:expr),*]) => {{
@@ -68,8 +70,9 @@ pub struct CodeGen<'ctx> {
     pub builder: Builder<'ctx>,
     pub execution_engine: ExecutionEngine<'ctx>,
 
-    /// Global mappings to the runtime environment.
+    /// Global mappings to the runtime environment. NOTE: this will get replaced for every new module.
     pub globals: Globals<'ctx>,
+
     /// The generated labels, with associated functions.
     pub labels: Vec<LabelWithContext<'ctx>>,
 
@@ -224,25 +227,25 @@ impl<'ctx> CodeGen<'ctx> {
         })
     }
 
-    /// Recompile the module into the execution engine, generating instructions.
-    /// Note that compilation is still lazy, so the first time a function is called, it will be compiled.
-    pub fn reload(&self) -> Result<(), String> {
-        self.execution_engine
-            .remove_module(&self.module)
-            .map_err(|e| e.to_string())?;
-        self.execution_engine
-            .add_module(&self.module)
-            .map_err(|_| "Failed to add module")?;
-        self.verify()?;
-        Ok(())
-    }
-
-    /// Link the given module into the current module, and recompile them. The result is verified.
     pub fn link_in_module(&self, module: Module<'ctx>) -> Result<(), String> {
-        self.module
-            .link_in_module(module)
-            .map_err(|e| e.to_string())?;
-        self.reload()
+        // Map all functions from the new module into our execution engine, and add them to our main module.
+        self.execution_engine.add_module(&module).unwrap();
+        for func in module.get_functions() {
+            if func.count_basic_blocks() == 0 {
+                // Only a declaration, not compiled in this module.
+                continue;
+            }
+
+            // Create a function declaration, without a body.
+            let name = func.get_name().to_str().unwrap();
+            let func_decl = self.module.add_function(name, func.get_type(), None);
+            self.set_func_attrs(func_decl);
+
+            // Map the function pointer to the declaration.
+            let ptr = self.execution_engine.get_function_address(name).unwrap();
+            self.execution_engine.add_global_mapping(&func_decl, ptr);
+        }
+        Ok(())
     }
 
     pub fn add_dynamic_function<F>(&mut self, f: F) -> Result<LabelWithContext<'ctx>, String>
@@ -250,12 +253,8 @@ impl<'ctx> CodeGen<'ctx> {
         F: FnOnce(&mut CodeGen<'ctx>, &Module<'ctx>) -> LabelWithContext<'ctx>,
     {
         let new_module = self.context.create_module("tmp_dynamic_module");
-        let mut lab = f(self, &new_module);
+        let lab = f(self, &new_module);
         self.link_in_module(new_module)?;
-
-        // Now that we have linked the function into our existing module, the function pointer has been invalidated.
-        let func = self.module.get_last_function().unwrap();
-        lab.function = func;
         Ok(lab)
     }
 

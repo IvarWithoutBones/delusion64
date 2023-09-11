@@ -6,10 +6,7 @@ use crate::{
     InitialRegisters,
 };
 use inkwell::{
-    context::ContextRef,
-    execution_engine::ExecutionEngine,
-    module::Module,
-    values::{FunctionValue, GlobalValue},
+    context::ContextRef, execution_engine::ExecutionEngine, module::Module, values::GlobalValue,
 };
 use mips_decomp::{
     instruction::ParsedInstruction,
@@ -219,16 +216,15 @@ where
         let vaddr = vaddr & u32::MAX as u64;
 
         // This is a closure so we can return early if we already a matching block compiled.
-        let func = || -> FunctionValue<'ctx> {
+        let (codegen, name) = || -> (CodeGen<'ctx>, String) {
             let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
-
-            // This is not accurate, just a hack consistent with label.rs.
             let offset = vaddr as usize / 4;
-            let codegen = &mut self.codegen.get_mut().as_mut().unwrap();
+            let mut codegen = self.codegen.take().unwrap();
 
             if let Some(existing) = codegen.labels.iter().find(|l| l.label.start() == offset) {
                 println!("found existing block at {vaddr:#x} (offset={offset:#x})");
-                return existing.function;
+                let name = existing.function.get_name().to_str().unwrap().to_string();
+                return (codegen, name);
             } else {
                 println!("generating new block at {vaddr:#x} (offset={offset:#x})");
             }
@@ -270,6 +266,9 @@ where
 
             let lab = codegen
                 .add_dynamic_function(|codegen, module| {
+                    // NOTE: we're never going to append to the previous module, so its fine to replace those globals.
+                    codegen.globals = self.map_into(module, &codegen.execution_engine);
+
                     let mut lab =
                         crate::label::generate_label_functions(label_list, codegen.context, module)
                             .pop()
@@ -306,26 +305,23 @@ where
                     }
 
                     lab.compile(codegen);
+
                     lab
                 })
-                .unwrap();
+                .unwrap_or_else(|err| panic!("{err}"));
 
-            let func = lab.function;
+            let name = lab.function.get_name().to_str().unwrap().to_string();
             codegen.labels.push(lab);
-
             codegen.module.print_to_file("test/a.ll").unwrap();
-
-            func
+            (codegen, name)
         }();
 
-        let name = func.get_name().to_str().unwrap();
-        self.codegen
-            .get_mut()
-            .as_mut()
-            .unwrap()
+        let ptr = codegen
             .execution_engine
-            .get_function_address(name)
-            .unwrap() as _
+            .get_function_address(&name)
+            .unwrap();
+        self.codegen.set(Some(codegen));
+        ptr as u64
     }
 
     unsafe extern "C" fn on_instruction(&mut self) {
