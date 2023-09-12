@@ -367,21 +367,8 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             codegen.write_general_register(instr.rt(), result);
         }
 
-        Mnenomic::Addu => {
-            // Add rs and rt, store result in rd
-            let source = codegen.read_general_register(i32_type, instr.rs());
-            let target = codegen.read_general_register(i32_type, instr.rt());
-
-            let result = codegen.sign_extend_to(
-                i64_type,
-                codegen.builder.build_int_add(source, target, "addu_res"),
-            );
-
-            codegen.write_general_register(instr.rd(), result);
-        }
-
         Mnenomic::Daddi => {
-            // Add sign-extended 16bit immediate and rs, store result in rt
+            // Add sign-extended 16bit immediate and rs, store result in rt. If the addition overflows, an integer overflow exception occurs.
             let source = codegen.read_general_register(i64_type, instr.rs());
             let immediate =
                 codegen.sign_extend_to(i64_type, i16_type.const_int(instr.immediate() as _, true));
@@ -413,12 +400,18 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             let source = codegen.read_general_register(i32_type, instr.rs());
             let target = codegen.read_general_register(i32_type, instr.rt());
 
-            let quotient = codegen
-                .builder
-                .build_int_signed_div(source, target, "divu_quot");
-            let remainder = codegen
-                .builder
-                .build_int_signed_rem(source, target, "divu_rem");
+            let quotient = codegen.sign_extend_to(
+                i64_type,
+                codegen
+                    .builder
+                    .build_int_signed_div(source, target, "divu_quot"),
+            );
+            let remainder = codegen.sign_extend_to(
+                i64_type,
+                codegen
+                    .builder
+                    .build_int_signed_rem(source, target, "divu_rem"),
+            );
 
             codegen.write_register(register::Special::Lo, quotient);
             codegen.write_register(register::Special::Hi, remainder);
@@ -995,7 +988,7 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
         }
 
         Mnenomic::Addiu => {
-            // Add sign-extended 16-bit immediate and rs, store result in rt
+            // Add sign-extended 16-bit immediate and rs, store sign-extended result in rt
             let immediate =
                 codegen.sign_extend_to(i32_type, i16_type.const_int(instr.immediate() as _, true));
             let source = codegen.read_general_register(i32_type, instr.rs());
@@ -1006,28 +999,45 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
                     .builder
                     .build_int_add(source, immediate, "addiu_res"),
             );
-
             codegen.write_general_register(instr.rt(), result);
         }
 
         Mnenomic::Addi => {
-            // Add sign-extended 16-bit immediate and rs, store result in rt
+            // Add sign-extended 16-bit immediate and rs, store sign-extended result in rt. If the addition overflows, an integer overflow exception occurs.
+            // TODO: handle exception
             let immediate =
                 codegen.sign_extend_to(i32_type, i16_type.const_int(instr.immediate() as _, true));
             let source = codegen.read_general_register(i32_type, instr.rs());
-            let result = codegen.builder.build_int_add(source, immediate, "addi_res");
+
+            let result = codegen.sign_extend_to(
+                i64_type,
+                codegen.builder.build_int_add(source, immediate, "addi_res"),
+            );
             codegen.write_general_register(instr.rt(), result);
         }
 
-        Mnenomic::Add => {
+        Mnenomic::Addu => {
             // Add rs and rt, store result in rd
             let source = codegen.read_general_register(i32_type, instr.rs());
             let target = codegen.read_general_register(i32_type, instr.rt());
+
+            let result = codegen.sign_extend_to(
+                i64_type,
+                codegen.builder.build_int_add(source, target, "addu_res"),
+            );
+            codegen.write_general_register(instr.rd(), result);
+        }
+
+        Mnenomic::Add => {
+            // Add rs and rt, store sign-extended result in rd. If the addition overflows, an integer overflow exception occurs.
+            // TODO: handle exception
+            let source = codegen.read_general_register(i32_type, instr.rs());
+            let target = codegen.read_general_register(i32_type, instr.rt());
+
             let result = codegen.sign_extend_to(
                 i64_type,
                 codegen.builder.build_int_add(source, target, "add_res"),
             );
-
             codegen.write_general_register(instr.rd(), result);
         }
 
@@ -1050,7 +1060,8 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
         }
 
         Mnenomic::Dadd => {
-            // Add rs and rt, store result in rd
+            // Add rs and rt, store result in rd. If the addition overflows, an integer overflow exception occurs.
+            // TODO: handle exception
             let source = codegen.read_general_register(i64_type, instr.rs());
             let target = codegen.read_general_register(i64_type, instr.rt());
             let result = codegen.builder.build_int_add(source, target, "dadd_res");
@@ -1126,7 +1137,8 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
         }
 
         Mnenomic::Sub => {
-            // Subtract rt from rs, store result in rd
+            // Subtract rt from rs, store result in rd. If the subtraction overflows, an integer overflow exception occurs.
+            // TODO: handle exception
             let source = codegen.read_general_register(i32_type, instr.rs());
             let target = codegen.read_general_register(i32_type, instr.rt());
             let result = codegen.builder.build_int_sub(source, target, "sub_res");
@@ -1143,6 +1155,23 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
                 codegen.builder.build_int_sub(source, target, "subu_res"),
             );
 
+            codegen.write_general_register(instr.rd(), result);
+        }
+
+        Mnenomic::Dsub => {
+            // Subtract rt from rs, store result in rd. If the subtraction overflows, an integer overflow exception occurs.
+            // TODO: handle exception
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            let target = codegen.read_general_register(i64_type, instr.rt());
+            let result = codegen.builder.build_int_sub(source, target, "dsubu_res");
+            codegen.write_general_register(instr.rd(), result);
+        }
+
+        Mnenomic::Dsubu => {
+            // Subtract rt from rs, store result in rd
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            let target = codegen.read_general_register(i64_type, instr.rt());
+            let result = codegen.builder.build_int_sub(source, target, "dsubu_res");
             codegen.write_general_register(instr.rd(), result);
         }
 
