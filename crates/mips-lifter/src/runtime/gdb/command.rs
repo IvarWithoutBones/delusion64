@@ -45,7 +45,7 @@ impl<'ctx, Mem: Memory> Command<'ctx, Mem> {
     ) -> Result<(), MonitorCommandHandlerError> {
         match self {
             Command::Internal(cmd) => (cmd.handler)(env, output, args),
-            Command::External(cmd) => (cmd.handler)(&env.memory, output, args),
+            Command::External(cmd) => (cmd.handler)(&mut env.memory, output, args),
         }
     }
 }
@@ -93,7 +93,7 @@ impl From<()> for MonitorCommandHandlerError {
 
 /// A callback to handle a monitor command.
 pub type MonitorCommandHandler<This> = dyn FnMut(
-    &This,
+    &mut This,
     &mut dyn std::fmt::Write,
     &mut dyn Iterator<Item = &str>,
 ) -> Result<(), MonitorCommandHandlerError>;

@@ -331,6 +331,11 @@ where
         let instr = ParsedInstruction::try_from(self.memory.read_u32(pc_paddr).unwrap()).unwrap();
         println!("{pc_vaddr:06x}: {instr}");
 
+        self.memory.tick().unwrap_or_else(|err| {
+            let msg = format!("failed to tick: {err:#?}",);
+            self.panic_update_debugger(&msg)
+        });
+
         if self.debugger.is_some() {
             self.update_debugger();
             self.debugger.as_mut().unwrap().on_instruction(pc_vaddr);

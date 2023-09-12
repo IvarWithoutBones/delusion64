@@ -116,14 +116,9 @@ impl Header {
     const TITLE_LEN: usize = 0x14;
 
     fn read_clock_rate(input: u32) -> u32 {
-        // Masked by 0xFFFFFFF0 to obtain the proper clock rate value,
-        // A value of 0 appears to use the default clock rate of 62.5MHz.
+        // Masked by 0xFFFFFFF0 to obtain the proper clock rate value, 0 uses the default clock rate.
         let result = input & 0xFFFFFFF0;
-        if result == 0 {
-            62500000
-        } else {
-            result
-        }
+        ((if result != 0 { result } else { 62_500_000 }) as f32 * 1.5) as u32
     }
 
     fn read_title(bytes: [u8; Self::TITLE_LEN]) -> String {

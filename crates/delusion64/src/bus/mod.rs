@@ -157,7 +157,7 @@ impl Bus {
         }
     }
 
-    fn read(&self, location: MemoryLocation, ty: MemoryType) -> Result<MemoryValue, BusError> {
+    fn read(&mut self, location: MemoryLocation, ty: MemoryType) -> Result<MemoryValue, BusError> {
         let region = location.region;
         let offset = location.offset;
         let map_err = |o: Option<MemoryValue>| o.ok_or(BusError::OffsetOutOfBounds(location));
@@ -232,32 +232,36 @@ impl fmt::Debug for BusError {
     }
 }
 
-// TODO: move usage MemoryType/MemoryValue into the Memory trait, unify these functions
 impl Memory for Bus {
     type AccessError = BusError;
 
-    fn read_u8(&self, paddr: u32) -> Result<u8, Self::AccessError> {
+    fn tick(&mut self) -> Result<(), Self::AccessError> {
+        self.vi.tick(); // TODO: how does timing compare to the CPU?
+        Ok(())
+    }
+
+    fn read_u8(&mut self, paddr: u32) -> Result<u8, Self::AccessError> {
         self.read(paddr.try_into()?, MemoryType::U8).map(|value| {
             // SAFETY: we're sure the returned value matches the MemoryType.
             unsafe { value.try_into().unwrap_unchecked() }
         })
     }
 
-    fn read_u16(&self, paddr: u32) -> Result<u16, Self::AccessError> {
+    fn read_u16(&mut self, paddr: u32) -> Result<u16, Self::AccessError> {
         self.read(paddr.try_into()?, MemoryType::U16).map(|value| {
             // SAFETY: we're sure the returned value matches the MemoryType.
             unsafe { value.try_into().unwrap_unchecked() }
         })
     }
 
-    fn read_u32(&self, paddr: u32) -> Result<u32, Self::AccessError> {
+    fn read_u32(&mut self, paddr: u32) -> Result<u32, Self::AccessError> {
         self.read(paddr.try_into()?, MemoryType::U32).map(|value| {
             // SAFETY: we're sure the returned value matches the MemoryType.
             unsafe { value.try_into().unwrap_unchecked() }
         })
     }
 
-    fn read_u64(&self, paddr: u32) -> Result<u64, Self::AccessError> {
+    fn read_u64(&mut self, paddr: u32) -> Result<u64, Self::AccessError> {
         self.read(paddr.try_into()?, MemoryType::U64).map(|value| {
             // SAFETY: we're sure the returned value matches the MemoryType.
             unsafe { value.try_into().unwrap_unchecked() }

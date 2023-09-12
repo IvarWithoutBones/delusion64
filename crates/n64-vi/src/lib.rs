@@ -3,6 +3,9 @@
 use std::ops::RangeInclusive;
 use tartan_bitfield::bitfield;
 
+const COUNTER_START: u32 = ((62500000.0 / 60.0) + 1.0) as u32;
+const BLANKING_DONE: u32 = (COUNTER_START as f32 - (COUNTER_START as f32 / (525.0 * 39.0))) as u32;
+
 const fn offset(index: usize) -> usize {
     index * std::mem::size_of::<u32>()
 }
@@ -123,7 +126,7 @@ impl Width {
 bitfield! {
     /// https://n64brew.dev/wiki/Video_Interface#0x0440_000C_-_VI_V_INTR
     pub struct Interrupt(u32) {
-        [0..=9] half_line: u16,
+        [0..=9] halfline: u16,
     }
 }
 
@@ -138,7 +141,8 @@ impl Interrupt {
 bitfield! {
     /// https://n64brew.dev/wiki/Video_Interface#0x0440_0010_-_VI_V_CURRENT
     pub struct Current(u32) {
-        [0..=9] half_line: u16,
+        [0] field,
+        [1..=9] halfline: u16,
     }
 }
 
@@ -167,7 +171,8 @@ impl Burst {
 bitfield! {
     /// https://n64brew.dev/wiki/Video_Interface#0x0440_0018_-_VI_V_SYNC
     pub struct VerticalSync(u32) {
-        [0..=9] scanlines: u16,
+        [0] field,
+        [1..=9] scanlines: u16,
     }
 }
 
@@ -289,6 +294,7 @@ impl StagedData {
 
 #[derive(Debug)]
 pub struct VideoInterface {
+    // Registers
     control: Control,
     origin: Origin,
     width: Width,
@@ -305,6 +311,9 @@ pub struct VideoInterface {
     yscale: YScale,
     test_address: TestAddress,
     staged_data: StagedData,
+
+    counter: u32,
+    field: bool,
 }
 
 impl VideoInterface {
@@ -326,6 +335,8 @@ impl VideoInterface {
             yscale: YScale::default(),
             test_address: TestAddress::default(),
             staged_data: StagedData::default(),
+            counter: COUNTER_START,
+            field: false,
         }
     }
 
@@ -333,7 +344,23 @@ impl VideoInterface {
         offset % StagedData::OFFSET // StagedData is the last register, so we mirror from there.
     }
 
-    pub fn read(&self, offset: usize) -> Option<u32> {
+    pub fn read(&mut self, offset: usize) -> Option<u32> {
+        if self.vertical_sync.scanlines() != 0 {
+            let mut current = Current::default().with_halfline(
+                ((COUNTER_START - self.counter)
+                    / (COUNTER_START / self.vertical_sync.scanlines() as u32))
+                    as u16,
+            );
+
+            if !self.vertical_sync.field() {
+                current = current.with_field(true);
+            }
+
+            self.current = current;
+        } else {
+            self.current = Current::default();
+        }
+
         let value = match Self::normalise_offset(offset) {
             Control::OFFSET => self.control.into(),
             Origin::OFFSET => self.origin.into(),
@@ -362,7 +389,7 @@ impl VideoInterface {
             Origin::OFFSET => self.origin = Origin::from(value),
             Width::OFFSET => self.width = Width::from(value),
             Interrupt::OFFSET => self.interrupt = Interrupt::from(value),
-            Current::OFFSET => self.current = Current::from(value),
+            Current::OFFSET => (), // TODO: clear interrupt
             Burst::OFFSET => self.burst = Burst::from(value),
             VerticalSync::OFFSET => self.vertical_sync = VerticalSync::from(value),
             HorizontalSync::OFFSET => self.horizontal_sync = HorizontalSync::from(value),
@@ -381,9 +408,16 @@ impl VideoInterface {
         Some(())
     }
 
-    pub fn origin(&self) -> usize {
-        // TODO: this is a hack to get the vaddr instead of paddr, assumes the entire vaddr is written
-        self.origin.0 as usize
+    pub fn tick(&mut self) {
+        // Wrap around
+        self.counter -= 1;
+        if self.counter == 0 {
+            self.counter = COUNTER_START;
+        }
+
+        if self.counter == BLANKING_DONE {
+            self.field = !self.field;
+        }
     }
 
     pub fn width(&self) -> usize {
