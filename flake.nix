@@ -39,7 +39,7 @@
       };
 
       # NOTE: LLVM version must be kept in sync with what inkwell expects!
-      llvmPackages = pkgs.llvmPackages_15;
+      llvmPackages = pkgs.llvmPackages_16;
 
       # TODO: Could we use LLVM binutils instead?
       mipsBinutils = pkgs.pkgsCross.mips64-linux-gnuabi64.buildPackages.binutilsNoLibc;

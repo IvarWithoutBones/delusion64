@@ -11,6 +11,7 @@ use inkwell::{
 use mips_decomp::{
     instruction::ParsedInstruction,
     register::{self, Register},
+    Exception,
 };
 use std::{
     cell::{Cell, UnsafeCell},
@@ -88,6 +89,10 @@ impl Registers {
     pub fn status(&self) -> register::cp0::Status {
         register::cp0::Status::new(self[register::Cp0::Status] as u32)
     }
+
+    pub fn cause(&self) -> register::cp0::Cause {
+        register::cp0::Cause::new(self[register::Cp0::Cause] as u32)
+    }
 }
 
 pub struct Environment<'ctx, Mem>
@@ -136,21 +141,21 @@ where
         execution_engine: &ExecutionEngine<'ctx>,
     ) -> codegen::Globals<'ctx> {
         let context = module.get_context();
-        let ptr_type = context.i64_type().ptr_type(Default::default());
+        let i64_ptr_type = context.i64_type().ptr_type(Default::default());
 
-        // Add a mapping to the environment struct
-        let env_ptr = module.add_global(ptr_type, Default::default(), "env");
+        // Map a pointer to the environment struct
+        let env_ptr = module.add_global(i64_ptr_type, Default::default(), "env");
         execution_engine.add_global_mapping(&env_ptr, self as *const Environment<_> as usize);
 
-        // Add a mapping to the host stack frame pointer.
-        let stack_frame = module.add_global(ptr_type, Default::default(), "host_stack_frame");
+        // Map the host stack frame pointer.
+        let stack_frame = module.add_global(i64_ptr_type, Default::default(), "host_stack_frame");
         let stack_frame_storage = Box::into_raw(Box::new(0u64));
         execution_engine.add_global_mapping(&stack_frame, stack_frame_storage as usize);
 
         // Map the registers into the modules globals
         let registers = self.registers.map_into(&context, module, execution_engine);
 
-        // Add mappings to the runtime functions
+        // Map the runtime functions
         for func in RuntimeFunction::iter() {
             let ptr: *const u8 = match func {
                 RuntimeFunction::Panic => Self::panic as _,
@@ -205,6 +210,40 @@ where
         } else {
             panic!();
         }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn handle_exception(&mut self, exception: Exception) {
+        if self
+            .registers
+            .status()
+            .diagnostic_status()
+            .bootstrap_exception_vectors()
+        {
+            todo!("bootstrap exception vectors");
+        }
+
+        // TODO: handle coprocessor field
+        let new_cause: u32 = self
+            .registers
+            .cause()
+            .with_exception_code(exception.into())
+            .into();
+        self.registers[register::Cp0::Cause] = new_cause as u64;
+
+        if !self.registers.status().exception_level() {
+            // TODO: if we are inside of a delay slot, this should be the address of the previous instruction,
+            // so that we dont skip over the branch. We also need to set `BD` in the Cause register when this happens.
+            let pc_vaddr = self.registers[register::Special::Pc];
+            self.registers[register::Cp0::EPC] = pc_vaddr;
+
+            let new_status: u32 = self.registers.status().with_exception_level(true).into();
+            self.registers[register::Cp0::Status] = new_status as u64;
+        }
+
+        // Will set PC for us
+        let jump_function = self.codegen.get_mut().as_ref().unwrap().jump_function();
+        unsafe { jump_function.call(exception.vector() as u64) }
     }
 
     /*
@@ -332,7 +371,7 @@ where
         println!("{pc_vaddr:06x}: {instr}");
 
         self.memory.tick().unwrap_or_else(|err| {
-            let msg = format!("failed to tick: {err:#?}",);
+            let msg = format!("failed to tick: {err:#?}");
             self.panic_update_debugger(&msg)
         });
 

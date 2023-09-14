@@ -6,6 +6,10 @@ use crate::{
 };
 use inkwell::{attributes::AttributeLoc, context::Context, module::Module, values::FunctionValue};
 use mips_decomp::{instruction::ParsedInstruction, register, Label, INSTRUCTION_SIZE};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+// Ensure we dont define the same function twice, for example when TLB mappings change.
+static ID: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LabelWithContext<'ctx> {
@@ -29,7 +33,8 @@ impl<'ctx> LabelWithContext<'ctx> {
     ) -> LabelWithContext<'ctx> {
         let name = {
             let start = label.start() * INSTRUCTION_SIZE;
-            format!("{FUNCTION_PREFIX}{start:06x}")
+            let id = ID.fetch_add(1, Ordering::Relaxed);
+            format!("{FUNCTION_PREFIX}{start:06x}_{id}")
         };
 
         let void_fn_type = context.void_type().fn_type(&[], false);

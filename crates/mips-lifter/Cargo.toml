@@ -8,7 +8,7 @@ default = ["debug-print"]
 debug-print = []
 
 [dependencies]
-inkwell = { version = "0.2.0", features = ["llvm15-0"] }
+inkwell = { version = "0.2.0", features = ["llvm16-0"] }
 gdbstub = "0.6.6"
 gdbstub_arch = "0.2.4"
 strum = { version = "0.25.0", features = ["derive"] }

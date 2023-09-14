@@ -4,7 +4,7 @@ use inkwell::{
     basic_block::BasicBlock,
     builder::Builder,
     context::Context,
-    execution_engine::ExecutionEngine,
+    execution_engine::{ExecutionEngine, JitFunction},
     intrinsics::Intrinsic,
     module::Module,
     types::IntType,
@@ -51,10 +51,11 @@ pub struct RegisterGlobals<'ctx> {
 
 #[derive(Debug)]
 pub struct Globals<'ctx> {
-    // NOTE: The backing memory must be externally managed, so that the pointer remains valid across module reloads.
-    pub stack_frame: (GlobalValue<'ctx>, *mut u64),
     pub env_ptr: GlobalValue<'ctx>,
     pub registers: RegisterGlobals<'ctx>,
+
+    // NOTE: The backing memory must be externally managed, so that the pointer remains valid across module reloads.
+    pub stack_frame: (GlobalValue<'ctx>, *mut u64),
 }
 
 #[derive(Debug)]
@@ -217,6 +218,17 @@ impl<'ctx> CodeGen<'ctx> {
 
         self.builder
             .build_call(stack_restore_fn, &[stack_ptr.into()], "stack_restore");
+    }
+
+    pub fn jump_function(&self) -> JitFunction<unsafe extern "C" fn(u64) -> !> {
+        let name = &self
+            .jump_helper
+            .as_ref()
+            .unwrap()
+            .get_name()
+            .to_str()
+            .unwrap();
+        unsafe { self.execution_engine.get_function(name).unwrap() }
     }
 
     /// Verify our module is valid.

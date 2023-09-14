@@ -144,15 +144,15 @@ bitfield! {
     #[derive(Ord, PartialOrd, Hash)]
     pub struct DiagnosticStatus(u16) {
         /// The condition bit (`CH`).
-        [2] cp0_condition,
+        [2] pub cp0_condition,
         /// Indicates if a soft reset has occurred (`SR`).
-        [4] soft_reset,
+        [4] pub soft_reset,
         /// Indicates TLB shutdown has occurred (`TS`).
-        [5] tlb_shutdown,
+        [5] pub tlb_shutdown,
         /// Controls the location of TLB miss and general purpose exception vectors (`BEV`).
-        [6] bootstrap_exception_vectors,
+        [6] pub bootstrap_exception_vectors,
         /// Enables Instruction Trace Support (`ITS`).
-        [8] instruction_trace_support,
+        [8] pub instruction_trace_support,
     }
 }
 
@@ -212,5 +212,37 @@ impl Status {
             OperatingMode::User => self.user_64_bits(),
             OperatingMode::Undefined => unreachable!(),
         }
+    }
+}
+
+bitfield! {
+    /// The `IP` field of the CP0 register Cause.
+    #[derive(Ord, PartialOrd, Hash)]
+    pub struct InterruptPending(u8) {
+        [0] pub software_1,
+        [1] pub software_2,
+        [2] pub external_1,
+        [3] pub external_2,
+        [4] pub external_3,
+        [5] pub external_4,
+        [6] pub external_5,
+        [7] pub timer,
+    }
+}
+
+bitfield! {
+    /// The format of the CP0 register Cause, also known as `CR`.
+    #[derive(Ord, PartialOrd, Hash)]
+    pub struct Cause(u32) {
+        [2..=6] pub exception_code: u8,
+        [8..=15] pub interrupt_pending: u8 as InterruptPending,
+        [28..=29] pub coprocessor_error: u8,
+        [31] pub branch_delay,
+    }
+}
+
+impl Cause {
+    pub const fn new(raw: u32) -> Self {
+        Self(raw)
     }
 }

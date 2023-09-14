@@ -11,6 +11,46 @@ pub use crate::label::{Label, LabelList};
 pub const INSTRUCTION_SIZE: usize = 4;
 pub const REGISTER_COUNT: usize = 32;
 
+pub const EXCEPTION_VECTOR_BASE: usize = 0x8000_0000;
+pub const GENERAL_EXCEPTION_VECTOR: usize = EXCEPTION_VECTOR_BASE + 0x180;
+
+/// See table 6-2 of the VR4300 manual.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Exception {
+    Interrupt = 0,
+    TlbModification = 1,
+    TlbMissLoad = 2,
+    TlbMissStore = 3,
+    AddressLoad = 4,
+    AddressStore = 5,
+    BusInstructionFetch = 6,
+    BusDataLoadStore = 7,
+    SystemCall = 8,
+    Breakpoint = 9,
+    ReservedInstruction = 10,
+    CoprocessorUnusable = 11,
+    ArithmeticOverflow = 12,
+    Trap = 13,
+    FloatingPoint = 15,
+    Watch = 23,
+}
+
+impl Exception {
+    /// The exception vector when BEV (Bootstrap Exception Vector) is disabled.
+    pub const fn vector(&self) -> usize {
+        match self {
+            Exception::TlbMissLoad | Exception::TlbMissStore => EXCEPTION_VECTOR_BASE,
+            _ => GENERAL_EXCEPTION_VECTOR,
+        }
+    }
+}
+
+impl From<Exception> for u8 {
+    fn from(exception: Exception) -> Self {
+        exception as u8
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MaybeInstruction {
     Instruction(ParsedInstruction),
