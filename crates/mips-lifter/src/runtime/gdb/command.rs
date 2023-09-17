@@ -1,17 +1,17 @@
-use crate::runtime::{memory::tlb::AccessMode, Environment, Memory};
+use crate::runtime::{memory::tlb::AccessMode, Environment, bus};
 use gdbstub::outputln;
 use std::{collections::HashMap, num::ParseIntError};
 
 pub type MonitorCommandMap<'ctx, Mem> = HashMap<&'static str, Command<'ctx, Mem>>;
 
-pub enum Command<'ctx, Mem: Memory> {
-    Internal(MonitorCommand<Environment<'ctx, Mem>>),
-    External(MonitorCommand<Mem>),
+pub enum Command<'ctx, Bus: bus::Bus> {
+    Internal(MonitorCommand<Environment<'ctx, Bus>>),
+    External(MonitorCommand<Bus>),
 }
 
-impl<'ctx, Mem: Memory> Command<'ctx, Mem> {
+impl<'ctx, Bus: bus::Bus> Command<'ctx, Bus> {
     /// Merges internal and external monitor commands into a single map.
-    pub fn monitor_command_map(external: Vec<MonitorCommand<Mem>>) -> MonitorCommandMap<'ctx, Mem> {
+    pub fn monitor_command_map(external: Vec<MonitorCommand<Bus>>) -> MonitorCommandMap<'ctx, Bus> {
         Environment::monitor_commands()
             .into_iter()
             .map(|cmd| (cmd.name, Command::Internal(cmd)))
@@ -39,7 +39,7 @@ impl<'ctx, Mem: Memory> Command<'ctx, Mem> {
 
     pub fn handle(
         &mut self,
-        env: &mut Environment<'ctx, Mem>,
+        env: &mut Environment<'ctx, Bus>,
         output: &mut dyn std::fmt::Write,
         args: &mut dyn Iterator<Item = &str>,
     ) -> Result<(), MonitorCommandHandlerError> {
@@ -104,7 +104,7 @@ pub struct MonitorCommand<This> {
     pub handler: Box<MonitorCommandHandler<This>>,
 }
 
-impl<Mem: Memory> Environment<'_, Mem> {
+impl<Bus: bus::Bus> Environment<'_, Bus> {
     /// The internal monitor commands, related to the CPU state.
     pub(crate) fn monitor_commands() -> Vec<MonitorCommand<Self>> {
         vec![
@@ -164,7 +164,7 @@ impl<Mem: Memory> Environment<'_, Mem> {
     }
 }
 
-impl<Mem: Memory> gdbstub::target::ext::monitor_cmd::MonitorCmd for Environment<'_, Mem> {
+impl<Bus: bus::Bus> gdbstub::target::ext::monitor_cmd::MonitorCmd for Environment<'_, Bus> {
     fn handle_monitor_cmd(
         &mut self,
         cmd: &[u8],

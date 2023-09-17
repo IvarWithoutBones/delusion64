@@ -28,9 +28,9 @@ const LLVM_CALLING_CONVENTION_FAST: u32 = 8;
 
 pub type InitialRegisters<'a> = &'a [(register::Register, u64)];
 
-pub fn run<Mem>(mem: Mem, regs: InitialRegisters, gdb: Option<gdb::Connection<Mem>>)
+pub fn run<Bus>(mem: Bus, regs: InitialRegisters, gdb: Option<gdb::Connection<Bus>>)
 where
-    Mem: runtime::Memory,
+    Bus: runtime::bus::Bus,
 {
     // Create the compiler context.
     let context = Context::create();

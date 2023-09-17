@@ -1,5 +1,5 @@
 use self::command::{Command, MonitorCommand, MonitorCommandMap};
-use super::{memory::tlb::AccessMode, Environment, Memory};
+use super::{bus, memory::tlb::AccessMode, Environment};
 use gdbstub::{
     conn::ConnectionExt,
     stub::{state_machine::GdbStubStateMachine, GdbStub, SingleThreadStopReason},
@@ -39,16 +39,16 @@ impl std::fmt::Debug for GdbConnectionError {
 }
 
 /// A connection to a GDB client.
-pub struct Connection<Mem: Memory> {
+pub struct Connection<Bus: bus::Bus> {
     stream: TcpStream,
-    monitor_commands: Option<Vec<MonitorCommand<Mem>>>,
+    monitor_commands: Option<Vec<MonitorCommand<Bus>>>,
 }
 
-impl<Mem: Memory> Connection<Mem> {
+impl<Bus: bus::Bus> Connection<Bus> {
     /// Create a new GDB connection, and optionally register custom monitor commands.
     pub fn new(
         stream: TcpStream,
-        monitor_commands: Option<Vec<MonitorCommand<Mem>>>,
+        monitor_commands: Option<Vec<MonitorCommand<Bus>>>,
     ) -> Result<Self, GdbConnectionError> {
         if let Some(cmds) = &monitor_commands {
             for (i, cmd) in cmds.iter().enumerate() {
@@ -58,7 +58,7 @@ impl<Mem: Memory> Connection<Mem> {
                 if cmds.iter().skip(i + 1).any(|other| other.name == cmd.name) {
                     return Err(GdbConnectionError::DuplicateCommand(cmd.name));
                 }
-                if Environment::<'_, Mem>::monitor_commands()
+                if Environment::<'_, Bus>::monitor_commands()
                     .iter()
                     .any(|other| other.name == cmd.name)
                 {
@@ -81,22 +81,16 @@ enum State {
     SingleStep,
 }
 
-pub struct Debugger<'ctx, Mem>
-where
-    Mem: Memory,
-{
+pub struct Debugger<'ctx, Bus: bus::Bus> {
     state: State,
     breakpoints: HashSet<u64>,
-    state_machine: Option<GdbStubStateMachine<'ctx, Environment<'ctx, Mem>, TcpStream>>,
+    state_machine: Option<GdbStubStateMachine<'ctx, Environment<'ctx, Bus>, TcpStream>>,
     stop_reason: Option<SingleThreadStopReason<u32>>,
-    monitor_commands: MonitorCommandMap<'ctx, Mem>,
+    monitor_commands: MonitorCommandMap<'ctx, Bus>,
 }
 
-impl<'ctx, Mem> Debugger<'ctx, Mem>
-where
-    Mem: Memory,
-{
-    pub fn new(env: &mut Environment<'ctx, Mem>, gdb: Connection<Mem>) -> Self {
+impl<'ctx, Bus: bus::Bus> Debugger<'ctx, Bus> {
+    pub fn new(env: &mut Environment<'ctx, Bus>, gdb: Connection<Bus>) -> Self {
         let state_machine = GdbStub::new(gdb.stream).run_state_machine(env).unwrap();
         let monitor_commands =
             Command::monitor_command_map(gdb.monitor_commands.unwrap_or_default());
@@ -138,10 +132,7 @@ where
     }
 }
 
-impl<Mem> Environment<'_, Mem>
-where
-    Mem: Memory,
-{
+impl<Bus: bus::Bus> Environment<'_, Bus> {
     // This would be much nicer to implement on the `Debugger` struct, but the borrow checker is throwing a fit :/
     pub fn update_debugger(&mut self) {
         self.debugger.as_mut().unwrap().state_machine = match self
@@ -189,10 +180,7 @@ where
     }
 }
 
-impl<Mem> Target for Environment<'_, Mem>
-where
-    Mem: Memory,
-{
+impl<Bus: bus::Bus> Target for Environment<'_, Bus> {
     // TODO: this is 32-bits, the 64-bit version is giving trouble because of the following issue:
     // https://github.com/daniel5151/gdbstub/issues/97
     type Arch = gdbstub_arch::mips::Mips;
@@ -223,10 +211,7 @@ where
     }
 }
 
-impl<Mem> Breakpoints for Environment<'_, Mem>
-where
-    Mem: Memory,
-{
+impl<Bus: bus::Bus> Breakpoints for Environment<'_, Bus> {
     #[inline(always)]
     fn support_sw_breakpoint(
         &mut self,
@@ -235,10 +220,7 @@ where
     }
 }
 
-impl<Mem> SwBreakpoint for Environment<'_, Mem>
-where
-    Mem: Memory,
-{
+impl<Bus: bus::Bus> SwBreakpoint for Environment<'_, Bus> {
     fn add_sw_breakpoint(
         &mut self,
         vaddr: <Self::Arch as gdbstub::arch::Arch>::Usize,
@@ -266,10 +248,7 @@ where
     }
 }
 
-impl<Mem> SingleThreadBase for Environment<'_, Mem>
-where
-    Mem: Memory,
-{
+impl<Bus: bus::Bus> SingleThreadBase for Environment<'_, Bus> {
     fn read_addrs(
         &mut self,
         start_addr: <Self::Arch as gdbstub::arch::Arch>::Usize,
@@ -277,7 +256,7 @@ where
     ) -> TargetResult<(), Self> {
         for i in (0..data.len()).step_by(4) {
             let end = data.len().min(i + 4);
-            let word = {
+            let word: u32 = {
                 let paddr = self
                     .tlb
                     .translate(
@@ -286,7 +265,7 @@ where
                         &self.registers,
                     )
                     .map_err(|_| ())?;
-                self.memory.read_u32(paddr).map_err(|_| ())?
+                self.read(paddr).map_err(|_| ())?.into()
             };
             data[i..end].copy_from_slice(&word.to_ne_bytes()[..end - i]);
         }
@@ -309,7 +288,7 @@ where
                 )
                 .map_err(|_| ())?;
             let word = u32::from_ne_bytes(data[i..end].try_into().unwrap());
-            self.memory.write_u32(paddr, word).map_err(|_| ())?;
+            self.write(paddr, word.into()).map_err(|_| ())?;
         }
 
         Ok(())
@@ -367,10 +346,7 @@ where
     }
 }
 
-impl<Mem> SingleThreadResume for Environment<'_, Mem>
-where
-    Mem: Memory,
-{
+impl<Bus: bus::Bus> SingleThreadResume for Environment<'_, Bus> {
     fn resume(&mut self, signal: Option<gdbstub::common::Signal>) -> Result<(), Self::Error> {
         assert!(signal.is_none(), "gdb: resume with signal is not supported");
         self.debugger.as_mut().unwrap().state = State::Running;
@@ -386,10 +362,7 @@ where
     }
 }
 
-impl<Mem> SingleThreadSingleStep for Environment<'_, Mem>
-where
-    Mem: Memory,
-{
+impl<Bus: bus::Bus> SingleThreadSingleStep for Environment<'_, Bus> {
     fn step(&mut self, signal: Option<gdbstub::common::Signal>) -> Result<(), Self::Error> {
         assert!(signal.is_none(), "gdb: step with signal is not supported");
         self.debugger.as_mut().unwrap().state = State::SingleStep;

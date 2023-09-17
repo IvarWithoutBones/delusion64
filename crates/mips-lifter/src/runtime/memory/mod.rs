@@ -1,65 +1,70 @@
 //! Memory access for runtime environment.
 
 use self::tlb::AccessMode;
-use super::Environment;
-use std::fmt;
+use super::{
+    bus::{self, Address, BusError, Int, MemorySection},
+    Environment,
+};
 
 pub(crate) mod tlb;
 
-/// A trait providing memory access for runtime environment.
-pub trait Memory {
-    /// The type of error that can occur when accessing memory.
-    type AccessError: std::fmt::Debug;
-
-    /// Called on each CPU cycle.
-    fn tick(&mut self) -> Result<(), Self::AccessError>;
-
-    /// Read a u8 from the given physical address.
-    fn read_u8(&mut self, paddr: u32) -> Result<u8, Self::AccessError>;
-
-    /// Read a u16 from the given physical address.
-    fn read_u16(&mut self, paddr: u32) -> Result<u16, Self::AccessError>;
-
-    /// Read a u32 from the given physical address.
-    fn read_u32(&mut self, paddr: u32) -> Result<u32, Self::AccessError>;
-
-    /// Read a u64 from the given physical address.
-    fn read_u64(&mut self, paddr: u32) -> Result<u64, Self::AccessError>;
-
-    /// Write a u8 to the given physical address.
-    fn write_u8(&mut self, paddr: u32, value: u8) -> Result<(), Self::AccessError>;
-
-    /// Write a u16 to the given physical address.
-    fn write_u16(&mut self, paddr: u32, value: u16) -> Result<(), Self::AccessError>;
-
-    /// Write a u32 to the given physical address.
-    fn write_u32(&mut self, paddr: u32, value: u32) -> Result<(), Self::AccessError>;
-
-    /// Write a u64 to the given physical address.
-    fn write_u64(&mut self, paddr: u32, value: u64) -> Result<(), Self::AccessError>;
-}
-
-impl<'ctx, Mem> Environment<'ctx, Mem>
-where
-    Mem: Memory,
-{
-    fn panic_read_failed<E>(&mut self, err: E, vaddr: u64, paddr: u32) -> !
-    where
-        E: fmt::Debug,
-    {
-        let message = format!("memory read failed at vaddr={vaddr:#x} paddr={paddr:#x}: {err:?}");
-        self.panic_update_debugger(&message)
+impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
+    fn find_section(&self, paddr: u32) -> Result<&'static Bus::Section, BusError<Bus::Error>> {
+        Bus::SECTIONS
+            .iter()
+            .find(|section| section.range().contains(&paddr))
+            .ok_or(BusError::AddressNotMapped { address: paddr })
     }
 
-    fn panic_write_failed<T, E>(&mut self, err: E, vaddr: u64, paddr: u32, value: T) -> !
-    where
-        T: fmt::LowerHex,
-        E: fmt::Debug,
-    {
-        let message = format!(
-            "memory write of {value:#x} failed at vaddr={vaddr:#x} paddr={paddr:#x}: {err:?}",
-        );
-        self.panic_update_debugger(&message)
+    pub fn read<const SIZE: usize>(
+        &mut self,
+        paddr: u32,
+    ) -> Result<Int<SIZE>, BusError<Bus::Error>> {
+        self.find_section(paddr).and_then(|section| {
+            let addr = Address::new(section, paddr);
+            self.memory.read_memory(addr).map(|result| {
+                if let Some(_paddrs) = result.mutated {
+                    todo!()
+                }
+                result.inner
+            })
+        })
+    }
+
+    pub fn write<const SIZE: usize>(
+        &mut self,
+        paddr: u32,
+        value: Int<SIZE>,
+    ) -> Result<(), BusError<Bus::Error>> {
+        self.find_section(paddr).and_then(|section| {
+            let addr = Address::new(section, paddr);
+            self.memory.write_memory(addr, value).map(|result| {
+                if let Some(_paddrs) = result.mutated {
+                    todo!()
+                }
+                if section.auto_invalidate_written_addresses() {
+                    // Use Address here to account for mirroring
+                    let _written_addr = Address::new(section, paddr).physical_address();
+                }
+            })
+        })
+    }
+
+    fn read_panicking<const SIZE: usize>(&mut self, vaddr: u64, paddr: u32) -> Int<SIZE> {
+        self.read(paddr).unwrap_or_else(|err| {
+            let message =
+                format!("memory read failed at vaddr={vaddr:#x} paddr={paddr:#x}: {err:?}");
+            self.panic_update_debugger(&message)
+        })
+    }
+
+    fn write_panicking<const SIZE: usize>(&mut self, vaddr: u64, paddr: u32, value: Int<SIZE>) {
+        self.write(paddr, value).unwrap_or_else(|err| {
+            let message = format!(
+                "memory write of {value:#?} failed at vaddr={vaddr:#x} paddr={paddr:#x}: {err:?}"
+            );
+            self.panic_update_debugger(&message)
+        })
     }
 
     /*
@@ -68,57 +73,41 @@ where
 
     pub(crate) unsafe extern "C" fn read_u8(&mut self, vaddr: u64) -> u8 {
         let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
-        self.memory
-            .read_u8(paddr)
-            .unwrap_or_else(|err| self.panic_read_failed(err, vaddr, paddr))
+        self.read_panicking(vaddr, paddr).into()
     }
 
     pub(crate) unsafe extern "C" fn read_u16(&mut self, vaddr: u64) -> u16 {
         let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
-        self.memory
-            .read_u16(paddr)
-            .unwrap_or_else(|err| self.panic_read_failed(err, vaddr, paddr))
+        self.read_panicking(vaddr, paddr).into()
     }
 
     pub(crate) unsafe extern "C" fn read_u32(&mut self, vaddr: u64) -> u32 {
         let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
-        self.memory
-            .read_u32(paddr)
-            .unwrap_or_else(|err| self.panic_read_failed(err, vaddr, paddr))
+        self.read_panicking(vaddr, paddr).into()
     }
 
     pub(crate) unsafe extern "C" fn read_u64(&mut self, vaddr: u64) -> u64 {
         let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
-        self.memory
-            .read_u64(paddr)
-            .unwrap_or_else(|err| self.panic_read_failed(err, vaddr, paddr))
+        self.read_panicking(vaddr, paddr).into()
     }
 
     pub(crate) unsafe extern "C" fn write_u8(&mut self, vaddr: u64, value: u8) {
         let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Write);
-        self.memory
-            .write_u8(paddr, value)
-            .unwrap_or_else(|err| self.panic_write_failed(err, vaddr, paddr, value))
+        self.write_panicking(vaddr, paddr, value.into())
     }
 
     pub(crate) unsafe extern "C" fn write_u16(&mut self, vaddr: u64, value: u16) {
         let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Write);
-        self.memory
-            .write_u16(paddr, value)
-            .unwrap_or_else(|err| self.panic_write_failed(err, vaddr, paddr, value))
+        self.write_panicking(vaddr, paddr, value.into())
     }
 
     pub(crate) unsafe extern "C" fn write_u32(&mut self, vaddr: u64, value: u32) {
         let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Write);
-        self.memory
-            .write_u32(paddr, value)
-            .unwrap_or_else(|err| self.panic_write_failed(err, vaddr, paddr, value))
+        self.write_panicking(vaddr, paddr, value.into())
     }
 
     pub(crate) unsafe extern "C" fn write_u64(&mut self, vaddr: u64, value: u64) {
         let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Write);
-        self.memory
-            .write_u64(paddr, value)
-            .unwrap_or_else(|err| self.panic_write_failed(err, vaddr, paddr, value))
+        self.write_panicking(vaddr, paddr, value.into())
     }
 }

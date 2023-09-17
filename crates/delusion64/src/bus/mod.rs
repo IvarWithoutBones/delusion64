@@ -1,7 +1,7 @@
-use self::location::{MemoryLocation, MemoryRegion, MemoryType, MemoryValue};
+use self::location::BusSection;
 use mips_lifter::{
-    gdb::{util::str_to_u64, MonitorCommand},
-    runtime::Memory,
+    gdb::MonitorCommand,
+    runtime::bus::{Address, Bus as BusInterface, BusResult, Int},
 };
 use n64_cartridge::Cartridge;
 use n64_mi::{MiError, MipsInterface};
@@ -20,9 +20,9 @@ fn boxed_array<T: Default + Clone, const LEN: usize>() -> Box<[T; LEN]> {
 }
 
 pub struct Bus {
-    pub rdram: Box<[u8; MemoryRegion::RdramMemory.len()]>,
-    pub rsp_dmem: Box<[u8; MemoryRegion::RspDMemory.len()]>,
-    pub rsp_imem: Box<[u8; MemoryRegion::RspIMemory.len()]>,
+    pub rdram: Box<[u8; BusSection::RdramMemory.len()]>,
+    pub rsp_dmem: Box<[u8; BusSection::RspDMemory.len()]>,
+    pub rsp_imem: Box<[u8; BusSection::RspIMemory.len()]>,
     pub cartridge_rom: Box<[u8]>,
     pub pi: PeripheralInterface,
     pub mi: MipsInterface,
@@ -87,113 +87,7 @@ impl Bus {
                     Ok(())
                 }),
             },
-            MonitorCommand {
-                name: "read-paddr",
-                description: "read a u32 from a physical address. usage: read-paddr <paddr>",
-                handler: Box::new(|bus, out, args| {
-                    let location = str_to_u64(args.next().ok_or("expected physical address")?)
-                        .map(|addr| addr as u32)
-                        .map_err(|err| format!("invalid physical address: {err}"))?
-                        .try_into()
-                        .map_err(|err| format!("error: {err:#?}"))?;
-                    let value = bus.read(location, MemoryType::U32).map_err(|err| {
-                        format!("failed to read from location {location:#?}: {err:#?}")
-                    })?;
-                    writeln!(out, "{value:#x?}")?;
-                    Ok(())
-                }),
-            },
         ]
-    }
-
-    fn write<MemVal>(&mut self, location: MemoryLocation, raw_value: MemVal) -> Result<(), BusError>
-    where
-        MemVal: Into<MemoryValue>,
-    {
-        let value = raw_value.into();
-        let region = location.region;
-        let offset = location.offset;
-        let map_err = |o: Option<()>| o.ok_or(BusError::OffsetOutOfBounds(location));
-
-        match region {
-            MemoryRegion::RdramMemory => {
-                map_err(value.write_into(self.rdram.as_mut_slice(), offset))
-            }
-
-            MemoryRegion::RspDMemory => {
-                map_err(value.write_into(self.rsp_dmem.as_mut_slice(), offset))
-            }
-
-            MemoryRegion::RspIMemory => {
-                map_err(value.write_into(self.rsp_imem.as_mut_slice(), offset))
-            }
-
-            MemoryRegion::PeripheralInterface => map_err(self.pi.write(
-                offset,
-                value.try_into().unwrap(),
-                self.rdram.as_mut_slice(),
-                self.cartridge_rom.as_mut(),
-            )),
-
-            MemoryRegion::MipsInterface => self
-                .mi
-                .write(offset, value.try_into().unwrap())
-                .map_err(BusError::MipsInterfaceError),
-
-            MemoryRegion::VideoInterface => {
-                map_err(self.vi.write(offset, value.try_into().unwrap()))
-            }
-
-            MemoryRegion::CartridgeRom | MemoryRegion::DiskDriveIpl4Rom | MemoryRegion::PifRom => {
-                Err(BusError::ReadOnlyRegionWrite(region))
-            }
-
-            _ => region
-                .safe_to_stub()
-                .then(|| {
-                    eprintln!("STUB: memory write of {value:#x?} at {location:#x?}");
-                })
-                .ok_or(BusError::Unimplemented),
-        }
-    }
-
-    fn read(&mut self, location: MemoryLocation, ty: MemoryType) -> Result<MemoryValue, BusError> {
-        let region = location.region;
-        let offset = location.offset;
-        let map_err = |o: Option<MemoryValue>| o.ok_or(BusError::OffsetOutOfBounds(location));
-
-        match region {
-            MemoryRegion::RdramMemory => map_err(ty.read_from(self.rdram.as_slice(), offset)),
-            MemoryRegion::RspDMemory => map_err(ty.read_from(self.rsp_dmem.as_slice(), offset)),
-            MemoryRegion::RspIMemory => map_err(ty.read_from(self.rsp_imem.as_slice(), offset)),
-            MemoryRegion::PeripheralInterface => {
-                map_err(self.pi.read(offset).map(|value| value.into()))
-            }
-
-            MemoryRegion::MipsInterface => self
-                .mi
-                .read(offset)
-                .map_err(BusError::MipsInterfaceError)
-                .map(|value| value.into()),
-
-            MemoryRegion::CartridgeRom => Ok(
-                // An address not within the mapped cartridge ROM range should return zero.
-                ty.read_from(&self.cartridge_rom, offset)
-                    .unwrap_or(ty.zero()),
-            ),
-
-            MemoryRegion::VideoInterface => map_err(self.vi.read(offset).map(|value| value.into())),
-
-            MemoryRegion::RdramRegistersWriteOnly => Err(BusError::WriteOnlyRegionRead(region)),
-
-            _ => region
-                .safe_to_stub()
-                .then(|| {
-                    eprintln!("STUB: memory read of {ty:?} at {location:#x?}");
-                    ty.zero()
-                })
-                .ok_or(BusError::Unimplemented),
-        }
     }
 }
 
@@ -201,14 +95,14 @@ pub enum BusError {
     /// The address is not mapped to any memory region.
     UnmappedAddress(u32),
     /// A read-only region was written to.
-    ReadOnlyRegionWrite(MemoryRegion),
+    ReadOnlyRegionWrite(BusSection),
     /// A write-only region was read from.
-    WriteOnlyRegionRead(MemoryRegion),
+    WriteOnlyRegionRead(BusSection),
     /// An error occurred while accessing the mips interface.
     MipsInterfaceError(MiError),
     /// The offset is out of bounds for the given region.
     /// This is an internal error which can only occur if the `MemoryLocation` was improperly created.
-    OffsetOutOfBounds(MemoryLocation),
+    OffsetOutOfBounds(Address<BusSection>),
     /// The memory region is not yet implemented, and cannot be stubbed.
     Unimplemented,
 }
@@ -225,62 +119,138 @@ impl fmt::Debug for BusError {
                 write!(
                     f,
                     "internal error: offset {:#x} out of bounds for {:?}",
-                    location.offset, location.region
+                    location.offset, location
                 )
             }
         }
     }
 }
 
-impl Memory for Bus {
-    type AccessError = BusError;
+impl BusInterface for Bus {
+    type Error = BusError;
+    type Section = BusSection;
 
-    fn tick(&mut self) -> Result<(), Self::AccessError> {
+    const SECTIONS: &'static [Self::Section] = &[
+        BusSection::RdramMemory,
+        BusSection::RdramRegisters,
+        BusSection::RdramRegistersWriteOnly,
+        BusSection::RspDMemory,
+        BusSection::RspIMemory,
+        BusSection::RspMemoryMirrors,
+        BusSection::RspRegisters,
+        BusSection::RspCommandRegisters,
+        BusSection::RspSpanRegisters,
+        BusSection::MipsInterface,
+        BusSection::VideoInterface,
+        BusSection::AudioInterface,
+        BusSection::PeripheralInterface,
+        BusSection::RdramInterface,
+        BusSection::SerialInterface,
+        BusSection::DiskDriveRegisters,
+        BusSection::DiskDriveIpl4Rom,
+        BusSection::CartridgeSram,
+        BusSection::CartridgeRom,
+        BusSection::PifRom,
+        BusSection::PifRam,
+    ];
+
+    fn tick(&mut self) -> BusResult<(), Self::Error> {
         self.vi.tick(); // TODO: how does timing compare to the CPU?
-        Ok(())
+        Ok(Default::default())
     }
 
-    fn read_u8(&mut self, paddr: u32) -> Result<u8, Self::AccessError> {
-        self.read(paddr.try_into()?, MemoryType::U8).map(|value| {
-            // SAFETY: we're sure the returned value matches the MemoryType.
-            unsafe { value.try_into().unwrap_unchecked() }
-        })
+    fn read_memory<const SIZE: usize>(
+        &mut self,
+        address: Address<Self::Section>,
+    ) -> BusResult<Int<SIZE>, Self::Error> {
+        let value = match address.section {
+            BusSection::RdramMemory => Int::from_slice(&self.rdram[address.offset..]),
+            BusSection::RspDMemory => Int::from_slice(&self.rsp_dmem[address.offset..]),
+            BusSection::RspIMemory => Int::from_slice(&self.rsp_imem[address.offset..]),
+
+            BusSection::MipsInterface => Int::new(
+                self.mi
+                    .read(address.offset)
+                    .map_err(BusError::MipsInterfaceError)?,
+            ),
+
+            BusSection::VideoInterface => Int::new(
+                self.vi
+                    .read(address.offset)
+                    .ok_or(BusError::OffsetOutOfBounds(address))?,
+            ),
+
+            BusSection::PeripheralInterface => Int::new(
+                self.pi
+                    .read(address.offset)
+                    .ok_or(BusError::OffsetOutOfBounds(address))?,
+            ),
+
+            // An address not within the mapped cartridge ROM range should return zero, as games differentiate in size.
+            BusSection::CartridgeRom => Int::from_slice(&self.cartridge_rom[address.offset..]),
+
+            section @ BusSection::RdramRegistersWriteOnly => {
+                Err(BusError::WriteOnlyRegionRead(*section))?
+            }
+
+            BusSection::RspMemoryMirrors => unreachable!("rsp memory mirrors should be resolved"),
+
+            section => Ok(section
+                .safe_to_stub()
+                .then(|| {
+                    eprintln!("STUB: memory read at {address:#x?}");
+                    Int::default()
+                })
+                .ok_or(BusError::Unimplemented)?),
+        };
+        Ok(value?.into())
     }
 
-    fn read_u16(&mut self, paddr: u32) -> Result<u16, Self::AccessError> {
-        self.read(paddr.try_into()?, MemoryType::U16).map(|value| {
-            // SAFETY: we're sure the returned value matches the MemoryType.
-            unsafe { value.try_into().unwrap_unchecked() }
-        })
-    }
+    fn write_memory<const SIZE: usize>(
+        &mut self,
+        address: Address<Self::Section>,
+        value: Int<SIZE>,
+    ) -> BusResult<(), Self::Error> {
+        let range = address.offset..address.offset + SIZE;
+        match address.section {
+            BusSection::RdramMemory => self.rdram[range].copy_from_slice(value.as_slice()),
+            BusSection::RspDMemory => self.rsp_dmem[range].copy_from_slice(value.as_slice()),
+            BusSection::RspIMemory => self.rsp_imem[range].copy_from_slice(value.as_slice()),
 
-    fn read_u32(&mut self, paddr: u32) -> Result<u32, Self::AccessError> {
-        self.read(paddr.try_into()?, MemoryType::U32).map(|value| {
-            // SAFETY: we're sure the returned value matches the MemoryType.
-            unsafe { value.try_into().unwrap_unchecked() }
-        })
-    }
+            BusSection::MipsInterface => self
+                .mi
+                .write(address.offset, value.try_into()?)
+                .map_err(BusError::MipsInterfaceError)?,
 
-    fn read_u64(&mut self, paddr: u32) -> Result<u64, Self::AccessError> {
-        self.read(paddr.try_into()?, MemoryType::U64).map(|value| {
-            // SAFETY: we're sure the returned value matches the MemoryType.
-            unsafe { value.try_into().unwrap_unchecked() }
-        })
-    }
+            BusSection::VideoInterface => self
+                .vi
+                .write(address.offset, value.try_into()?)
+                .ok_or(BusError::OffsetOutOfBounds(address))?,
 
-    fn write_u8(&mut self, paddr: u32, value: u8) -> Result<(), Self::AccessError> {
-        self.write(paddr.try_into()?, value)
-    }
+            // TODO: invalidate JIT blocks in the case of a DMA transfer.
+            BusSection::PeripheralInterface => self
+                .pi
+                .write(
+                    address.offset,
+                    value.try_into()?,
+                    self.rdram.as_mut_slice(),
+                    self.cartridge_rom.as_mut(),
+                )
+                .ok_or(BusError::OffsetOutOfBounds(address))?,
 
-    fn write_u16(&mut self, paddr: u32, value: u16) -> Result<(), Self::AccessError> {
-        self.write(paddr.try_into()?, value)
-    }
+            BusSection::DiskDriveIpl4Rom | BusSection::CartridgeRom | BusSection::PifRom => {
+                Err(BusError::ReadOnlyRegionWrite(*address.section))?
+            }
 
-    fn write_u32(&mut self, paddr: u32, value: u32) -> Result<(), Self::AccessError> {
-        self.write(paddr.try_into()?, value)
-    }
+            BusSection::RspMemoryMirrors => {
+                unreachable!("rsp memory mirrors should be resolved")
+            }
 
-    fn write_u64(&mut self, paddr: u32, value: u64) -> Result<(), Self::AccessError> {
-        self.write(paddr.try_into()?, value)
+            section => section
+                .safe_to_stub()
+                .then(|| eprintln!("STUB: memory write of {value:#x?} at {address:#x?}"))
+                .ok_or(BusError::Unimplemented)?,
+        };
+        Ok(Default::default())
     }
 }

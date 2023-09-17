@@ -21,8 +21,8 @@ use std::{
 use strum::IntoEnumIterator;
 
 pub(crate) use self::function::RuntimeFunction;
-pub use self::memory::Memory;
 
+pub mod bus;
 mod function;
 pub(crate) mod gdb;
 mod memory;
@@ -95,25 +95,19 @@ impl Registers {
     }
 }
 
-pub struct Environment<'ctx, Mem>
-where
-    Mem: Memory,
-{
+pub struct Environment<'ctx, Bus: bus::Bus> {
     pub(crate) registers: Pin<Box<Registers>>,
-    memory: Mem,
+    memory: Bus,
     tlb: TranslationLookasideBuffer,
     codegen: Cell<Option<CodeGen<'ctx>>>,
-    debugger: Option<gdb::Debugger<'ctx, Mem>>,
+    debugger: Option<gdb::Debugger<'ctx, Bus>>,
 }
 
-impl<'ctx, Mem> Environment<'ctx, Mem>
-where
-    Mem: Memory,
-{
+impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
     pub fn new(
-        memory: Mem,
+        memory: Bus,
         regs: InitialRegisters,
-        gdb: Option<gdb::Connection<Mem>>,
+        gdb: Option<gdb::Connection<Bus>>,
     ) -> Pin<Box<Self>> {
         let mut registers = Registers::default();
         for (reg, val) in regs {
@@ -273,7 +267,7 @@ where
                 let mut break_after = None;
                 let mut bin: Vec<u8> = Vec::new();
                 loop {
-                    let value = self.memory.read_u32(addr).unwrap();
+                    let value = u32::from_be_bytes(*self.read(addr).unwrap().as_slice());
                     if let Ok(instr) = ParsedInstruction::try_from(value) {
                         if instr.has_delay_slot() {
                             break_after = Some(2);
@@ -367,7 +361,10 @@ where
         let pc_vaddr = self.registers[register::Special::Pc];
         let pc_paddr = self.virtual_to_physical_address(pc_vaddr, AccessMode::Read);
 
-        let instr = ParsedInstruction::try_from(self.memory.read_u32(pc_paddr).unwrap()).unwrap();
+        let instr = ParsedInstruction::try_from(u32::from_be_bytes(
+            *self.read(pc_paddr).unwrap().as_slice(),
+        ))
+        .unwrap();
         println!("{pc_vaddr:06x}: {instr}");
 
         self.memory.tick().unwrap_or_else(|err| {
