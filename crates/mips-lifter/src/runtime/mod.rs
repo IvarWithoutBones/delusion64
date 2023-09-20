@@ -101,6 +101,8 @@ pub struct Environment<'ctx, Bus: bus::Bus> {
     tlb: TranslationLookasideBuffer,
     codegen: Cell<Option<CodeGen<'ctx>>>,
     debugger: Option<gdb::Debugger<'ctx, Bus>>,
+
+    tmp_handling_irq: bool,
 }
 
 impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
@@ -120,6 +122,8 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
             debugger: None,
             codegen: Default::default(),
             memory,
+
+            tmp_handling_irq: false,
         };
 
         if let Some(gdb) = gdb {
@@ -187,7 +191,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
 
     fn virtual_to_physical_address(&mut self, vaddr: u64, mode: AccessMode) -> u32 {
         self.tlb
-            .translate(vaddr, mode, &self.registers)
+            .translate_vaddr(vaddr, mode, &self.registers)
             .unwrap_or_else(|err| {
                 let msg = format!("failed to generate paddr for vaddr {vaddr:#06x}: {err:#?}");
                 self.panic_update_debugger(&msg)
@@ -358,6 +362,11 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
     }
 
     unsafe extern "C" fn on_instruction(&mut self) {
+        if self.tmp_handling_irq {
+            self.tmp_handling_irq = false;
+            self.handle_exception(Exception::Interrupt);
+        }
+
         let pc_vaddr = self.registers[register::Special::Pc];
         let pc_paddr = self.virtual_to_physical_address(pc_vaddr, AccessMode::Read);
 

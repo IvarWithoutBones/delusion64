@@ -1,4 +1,4 @@
-use crate::runtime::{memory::tlb::AccessMode, Environment, bus};
+use crate::runtime::{bus, memory::tlb::AccessMode, Environment};
 use gdbstub::outputln;
 use std::{collections::HashMap, num::ParseIntError};
 
@@ -144,6 +144,15 @@ impl<Bus: bus::Bus> Environment<'_, Bus> {
                 }),
             },
             MonitorCommand {
+                name: "irq",
+                description: "",
+                handler: Box::new(|env, out, _args| {
+                    writeln!(out, "handling IRQ")?;
+                    env.tmp_handling_irq = true;
+                    Ok(())
+                }),
+            },
+            MonitorCommand {
                 name: "paddr",
                 description:
                     "translate a virtual address to a physical address. usage: paddr <vaddr>",
@@ -152,7 +161,7 @@ impl<Bus: bus::Bus> Environment<'_, Bus> {
                         .map_err(|err| format!("invalid virtual address: {err}"))?;
                     let paddr = env
                         .tlb
-                        .translate(vaddr, AccessMode::Read, &env.registers)
+                        .translate_vaddr(vaddr, AccessMode::Read, &env.registers)
                         .map_err(|err| {
                             format!("virtual address {vaddr:#x} is not mapped: {err:#?}")
                         })?;

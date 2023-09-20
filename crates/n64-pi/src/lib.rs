@@ -1,6 +1,8 @@
 //! The Peripheral Interface (PI), used for communication with the cartridge and disk drive.
 //! See https://n64brew.dev/wiki/Peripheral_Interface, and https://github.com/Dillonb/n64-resources/blob/master/pi_dma.org.
 
+use std::ops::Range;
+
 use self::register::{
     CartAddress, DramAddress, Latch, PageSize, PulseWidth, ReadLength, Register, Release, Status,
     WriteLength,
@@ -58,6 +60,11 @@ impl Region {
             Region::CartridgeRom => Domain::One,
         }
     }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Mutated {
+    pub rdram: Option<Range<u32>>,
 }
 
 /// The Peripheral Interface (PI), used for communication with the cartridge and disk drive.
@@ -146,7 +153,8 @@ impl PeripheralInterface {
         value: u32,
         rdram: &mut [u8],
         cart: &mut [u8],
-    ) -> Option<()> {
+    ) -> Option<Mutated> {
+        let mut mutated = None;
         match Register::new(offset)? {
             Register::DramAddress => self.dram_address = DramAddress::from(value),
             Register::CartAddress => self.cart_address = CartAddress::from(value),
@@ -158,7 +166,7 @@ impl PeripheralInterface {
 
             Register::WriteLength => {
                 self.write_length = WriteLength::from(value);
-                self.dma_to_memory(rdram, cart);
+                mutated = Some(self.dma_to_memory(rdram, cart));
             }
 
             Register::Status => self.status_write = Status::from(value),
@@ -184,10 +192,14 @@ impl PeripheralInterface {
             },
         };
 
-        Some(())
+        if mutated.is_some() {
+            mutated
+        } else {
+            Some(Default::default())
+        }
     }
 
-    fn dma_to_memory(&mut self, rdram: &mut [u8], cart: &[u8]) {
+    fn dma_to_memory(&mut self, rdram: &mut [u8], cart: &[u8]) -> Mutated {
         let cart_address = self.cart_address.address() as usize;
         match Region::new(cart_address as u32) {
             Region::CartridgeRom => {
@@ -202,6 +214,10 @@ impl PeripheralInterface {
 
                 rdram_slice.copy_from_slice(cart_slice);
                 println!("PI: DMA from cart {cart_offset:#x} to rdram {rdram_offset:#x} (length {length:#x})");
+
+                Mutated {
+                    rdram: Some(rdram_offset as u32..(rdram_offset + length + 1) as u32),
+                }
             }
 
             region => {

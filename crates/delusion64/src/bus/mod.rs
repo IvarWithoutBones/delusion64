@@ -1,7 +1,7 @@
 use self::location::BusSection;
 use mips_lifter::{
     gdb::MonitorCommand,
-    runtime::bus::{Address, Bus as BusInterface, BusResult, Int},
+    runtime::bus::{Address, Bus as BusInterface, BusResult, BusValue, Int, MemorySection},
 };
 use n64_cartridge::Cartridge;
 use n64_mi::{MiError, MipsInterface};
@@ -116,11 +116,7 @@ impl fmt::Debug for BusError {
             BusError::MipsInterfaceError(err) => write!(f, "MI error: {err:?}"),
             BusError::Unimplemented => write!(f, "unimplemented (cannot stub)"),
             BusError::OffsetOutOfBounds(location) => {
-                write!(
-                    f,
-                    "internal error: offset {:#x} out of bounds for {:?}",
-                    location.offset, location
-                )
+                write!(f, "internal error: offset out of bounds for {location:?}",)
             }
         }
     }
@@ -211,6 +207,7 @@ impl BusInterface for Bus {
         address: Address<Self::Section>,
         value: Int<SIZE>,
     ) -> BusResult<(), Self::Error> {
+        let mut result = BusValue::default();
         let range = address.offset..address.offset + SIZE;
         match address.section {
             BusSection::RdramMemory => self.rdram[range].copy_from_slice(value.as_slice()),
@@ -228,15 +225,27 @@ impl BusInterface for Bus {
                 .ok_or(BusError::OffsetOutOfBounds(address))?,
 
             // TODO: invalidate JIT blocks in the case of a DMA transfer.
-            BusSection::PeripheralInterface => self
-                .pi
-                .write(
-                    address.offset,
-                    value.try_into()?,
-                    self.rdram.as_mut_slice(),
-                    self.cartridge_rom.as_mut(),
-                )
-                .ok_or(BusError::OffsetOutOfBounds(address))?,
+            BusSection::PeripheralInterface => {
+                let mutated = self
+                    .pi
+                    .write(
+                        address.offset,
+                        value.try_into()?,
+                        self.rdram.as_mut_slice(),
+                        self.cartridge_rom.as_mut(),
+                    )
+                    .ok_or(BusError::OffsetOutOfBounds(address))?;
+
+                // Invalidate JIT blocks if RDRAM was mutated, since code may reside there.
+                if let Some(range) = mutated.rdram {
+                    let rdram_base = BusSection::RdramMemory.range().start;
+                    result.mutated = Some(range.start + rdram_base..range.end + rdram_base);
+                    println!("{result:#x?}");
+                    // if result.mutated.as_ref().unwrap().contains(&0x00000180) {
+                    //     panic!();
+                    // }
+                }
+            }
 
             BusSection::DiskDriveIpl4Rom | BusSection::CartridgeRom | BusSection::PifRom => {
                 Err(BusError::ReadOnlyRegionWrite(*address.section))?
@@ -251,6 +260,6 @@ impl BusInterface for Bus {
                 .then(|| eprintln!("STUB: memory write of {value:#x?} at {address:#x?}"))
                 .ok_or(BusError::Unimplemented)?,
         };
-        Ok(Default::default())
+        Ok(result)
     }
 }

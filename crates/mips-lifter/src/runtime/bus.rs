@@ -44,6 +44,15 @@ impl<T> From<T> for BusError<T> {
     }
 }
 
+impl From<BusError<fmt::Error>> for fmt::Error {
+    fn from(value: BusError<fmt::Error>) -> Self {
+        match value {
+            BusError::Other(result) => result,
+            _ => unimplemented!(),
+        }
+    }
+}
+
 pub type BusResult<T, E> = Result<BusValue<T>, BusError<E>>;
 
 /// A trait for types that can be converted into an Int<SIZE>. Much like std::convert::Into, but with a const generic size.
@@ -59,11 +68,10 @@ impl<const SIZE: usize> IntoInt<SIZE> for [u8; SIZE] {
 }
 
 /// A wrapper around a byte array that represents an integer. Note that the bytes are always interpreted as the systems endianness.
-/// This should get optimised into a single register, making it a zero-cost abstraction.
 ///
 /// Used instead of an enum with a variant for each size for a few reasons:
 /// It avoids the need of padding to the size of the largest variant, and it allows the size to be inferred from the type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct Int<const SIZE: usize>([u8; SIZE]);
 
@@ -155,6 +163,34 @@ macro_rules! impl_int_conversion {
 // u128/i128 are omitted because the guest does not support them.
 impl_int_conversion!(u8, u16, u32, u64, i8, i16, i32, i64);
 
+macro_rules! format_int {
+    ($(($trait:path, $fmt:expr)),+) => {
+        $(
+            impl<const SIZE: usize> $trait for Int<SIZE> {
+                fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    if SIZE == size_of::<u8>() {
+                        let value: u8 = self.resize()?.into();
+                        write!(f, concat!("{:", $fmt, "}_u8"), value)
+                    } else if SIZE == size_of::<u16>() {
+                        let value: u16 = self.resize()?.into();
+                        write!(f, concat!("{:", $fmt, "}_u16"), value)
+                    } else if SIZE == size_of::<u32>() {
+                        let value: u32 = self.resize()?.into();
+                        write!(f, concat!("{:", $fmt, "}_u32"), value)
+                    } else if SIZE == size_of::<u64>() {
+                        let value: u64 = self.resize()?.into();
+                        write!(f, concat!("{:", $fmt, "}_u64"), value)
+                    } else {
+                        write!(f, concat!("{:", $fmt, "?}"), self.0)
+                    }
+                }
+            }
+        )+
+    };
+}
+
+format_int!((fmt::Display, ""), (fmt::Debug, "#"), (fmt::LowerHex, "x"), (fmt::UpperHex, "X"));
+
 /// A mirroring configuration for a memory section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Mirroring<Section: MemorySection + 'static> {
@@ -212,7 +248,6 @@ pub trait MemorySection: fmt::Debug {
 
 /// A physical address in memory, mapped to a specific section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[non_exhaustive]
 pub struct Address<Section: MemorySection + 'static> {
     /// The offset from the start of the section.
     pub offset: usize,

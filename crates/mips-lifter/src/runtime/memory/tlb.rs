@@ -120,7 +120,7 @@ impl TranslationLookasideBuffer {
     const KSEG0: Range<u32> = 0x8000_0000..0xA000_0000;
     const KSEG1: Range<u32> = 0xA000_0000..0xC000_0000;
 
-    fn translate_unmapped(vaddr: u64) -> Option<u32> {
+    fn translate_unmapped_vaddr(vaddr: u64) -> Option<u32> {
         let vaddr = vaddr as u32;
         match vaddr {
             _ if Self::KSEG0.contains(&vaddr) => Some(vaddr - Self::KSEG0.start),
@@ -129,14 +129,35 @@ impl TranslationLookasideBuffer {
         }
     }
 
+    fn translate_unmapped_paddr(paddr: u32) -> Option<u64> {
+        let kseg0 = paddr + Self::KSEG0.start;
+        let kseg1 = paddr + Self::KSEG1.start;
+        if Self::KSEG0.contains(&kseg0) {
+            Some(kseg0 as u64)
+        } else if Self::KSEG1.contains(&kseg1) {
+            Some(kseg1 as u64)
+        } else {
+            None
+        }
+    }
+
+    /// Translate a physical address to a virtual address.
+    pub fn translate_paddr(&self, paddr: u32) -> Result<u64, TranslationError> {
+        if let Some(vaddr) = Self::translate_unmapped_paddr(paddr) {
+            Ok(vaddr)
+        } else {
+            todo!("translate_paddr for TLB mapped addresses")
+        }
+    }
+
     /// Translate a virtual address to a physical address.
-    pub fn translate(
+    pub fn translate_vaddr(
         &self,
         vaddr: u64,
         mode: AccessMode,
         regs: &Registers,
     ) -> Result<u32, TranslationError> {
-        if let Some(paddr) = Self::translate_unmapped(vaddr) {
+        if let Some(paddr) = Self::translate_unmapped_vaddr(vaddr) {
             return Ok(paddr);
         }
 

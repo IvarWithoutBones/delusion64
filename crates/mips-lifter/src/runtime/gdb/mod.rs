@@ -259,7 +259,7 @@ impl<Bus: bus::Bus> SingleThreadBase for Environment<'_, Bus> {
             let word: u32 = {
                 let paddr = self
                     .tlb
-                    .translate(
+                    .translate_vaddr(
                         start_addr as u64 + i as u64,
                         AccessMode::Read,
                         &self.registers,
@@ -281,7 +281,7 @@ impl<Bus: bus::Bus> SingleThreadBase for Environment<'_, Bus> {
             let end = data.len().min(i + 4);
             let paddr = self
                 .tlb
-                .translate(
+                .translate_vaddr(
                     start_addr as u64 + i as u64,
                     AccessMode::Write,
                     &self.registers,
