@@ -1,3 +1,4 @@
+use super::Environment;
 use std::{fmt, mem::size_of, ops::Range};
 
 pub type PhysicalAddress = u32;
@@ -5,10 +6,14 @@ pub type PhysicalAddress = u32;
 /// The value returned by a memory read or write operation. Optionally contains a range of physical addresses that were mutated.
 #[derive(Debug, Default)]
 pub struct BusValue<T> {
+    /// The value returned by the memory operation.
     pub inner: T,
     /// The range of physical addresses that were mutated by this operation.
-    /// When modifying memory this *must* be set, so that the relevant JIT blocks can be invalidated.
+    /// When modifying memory this *must* be set so that the relevant JIT blocks can be invalidated.
     pub mutated: Option<Range<PhysicalAddress>>,
+    /// The mask of the external interrupt(s) that was triggered by this operation, if any.
+    /// Only external interrupts should be set, which occupy bits 2..=6.
+    pub interrupt: Option<u8>,
 }
 
 impl<T> BusValue<T> {
@@ -16,12 +21,22 @@ impl<T> BusValue<T> {
         Self {
             inner: value,
             mutated: None,
+            interrupt: None,
         }
     }
 
-    pub fn with_mutated(mut self, mutated: Range<PhysicalAddress>) -> Self {
-        self.mutated = Some(mutated);
-        self
+    pub(crate) fn handle<B: Bus>(self, env: &mut Environment<B>) -> T {
+        if let Some(paddrs) = self.mutated {
+            env.invalidate(paddrs);
+        }
+        if let Some(interrupt_mask) = self.interrupt {
+            let cause = env.registers.cause();
+            let pending = cause.interrupt_pending().raw() | interrupt_mask;
+            env.registers
+                .set_cause(cause.with_interrupt_pending(pending.into()));
+            env.interrupt_pending = true;
+        }
+        self.inner
     }
 }
 
@@ -189,7 +204,12 @@ macro_rules! format_int {
     };
 }
 
-format_int!((fmt::Display, ""), (fmt::Debug, "#"), (fmt::LowerHex, "x"), (fmt::UpperHex, "X"));
+format_int!(
+    (fmt::Display, ""),
+    (fmt::Debug, "#"),
+    (fmt::LowerHex, "x"),
+    (fmt::UpperHex, "X")
+);
 
 /// A mirroring configuration for a memory section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

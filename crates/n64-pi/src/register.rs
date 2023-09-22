@@ -1,6 +1,8 @@
 //! Memory-mapped registers for the Peripheral Interface (PI).
 //! See https://n64brew.dev/wiki/Peripheral_Interface#Registers
 
+use crate::PiError;
+
 use super::Domain;
 use tartan_bitfield::bitfield;
 
@@ -122,31 +124,31 @@ pub(crate) enum Register {
 }
 
 impl Register {
-    pub const fn new(offset: usize) -> Option<Self> {
+    pub const fn new(offset: usize) -> Result<Self, PiError> {
         match offset {
-            0x0 => Some(Register::DramAddress),
-            0x4 => Some(Register::CartAddress),
-            0x8 => Some(Register::ReadLength),
-            0xC => Some(Register::WriteLength),
-            0x10 => Some(Register::Status),
-            0x14 => Some(Register::Latch(Domain::One)),
-            0x18 => Some(Register::PulseWidth(Domain::One)),
-            0x1C => Some(Register::PageSize(Domain::One)),
-            0x20 => Some(Register::Release(Domain::One)),
-            0x24 => Some(Register::Latch(Domain::Two)),
-            0x28 => Some(Register::PulseWidth(Domain::Two)),
-            0x2C => Some(Register::PageSize(Domain::Two)),
-            0x30 => Some(Register::Release(Domain::Two)),
-            _ => None,
+            0x0 => Ok(Register::DramAddress),
+            0x4 => Ok(Register::CartAddress),
+            0x8 => Ok(Register::ReadLength),
+            0xC => Ok(Register::WriteLength),
+            0x10 => Ok(Register::Status),
+            0x14 => Ok(Register::Latch(Domain::One)),
+            0x18 => Ok(Register::PulseWidth(Domain::One)),
+            0x1C => Ok(Register::PageSize(Domain::One)),
+            0x20 => Ok(Register::Release(Domain::One)),
+            0x24 => Ok(Register::Latch(Domain::Two)),
+            0x28 => Ok(Register::PulseWidth(Domain::Two)),
+            0x2C => Ok(Register::PageSize(Domain::Two)),
+            0x30 => Ok(Register::Release(Domain::Two)),
+            _ => Err(PiError::InvalidRegisterOffset(offset)),
         }
     }
 }
 
 impl TryFrom<usize> for Register {
-    type Error = ();
+    type Error = PiError;
 
     fn try_from(offset: usize) -> Result<Self, Self::Error> {
-        Register::new(offset).ok_or(())
+        Register::new(offset)
     }
 }
 

@@ -4,10 +4,9 @@ use mips_lifter::{
     runtime::bus::{Address, Bus as BusInterface, BusResult, BusValue, Int, MemorySection},
 };
 use n64_cartridge::Cartridge;
-use n64_mi::{MiError, MipsInterface};
-use n64_pi::PeripheralInterface;
+use n64_mi::{InterruptType, MiError, MipsInterface};
+use n64_pi::{DmaStatus, PeripheralInterface, PiError};
 use n64_vi::VideoInterface;
-use std::fmt;
 
 pub mod location;
 
@@ -91,6 +90,7 @@ impl Bus {
     }
 }
 
+#[derive(Debug)]
 pub enum BusError {
     /// The address is not mapped to any memory region.
     UnmappedAddress(u32),
@@ -100,26 +100,13 @@ pub enum BusError {
     WriteOnlyRegionRead(BusSection),
     /// An error occurred while accessing the mips interface.
     MipsInterfaceError(MiError),
+    /// An error occurred while accessing the peripheral interface.
+    PeripheralInterfaceError(PiError),
     /// The offset is out of bounds for the given region.
-    /// This is an internal error which can only occur if the `MemoryLocation` was improperly created.
+    /// This is an internal error which can only occur if the `MemorySection` was improperly created.
     OffsetOutOfBounds(Address<BusSection>),
     /// The memory region is not yet implemented, and cannot be stubbed.
-    Unimplemented,
-}
-
-impl fmt::Debug for BusError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            BusError::UnmappedAddress(addr) => write!(f, "unmapped address {addr:#x}"),
-            BusError::ReadOnlyRegionWrite(region) => write!(f, "read-only region {region:?}"),
-            BusError::WriteOnlyRegionRead(region) => write!(f, "write-only region {region:?}"),
-            BusError::MipsInterfaceError(err) => write!(f, "MI error: {err:?}"),
-            BusError::Unimplemented => write!(f, "unimplemented (cannot stub)"),
-            BusError::OffsetOutOfBounds(location) => {
-                write!(f, "internal error: offset out of bounds for {location:?}",)
-            }
-        }
-    }
+    Unimplemented(BusSection),
 }
 
 impl BusInterface for Bus {
@@ -151,8 +138,18 @@ impl BusInterface for Bus {
     ];
 
     fn tick(&mut self) -> BusResult<(), Self::Error> {
-        self.vi.tick(); // TODO: how does timing compare to the CPU?
-        Ok(Default::default())
+        let mut result = BusValue::default();
+
+        // TODO: how does timing compare to the CPU?
+        self.vi.tick();
+        if self.pi.tick() == DmaStatus::Finished {
+            let ty = InterruptType::PeripheralInterface;
+            if self.mi.raise_interrupt(ty) {
+                result.interrupt = Some(ty.mask())
+            }
+        }
+
+        Ok(result)
     }
 
     fn read_memory<const SIZE: usize>(
@@ -179,10 +176,9 @@ impl BusInterface for Bus {
             BusSection::PeripheralInterface => Int::new(
                 self.pi
                     .read(address.offset)
-                    .ok_or(BusError::OffsetOutOfBounds(address))?,
+                    .map_err(BusError::PeripheralInterfaceError)?,
             ),
 
-            // An address not within the mapped cartridge ROM range should return zero, as games differentiate in size.
             BusSection::CartridgeRom => Int::from_slice(&self.cartridge_rom[address.offset..]),
 
             section @ BusSection::RdramRegistersWriteOnly => {
@@ -197,7 +193,7 @@ impl BusInterface for Bus {
                     eprintln!("STUB: memory read at {address:#x?}");
                     Int::default()
                 })
-                .ok_or(BusError::Unimplemented)?),
+                .ok_or(BusError::Unimplemented(*section))?),
         };
         Ok(value?.into())
     }
@@ -234,16 +230,12 @@ impl BusInterface for Bus {
                         self.rdram.as_mut_slice(),
                         self.cartridge_rom.as_mut(),
                     )
-                    .ok_or(BusError::OffsetOutOfBounds(address))?;
+                    .map_err(BusError::PeripheralInterfaceError)?;
 
                 // Invalidate JIT blocks if RDRAM was mutated, since code may reside there.
                 if let Some(range) = mutated.rdram {
                     let rdram_base = BusSection::RdramMemory.range().start;
                     result.mutated = Some(range.start + rdram_base..range.end + rdram_base);
-                    println!("{result:#x?}");
-                    // if result.mutated.as_ref().unwrap().contains(&0x00000180) {
-                    //     panic!();
-                    // }
                 }
             }
 
@@ -258,7 +250,7 @@ impl BusInterface for Bus {
             section => section
                 .safe_to_stub()
                 .then(|| eprintln!("STUB: memory write of {value:#x?} at {address:#x?}"))
-                .ok_or(BusError::Unimplemented)?,
+                .ok_or(BusError::Unimplemented(*section))?,
         };
         Ok(result)
     }

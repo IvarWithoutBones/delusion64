@@ -28,7 +28,7 @@ const LLVM_CALLING_CONVENTION_FAST: u32 = 8;
 
 pub type InitialRegisters<'a> = &'a [(register::Register, u64)];
 
-pub fn run<Bus>(mem: Bus, regs: InitialRegisters, gdb: Option<gdb::Connection<Bus>>)
+pub fn run<Bus>(bus: Bus, regs: InitialRegisters, gdb: Option<gdb::Connection<Bus>>)
 where
     Bus: runtime::bus::Bus,
 {
@@ -47,7 +47,7 @@ where
 
     // Create the compilation/runtime environment.
     let (env, codegen) = {
-        let env = runtime::Environment::new(mem, regs, gdb);
+        let env = runtime::Environment::new(bus, regs, gdb);
         let globals = env.map_into(&module, &execution_engine);
         let codegen = CodeGen::new(&context, module, execution_engine, globals);
         (env, codegen)

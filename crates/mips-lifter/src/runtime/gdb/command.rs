@@ -45,7 +45,7 @@ impl<'ctx, Bus: bus::Bus> Command<'ctx, Bus> {
     ) -> Result<(), MonitorCommandHandlerError> {
         match self {
             Command::Internal(cmd) => (cmd.handler)(env, output, args),
-            Command::External(cmd) => (cmd.handler)(&mut env.memory, output, args),
+            Command::External(cmd) => (cmd.handler)(&mut env.bus, output, args),
         }
     }
 }
@@ -148,7 +148,7 @@ impl<Bus: bus::Bus> Environment<'_, Bus> {
                 description: "",
                 handler: Box::new(|env, out, _args| {
                     writeln!(out, "handling IRQ")?;
-                    env.tmp_handling_irq = true;
+                    env.interrupt_pending = true;
                     Ok(())
                 }),
             },

@@ -1,25 +1,30 @@
 //! The Peripheral Interface (PI), used for communication with the cartridge and disk drive.
 //! See https://n64brew.dev/wiki/Peripheral_Interface, and https://github.com/Dillonb/n64-resources/blob/master/pi_dma.org.
 
-use std::ops::Range;
-
 use self::register::{
     CartAddress, DramAddress, Latch, PageSize, PulseWidth, ReadLength, Register, Release, Status,
     WriteLength,
 };
+use std::ops::Range;
 
 mod register;
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum PiError {
+    InvalidRegisterOffset(usize),
+    UnimplementedDma { region: Region, domain: Domain },
+}
+
 /// See https://n64brew.dev/wiki/Peripheral_Interface#Domains.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-enum Domain {
+pub enum Domain {
     One,
     Two,
 }
 
 /// See https://n64brew.dev/wiki/Peripheral_Interface#Domains.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-enum Region {
+pub enum Region {
     /// Writes to this region will be ignored, while reads will return open-bus data.
     /// See https://n64brew.dev/wiki/Peripheral_Interface#Open_bus_behavior.
     Unknown,
@@ -67,28 +72,33 @@ pub struct Mutated {
     pub rdram: Option<Range<u32>>,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum DmaStatus {
+    Idle,
+    Busy,
+    Finished,
+}
+
 /// The Peripheral Interface (PI), used for communication with the cartridge and disk drive.
 /// See https://n64brew.dev/wiki/Peripheral_Interface, and https://github.com/Dillonb/n64-resources/blob/master/pi_dma.org.
 #[derive(Default, Debug, PartialEq, Eq)]
 pub struct PeripheralInterface {
+    dma_cycles_remaining: Option<u32>,
+
+    // Registers
     dram_address: DramAddress,
     cart_address: CartAddress,
     read_length: ReadLength,
     write_length: WriteLength,
-
     // NOTE: Differentiates when reading or writing to it.
     status_read: Status,
     status_write: Status,
-
     domain_1_latch: Latch,
     domain_2_latch: Latch,
-
     domain_1_pulse_width: PulseWidth,
     domain_2_pulse_width: PulseWidth,
-
     domain_1_page_size: PageSize,
     domain_2_page_size: PageSize,
-
     domain_1_release: Release,
     domain_2_release: Release,
 }
@@ -117,30 +127,30 @@ impl PeripheralInterface {
         pi
     }
 
-    pub fn read(&self, offset: usize) -> Option<u32> {
+    pub fn read(&self, offset: usize) -> Result<u32, PiError> {
         match Register::new(offset)? {
-            Register::DramAddress => Some(self.dram_address.into()),
-            Register::CartAddress => Some(self.cart_address.into()),
-            Register::Status => Some(self.status_read.into()),
-            Register::ReadLength => Some(ReadLength::READ_VALUE),
-            Register::WriteLength => Some(WriteLength::READ_VALUE),
+            Register::DramAddress => Ok(self.dram_address.into()),
+            Register::CartAddress => Ok(self.cart_address.into()),
+            Register::Status => Ok(self.status_read.into()),
+            Register::ReadLength => Ok(ReadLength::READ_VALUE),
+            Register::WriteLength => Ok(WriteLength::READ_VALUE),
 
-            Register::Latch(dom) => Some(match dom {
+            Register::Latch(dom) => Ok(match dom {
                 Domain::One => self.domain_1_latch.into(),
                 Domain::Two => self.domain_2_latch.into(),
             }),
 
-            Register::PulseWidth(dom) => Some(match dom {
+            Register::PulseWidth(dom) => Ok(match dom {
                 Domain::One => self.domain_1_pulse_width.into(),
                 Domain::Two => self.domain_2_pulse_width.into(),
             }),
 
-            Register::PageSize(dom) => Some(match dom {
+            Register::PageSize(dom) => Ok(match dom {
                 Domain::One => self.domain_1_page_size.into(),
                 Domain::Two => self.domain_2_page_size.into(),
             }),
 
-            Register::Release(dom) => Some(match dom {
+            Register::Release(dom) => Ok(match dom {
                 Domain::One => self.domain_1_release.into(),
                 Domain::Two => self.domain_2_release.into(),
             }),
@@ -153,7 +163,7 @@ impl PeripheralInterface {
         value: u32,
         rdram: &mut [u8],
         cart: &mut [u8],
-    ) -> Option<Mutated> {
+    ) -> Result<Mutated, PiError> {
         let mut mutated = None;
         match Register::new(offset)? {
             Register::DramAddress => self.dram_address = DramAddress::from(value),
@@ -166,10 +176,24 @@ impl PeripheralInterface {
 
             Register::WriteLength => {
                 self.write_length = WriteLength::from(value);
-                mutated = Some(self.dma_to_memory(rdram, cart));
+                mutated = Some(self.dma(rdram, cart)?);
             }
 
-            Register::Status => self.status_write = Status::from(value),
+            Register::Status => {
+                let mut status = Status::from(value);
+
+                if status.reset_dma() {
+                    self.status_read.set_dma_busy(false);
+                    self.status_read.set_io_busy(false);
+                    self.reset_dma();
+                }
+
+                if status.clear_interrupt() {
+                    self.status_read.set_interrupt(false);
+                }
+
+                self.status_write = status.with_reset_dma(false).with_clear_interrupt(false);
+            }
 
             Register::Latch(dom) => match dom {
                 Domain::One => self.domain_1_latch = Latch::from(value),
@@ -192,14 +216,38 @@ impl PeripheralInterface {
             },
         };
 
-        if mutated.is_some() {
-            mutated
+        Ok(mutated.unwrap_or_default())
+    }
+
+    pub fn tick(&mut self) -> DmaStatus {
+        if let Some(cycles) = &mut self.dma_cycles_remaining {
+            if *cycles == 0 {
+                self.reset_dma();
+                DmaStatus::Finished
+            } else {
+                *cycles -= 1;
+                DmaStatus::Busy
+            }
         } else {
-            Some(Default::default())
+            DmaStatus::Idle
         }
     }
 
-    fn dma_to_memory(&mut self, rdram: &mut [u8], cart: &[u8]) -> Mutated {
+    fn reset_dma(&mut self) {
+        self.dma_cycles_remaining.take();
+        self.status_read.set_dma_busy(false);
+        self.status_read.set_io_busy(false);
+    }
+
+    const fn dma_cycles(&self) -> u32 {
+        100000 // TODO: implement this properly
+    }
+
+    fn dma(&mut self, rdram: &mut [u8], cart: &[u8]) -> Result<Mutated, PiError> {
+        self.dma_cycles_remaining = Some(self.dma_cycles());
+        self.status_read.set_dma_busy(true);
+        self.status_read.set_io_busy(true);
+
         let cart_address = self.cart_address.address() as usize;
         match Region::new(cart_address as u32) {
             Region::CartridgeRom => {
@@ -215,15 +263,15 @@ impl PeripheralInterface {
                 rdram_slice.copy_from_slice(cart_slice);
                 println!("PI: DMA from cart {cart_offset:#x} to rdram {rdram_offset:#x} (length {length:#x})");
 
-                Mutated {
+                Ok(Mutated {
                     rdram: Some(rdram_offset as u32..(rdram_offset + length + 1) as u32),
-                }
+                })
             }
 
-            region => {
-                let domain = region.domain();
-                panic!("PI: DMA to unknown address {cart_address:#x} (region {region:?}, domain {domain:?})")
-            }
+            region => Err(PiError::UnimplementedDma {
+                region,
+                domain: region.domain(),
+            }),
         }
     }
 }

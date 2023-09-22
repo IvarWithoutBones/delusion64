@@ -230,6 +230,16 @@ bitfield! {
     }
 }
 
+impl InterruptPending {
+    pub const fn new(raw: u8) -> Self {
+        Self(raw)
+    }
+
+    pub const fn raw(&self) -> u8 {
+        self.0
+    }
+}
+
 bitfield! {
     /// The format of the CP0 register Cause, also known as `CR`.
     #[derive(Ord, PartialOrd, Hash)]
@@ -244,5 +254,9 @@ bitfield! {
 impl Cause {
     pub const fn new(raw: u32) -> Self {
         Self(raw)
+    }
+
+    pub const fn raw(&self) -> u32 {
+        self.0
     }
 }

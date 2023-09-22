@@ -93,21 +93,25 @@ impl Registers {
     pub fn cause(&self) -> register::cp0::Cause {
         register::cp0::Cause::new(self[register::Cp0::Cause] as u32)
     }
+
+    pub fn set_cause(&mut self, cause: register::cp0::Cause) {
+        let raw: u32 = cause.into();
+        self[register::Cp0::Cause] = raw as u64;
+    }
 }
 
 pub struct Environment<'ctx, Bus: bus::Bus> {
     pub(crate) registers: Pin<Box<Registers>>,
-    memory: Bus,
+    pub(crate) interrupt_pending: bool,
+    bus: Bus,
     tlb: TranslationLookasideBuffer,
     codegen: Cell<Option<CodeGen<'ctx>>>,
     debugger: Option<gdb::Debugger<'ctx, Bus>>,
-
-    tmp_handling_irq: bool,
 }
 
 impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
     pub fn new(
-        memory: Bus,
+        bus: Bus,
         regs: InitialRegisters,
         gdb: Option<gdb::Connection<Bus>>,
     ) -> Pin<Box<Self>> {
@@ -121,9 +125,8 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
             tlb: TranslationLookasideBuffer::default(),
             debugger: None,
             codegen: Default::default(),
-            memory,
-
-            tmp_handling_irq: false,
+            bus,
+            interrupt_pending: false,
         };
 
         if let Some(gdb) = gdb {
@@ -210,7 +213,6 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn handle_exception(&mut self, exception: Exception) {
         if self
             .registers
@@ -362,8 +364,8 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
     }
 
     unsafe extern "C" fn on_instruction(&mut self) {
-        if self.tmp_handling_irq {
-            self.tmp_handling_irq = false;
+        if self.interrupt_pending {
+            self.interrupt_pending = false;
             self.handle_exception(Exception::Interrupt);
         }
 
@@ -376,10 +378,13 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         .unwrap();
         println!("{pc_vaddr:06x}: {instr}");
 
-        self.memory.tick().unwrap_or_else(|err| {
-            let msg = format!("failed to tick: {err:#?}");
-            self.panic_update_debugger(&msg)
-        });
+        self.bus
+            .tick()
+            .unwrap_or_else(|err| {
+                let msg = format!("failed to tick: {err:#?}");
+                self.panic_update_debugger(&msg)
+            })
+            .handle(self);
 
         if self.debugger.is_some() {
             self.update_debugger();

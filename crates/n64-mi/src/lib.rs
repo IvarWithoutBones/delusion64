@@ -130,6 +130,23 @@ impl From<Mask> for Register {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum InterruptType {
+    RspBreak = 0,
+    SerialInterface = 1,
+    AudioInterface = 2,
+    VideoInterface = 3,
+    PeripheralInterface = 4,
+    RdpSync = 5,
+}
+
+impl InterruptType {
+    pub const fn mask(self) -> u8 {
+        1 << (self as u8)
+    }
+}
+
 #[derive(Debug)]
 pub enum MiError {
     RegisterNotFound(usize),
@@ -247,6 +264,53 @@ impl MipsInterface {
         };
         println!("Read from MI register {index:#x?} = {value:#x?}");
         Ok(value)
+    }
+
+    pub fn raise_interrupt(&mut self, interrupt: InterruptType) -> bool {
+        match interrupt {
+            InterruptType::RspBreak => {
+                let mask = self.mask.sp_mask();
+                if mask {
+                    self.interrupt.set_sp(true)
+                }
+                mask
+            }
+            InterruptType::SerialInterface => {
+                let mask = self.mask.si_mask();
+                if mask {
+                    self.interrupt.set_si(true)
+                }
+                mask
+            }
+            InterruptType::AudioInterface => {
+                let mask = self.mask.ai_mask();
+                if mask {
+                    self.interrupt.set_ai(true)
+                }
+                mask
+            }
+            InterruptType::VideoInterface => {
+                let mask = self.mask.vi_mask();
+                if mask {
+                    self.interrupt.set_vi(true)
+                }
+                mask
+            }
+            InterruptType::PeripheralInterface => {
+                let mask = self.mask.pi_mask();
+                if mask {
+                    self.interrupt.set_pi(true)
+                }
+                mask
+            }
+            InterruptType::RdpSync => {
+                let mask = self.mask.dp_mask();
+                if mask {
+                    self.interrupt.set_dp(true)
+                }
+                mask
+            }
+        }
     }
 }
 

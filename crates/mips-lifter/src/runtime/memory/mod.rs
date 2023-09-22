@@ -1,12 +1,11 @@
 //! Memory access for runtime environment.
 
-use std::ops::Range;
-
 use self::tlb::AccessMode;
 use super::{
     bus::{self, Address, BusError, Int, MemorySection},
     Environment,
 };
+use std::ops::Range;
 
 pub(crate) mod tlb;
 
@@ -24,12 +23,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
     ) -> Result<Int<SIZE>, BusError<Bus::Error>> {
         self.find_section(paddr).and_then(|section| {
             let addr = Address::new(section, paddr);
-            self.memory.read_memory(addr).map(|result| {
-                if let Some(paddrs) = result.mutated {
-                    self.invalidate(paddrs);
-                }
-                result.inner
-            })
+            self.bus.read_memory(addr).map(|result| result.handle(self))
         })
     }
 
@@ -40,20 +34,18 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
     ) -> Result<(), BusError<Bus::Error>> {
         self.find_section(paddr).and_then(|section| {
             let addr = Address::new(section, paddr);
-            self.memory.write_memory(addr, value).map(|result| {
-                if let Some(paddrs) = result.mutated {
-                    self.invalidate(paddrs);
-                }
+            self.bus.write_memory(addr, value).map(|result| {
                 if section.auto_invalidate_written_addresses() {
                     // Use Address here to account for mirroring
                     let paddr = Address::new(section, paddr).physical_address();
                     self.invalidate(paddr..(paddr + SIZE as u32));
                 }
+                result.handle(self)
             })
         })
     }
 
-    fn invalidate(&mut self, paddr_range: Range<u32>) {
+    pub(crate) fn invalidate(&mut self, paddr_range: Range<u32>) {
         let vaddr_range = {
             let base = self
                 .tlb
