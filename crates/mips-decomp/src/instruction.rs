@@ -276,7 +276,6 @@ impl Mnenomic {
 
 /// The `fmt` field of floating point instructions, meant to be parsed with `Operand::Format`.
 #[derive(FromRepr, Debug, PartialEq, Eq, Clone, Copy)]
-#[strum(serialize_all = "snake_case")]
 #[repr(u8)]
 pub enum FloatFormat {
     Single = 16,
@@ -386,7 +385,7 @@ impl Instruction {
                     if let Some(cache_op) = self.get_cache_operation(raw) {
                         result.push_str(&cache_op.to_string());
                     } else {
-                        result.push_str("???");
+                        result.push_str(&format!("???({num})"));
                     }
                 }
 
@@ -397,11 +396,11 @@ impl Instruction {
 
                 Operand::Format => {
                     // TODO: could be formatted nicer by replacing `fmt` with this.
-                    if let Some(format) = FloatFormat::from_repr(num as _) {
+                    if let Some(format) = FloatFormat::from_repr(num as u8) {
                         result.push(format.as_char());
                     } else {
                         // TODO: something is probably going wrong with parsing, im seeing this more than expected.
-                        result.push('?');
+                        result.push_str(&format!("???({num})"));
                     }
                 }
 

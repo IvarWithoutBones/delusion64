@@ -39,7 +39,7 @@ impl fmt::Debug for LibultraVersion {
 
 #[binrw]
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-#[brw(big, repr(u8))]
+#[brw(big)]
 #[repr(u8)]
 pub enum CategoryCode {
     GamePak = b'N',
@@ -47,12 +47,12 @@ pub enum CategoryCode {
     ExpandableGamePak = b'C',
     ExpandableDiskDrive = b'E',
     Aleck64GamePak = b'Z',
-    Unknown = 0, // Used by some homebrew ROMs
+    Unknown(u8),
 }
 
 #[binrw]
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-#[brw(big, repr(u8))]
+#[brw(big)]
 #[repr(u8)]
 pub enum DestinationCode {
     All = b'A',
@@ -75,7 +75,7 @@ pub enum DestinationCode {
     Europe1 = b'X',
     Europe2 = b'Y',
     Europe3 = b'Z',
-    Unknown = 0, // Used by some homebrew ROMs
+    Unknown(u8),
 }
 
 #[binrw]

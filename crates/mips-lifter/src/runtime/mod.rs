@@ -202,7 +202,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
     }
 
     fn panic_update_debugger(&mut self, message: &str) -> ! {
-        eprintln!("{message}\n{:?}", self.registers);
+        eprintln!("\n{message}\n{:?}", self.registers);
         if self.debugger.is_some() {
             self.debugger.as_mut().unwrap().signal_panicked();
             loop {

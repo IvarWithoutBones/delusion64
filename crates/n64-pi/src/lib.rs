@@ -5,14 +5,25 @@ use self::register::{
     CartAddress, DramAddress, Latch, PageSize, PulseWidth, ReadLength, Register, Release, Status,
     WriteLength,
 };
-use std::ops::Range;
+use std::ops::{Range, RangeInclusive};
 
 mod register;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PiError {
     InvalidRegisterOffset(usize),
-    UnimplementedDma { region: Region, domain: Domain },
+    UnimplementedDma {
+        region: Region,
+        domain: Domain,
+    },
+    RdramAddressOutOfRange {
+        range: RangeInclusive<usize>,
+        rdram_len: usize,
+    },
+    CartridgeAddressOutOfRange {
+        range: RangeInclusive<usize>,
+        cartridge_len: usize,
+    },
 }
 
 /// See https://n64brew.dev/wiki/Peripheral_Interface#Domains.
@@ -244,6 +255,7 @@ impl PeripheralInterface {
     }
 
     fn dma(&mut self, rdram: &mut [u8], cart: &[u8]) -> Result<Mutated, PiError> {
+        // TODO: use the configured `PageSize`
         self.dma_cycles_remaining = Some(self.dma_cycles());
         self.status_read.set_dma_busy(true);
         self.status_read.set_io_busy(true);
@@ -251,20 +263,37 @@ impl PeripheralInterface {
         let cart_address = self.cart_address.address() as usize;
         match Region::new(cart_address as u32) {
             Region::CartridgeRom => {
-                // TODO: use the configured `PageSize`
-                let length = self.write_length.length() as usize;
-
-                let rdram_offset = self.dram_address.address() as usize;
-                let rdram_slice = &mut rdram[rdram_offset..=rdram_offset + length];
+                let len = self.write_length.length() as usize;
 
                 let cart_offset = Region::CartridgeRom.offset(cart_address as u32) as usize;
-                let cart_slice = &cart[cart_offset..=cart_offset + length];
+                let cart_end = (cart.len() - 1).min(cart_offset + len) - cart_offset; // Ensure we dont read past the end of the cart
+                let cart_slice = cart.get(cart_offset..=cart_offset + cart_end).ok_or(
+                    PiError::CartridgeAddressOutOfRange {
+                        range: cart_offset..=cart_offset + len,
+                        cartridge_len: cart.len(),
+                    },
+                )?;
 
-                rdram_slice.copy_from_slice(cart_slice);
-                println!("PI: DMA from cart {cart_offset:#x} to rdram {rdram_offset:#x} (length {length:#x})");
+                let rdram_offset = self.dram_address.address() as usize;
+                let rdram_slice = {
+                    let range = rdram_offset..=rdram_offset + len;
+                    let rdram_len = rdram.len();
+                    rdram
+                        .get_mut(range.clone())
+                        .ok_or(PiError::RdramAddressOutOfRange { range, rdram_len })?
+                };
+
+                println!("PI: DMA from cart {cart_offset:#x} to rdram {rdram_offset:#x} (length {len:#x})");
+
+                rdram_slice[..=cart_end].copy_from_slice(cart_slice);
+                if cart_end < len {
+                    // Copy zeros into the remainder of the RDRAM slice in case the cartridge is not big enough
+                    println!("WARNING: cartridge is not big enough to fill requested RDRAM range, writing zeros");
+                    rdram_slice[cart_end..].fill(0);
+                }
 
                 Ok(Mutated {
-                    rdram: Some(rdram_offset as u32..(rdram_offset + length + 1) as u32),
+                    rdram: Some(rdram_offset as u32..(rdram_offset + len + 1) as u32),
                 })
             }
 
