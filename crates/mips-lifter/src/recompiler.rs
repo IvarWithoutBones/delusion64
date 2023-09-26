@@ -666,89 +666,69 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
 
         Mnenomic::Dmult => {
             // Multiply signed rs with signed rt, store low-order doubleword in LO, and high-order doubleword to HI
-            let source = codegen.zero_extend_to(
+            let source = codegen.sign_extend_to(
                 i128_type,
                 codegen.read_general_register(i64_type, instr.rs()),
             );
-            let target = codegen.zero_extend_to(
+            let target = codegen.sign_extend_to(
                 i128_type,
                 codegen.read_general_register(i64_type, instr.rt()),
             );
-            let result = codegen
-                .builder
-                .build_int_mul(source, target, "dmult_result");
 
-            // Store the low-order doubleword in LO.
-            let lo = codegen
-                .builder
-                .build_int_truncate(result, i64_type, "dmult_lo_trunc");
-            codegen.write_register(register::Special::Lo, lo);
-
-            // Store the high-order doubleword in HI.
-            let hi = {
-                let shift = i128_type.const_int(64, false);
-                let hi = codegen
-                    .builder
-                    .build_right_shift(result, shift, false, "dmult_hi");
-                codegen
-                    .builder
-                    .build_int_truncate(hi, i64_type, "dmult_hi_trunc")
-            };
-            codegen.write_register(register::Special::Hi, hi);
+            let (hi, lo) =
+                codegen.split(codegen.builder.build_int_mul(source, target, "dmult_res"));
+            codegen.write_register(register::Special::Hi, codegen.sign_extend_to(i64_type, hi));
+            codegen.write_register(register::Special::Lo, codegen.sign_extend_to(i64_type, lo));
         }
 
         Mnenomic::Dmultu => {
             // Multiply unsigned rs with unsigned rt, store low-order doubleword in LO, and high-order doubleword to HI
-            let source = codegen.zero_extend_to(
+            let source = codegen.sign_extend_to(
                 i128_type,
                 codegen.read_general_register(i64_type, instr.rs()),
             );
-            let target = codegen.zero_extend_to(
+            let target = codegen.sign_extend_to(
                 i128_type,
                 codegen.read_general_register(i64_type, instr.rt()),
             );
-            let result = codegen.builder.build_int_mul(source, target, "dmultu_res");
 
-            // Store the low-order doubleword in LO.
-            let lo = codegen
-                .builder
-                .build_int_truncate(result, i64_type, "dmultu_lo");
-            codegen.write_register(register::Special::Lo, lo);
+            let (hi, lo) =
+                codegen.split(codegen.builder.build_int_mul(source, target, "dmultu_res"));
+            codegen.write_register(register::Special::Hi, codegen.sign_extend_to(i64_type, hi));
+            codegen.write_register(register::Special::Lo, codegen.sign_extend_to(i64_type, lo));
+        }
 
-            // Store the high-order doubleword in HI.
-            let hi = {
-                let shift = i128_type.const_int(64, false);
-                let hi = codegen
-                    .builder
-                    .build_right_shift(result, shift, false, "dmultu_hi");
-                codegen
-                    .builder
-                    .build_int_truncate(hi, i64_type, "dmultu_hi_trunc")
-            };
-            codegen.write_register(register::Special::Hi, hi);
+        Mnenomic::Mult => {
+            // Multiply signed rs by signed rt, store low-order word of result in register LO and high-order word in HI
+            let source = codegen.sign_extend_to(
+                i64_type,
+                codegen.read_general_register(i32_type, instr.rs()),
+            );
+            let target = codegen.sign_extend_to(
+                i64_type,
+                codegen.read_general_register(i32_type, instr.rt()),
+            );
+
+            let (hi, lo) = codegen.split(codegen.builder.build_int_mul(source, target, "mult_res"));
+            codegen.write_register(register::Special::Hi, codegen.sign_extend_to(i64_type, hi));
+            codegen.write_register(register::Special::Lo, codegen.sign_extend_to(i64_type, lo));
         }
 
         Mnenomic::Multu => {
             // Multiply unsigned rs by unsigned rt, store low-order word of result in register LO and high-order word in HI
-            let source = codegen.zero_extend_to(
+            let source = codegen.sign_extend_to(
                 i64_type,
                 codegen.read_general_register(i32_type, instr.rs()),
             );
-            let target = codegen.zero_extend_to(
+            let target = codegen.sign_extend_to(
                 i64_type,
                 codegen.read_general_register(i32_type, instr.rt()),
             );
-            let result = codegen.builder.build_int_mul(source, target, "multu_res");
 
-            let lo = codegen.truncate_to(i32_type, result);
-            codegen.write_register(register::Special::Lo, lo);
-
-            // Store the high-order word in HI.
-            let shift = i64_type.const_int(32, false);
-            let hi = codegen
-                .builder
-                .build_right_shift(result, shift, false, "multu_hi");
-            codegen.write_register(register::Special::Hi, hi);
+            let (hi, lo) =
+                codegen.split(codegen.builder.build_int_mul(source, target, "multu_res"));
+            codegen.write_register(register::Special::Hi, codegen.sign_extend_to(i64_type, hi));
+            codegen.write_register(register::Special::Lo, codegen.sign_extend_to(i64_type, lo));
         }
 
         Mnenomic::Mflo => {

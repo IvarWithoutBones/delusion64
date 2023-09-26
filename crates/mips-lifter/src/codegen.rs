@@ -422,6 +422,29 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.build_int_truncate(value, ty, &name)
     }
 
+    /// Splits the given integer in two, returning the high and low order bits in that order.
+    /// The resulting integers will be half the size of the original.
+    pub fn split(&self, value: IntValue<'ctx>) -> (IntValue<'ctx>, IntValue<'ctx>) {
+        let ty = value.get_type();
+        let half_ty = match ty.get_bit_width() {
+            16 => self.context.i8_type(),
+            32 => self.context.i16_type(),
+            64 => self.context.i32_type(),
+            128 => self.context.i64_type(),
+            _ => unimplemented!("split type {ty}"),
+        };
+
+        let hi = {
+            let shift = ty.const_int(half_ty.get_bit_width() as u64, false);
+            let shifted = self
+                .builder
+                .build_right_shift(value, shift, false, "split_hi");
+            self.truncate_to(half_ty, shifted)
+        };
+        let lo = self.truncate_to(half_ty, value);
+        (hi, lo)
+    }
+
     pub fn base_plus_offset(&self, instr: &ParsedInstruction, add_name: &str) -> IntValue<'ctx> {
         let i16_type = self.context.i16_type();
         let i32_type = self.context.i32_type();
