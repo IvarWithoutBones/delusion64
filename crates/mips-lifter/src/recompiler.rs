@@ -275,27 +275,51 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
         }
 
         Mnenomic::Mtc0 => {
-            // Copy contents of GPR rt, to CP0's coprocessor register rd
+            // Copy contents of GPR rt, to CP0 register rd
             let target = codegen.read_general_register(i32_type, instr.rt());
             codegen.write_cp0_register(instr.rd(), target);
         }
 
+        Mnenomic::Mtc1 => {
+            // Copy contents of GPR rt, to CP1 register fs
+            let target = codegen.read_general_register(i32_type, instr.rt());
+            codegen.write_fpu_register(instr.fs(), target);
+        }
+
         Mnenomic::Mfc0 => {
-            // Copy contents of CP0's coprocessor register rd, to GPR rt
+            // Copy contents of CP0 register rd, to GPR rt
             let destination = codegen.read_cp0_register(i32_type, instr.rd());
             codegen.write_general_register(instr.rt(), destination);
         }
 
+        Mnenomic::Mfc1 => {
+            // Copy contents of CP1 register fs, to GPR rt
+            let source = codegen.read_fpu_register(i32_type, instr.fs());
+            codegen.write_general_register(instr.rt(), source);
+        }
+
         Mnenomic::Dmtc0 => {
-            // Copy doubleword contents of GPR rt, to CP0 coprocessor register rd
+            // Copy doubleword contents of GPR rt, to CP0 register rd
             let target = codegen.read_general_register(i64_type, instr.rt());
             codegen.write_cp0_register(instr.rd(), target);
         }
 
+        Mnenomic::Dmtc1 => {
+            // Copy doubleword contents of GPR rt, to CP1 register fs
+            let target = codegen.read_general_register(i64_type, instr.rt());
+            codegen.write_fpu_register(instr.fs(), target);
+        }
+
         Mnenomic::Dmfc0 => {
-            // Copy doubleword contents of CP0's coprocessor register rd, to GPR rt
+            // Copy doubleword contents of CP0 register rd, to GPR rt
             let destination = codegen.read_cp0_register(i64_type, instr.rd());
             codegen.write_general_register(instr.rt(), destination);
+        }
+
+        Mnenomic::Dmfc1 => {
+            // Copy doubleword contents of CP1 register fs, to GPR rt
+            let source = codegen.read_fpu_register(i64_type, instr.fs());
+            codegen.write_general_register(instr.rt(), source);
         }
 
         Mnenomic::Sc => {
