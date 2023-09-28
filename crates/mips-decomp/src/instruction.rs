@@ -15,10 +15,18 @@ pub enum Mnenomic {
     Addu,
     And,
     Andi,
-    Bczf,
-    Bczfl,
-    Bczt,
-    Bcztl,
+    Bc0f,
+    Bc1f,
+    Bc2f,
+    Bc0fl,
+    Bc1fl,
+    Bc2fl,
+    Bc0t,
+    Bc1t,
+    Bc2t,
+    Bc0tl,
+    Bc1tl,
+    Bc2tl,
     Beq,
     Beql,
     Bgez,
@@ -51,7 +59,9 @@ pub enum Mnenomic {
     Div,
     Divu,
     Dmfc0,
+    Dmfc1,
     Dmtc0,
+    Dmtc1,
     Dmult,
     Dmultu,
     Dsll,
@@ -90,10 +100,12 @@ pub enum Mnenomic {
     Lwr,
     Lwu,
     Mfc0,
+    Mfc1,
     Mfc2,
     Mfhi,
     Mflo,
     Mtc0,
+    Mtc1,
     Mtc2,
     Mthi,
     Mtlo,
@@ -153,10 +165,6 @@ pub enum Mnenomic {
     AbsFmt,
     #[strum(serialize = "add.fmt")]
     AddFmt,
-    Bc1f,
-    Bc1fl,
-    Bc1t,
-    Bc1tl,
     #[strum(serialize = "c.cond.fmt")]
     CCondFmtFs,
     #[strum(serialize = "ceil.l.fmt")]
@@ -209,10 +217,18 @@ impl Mnenomic {
     pub const fn is_conditional_branch(&self) -> bool {
         matches!(
             self,
-            Mnenomic::Bczf
-                | Mnenomic::Bczfl
-                | Mnenomic::Bczt
-                | Mnenomic::Bcztl
+            Mnenomic::Bc0f
+                | Mnenomic::Bc1f
+                | Mnenomic::Bc2f
+                | Mnenomic::Bc0fl
+                | Mnenomic::Bc1fl
+                | Mnenomic::Bc2fl
+                | Mnenomic::Bc0t
+                | Mnenomic::Bc1t
+                | Mnenomic::Bc2t
+                | Mnenomic::Bc0tl
+                | Mnenomic::Bc1tl
+                | Mnenomic::Bc2tl
                 | Mnenomic::Beq
                 | Mnenomic::Beql
                 | Mnenomic::Bgez
@@ -232,6 +248,22 @@ impl Mnenomic {
         )
     }
 
+    pub const fn discards_delay_slot(&self) -> bool {
+        matches!(self, |Mnenomic::Bc0fl| Mnenomic::Bc1fl
+            | Mnenomic::Bc2fl
+            | Mnenomic::Bc0tl
+            | Mnenomic::Bc1tl
+            | Mnenomic::Bc2tl
+            | Mnenomic::Beql
+            | Mnenomic::Bgezall
+            | Mnenomic::Bgezl
+            | Mnenomic::Bgtzl
+            | Mnenomic::Blezl
+            | Mnenomic::Bltzall
+            | Mnenomic::Bltzl
+            | Mnenomic::Bnel)
+    }
+
     pub const fn ends_block(&self) -> bool {
         self.is_conditional_branch()
             || matches!(self, |Mnenomic::Break| Mnenomic::Eret
@@ -247,22 +279,6 @@ impl Mnenomic {
                 | Mnenomic::Tgei
                 | Mnenomic::Tgeiu
                 | Mnenomic::Tgeu)
-    }
-
-    pub const fn discards_delay_slot(&self) -> bool {
-        matches!(
-            self,
-            Mnenomic::Bczfl
-                | Mnenomic::Bcztl
-                | Mnenomic::Beql
-                | Mnenomic::Bgezall
-                | Mnenomic::Bgezl
-                | Mnenomic::Bgtzl
-                | Mnenomic::Blezl
-                | Mnenomic::Bltzall
-                | Mnenomic::Bltzl
-                | Mnenomic::Bnel
-        )
     }
 
     pub const fn has_delay_slot(&self) -> bool {
@@ -399,7 +415,6 @@ impl Instruction {
                     if let Some(format) = FloatFormat::from_repr(num as u8) {
                         result.push(format.as_char());
                     } else {
-                        // TODO: something is probably going wrong with parsing, im seeing this more than expected.
                         result.push_str(&format!("???({num})"));
                     }
                 }
@@ -593,13 +608,18 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Addu,    "0000 00ss ssst tttt dddd d000 0010 0001", (Destination)(Source)(Target)),
     instr!(And,     "0000 00ss ssst tttt dddd d000 0010 0100", (Destination)(Source)(Target)),
     instr!(Andi,    "0011 00ss ssst tttt kkkk kkkk kkkk kkkk", (Target)(Source)(Immediate)),
-
-    // TODO: separate the different coprocessor versions into their own instructions.
-    instr!(Bczf,    "0100 xx01 0000 0000 ffff ffff ffff ffff", (Coprocessor)(Offset, Signed16)),
-    instr!(Bczfl,   "0100 xx01 0000 0010 ffff ffff ffff ffff", (Coprocessor)(Offset, Signed16)),
-    instr!(Bczt,    "0100 xx01 0000 0001 ffff ffff ffff ffff", (Coprocessor)(Offset, Signed16)),
-    instr!(Bcztl,   "0100 xx01 0000 0011 ffff ffff ffff ffff", (Coprocessor)(Offset, Signed16)),
-
+    instr!(Bc0f,    "0100 0001 0000 0000 ffff ffff ffff ffff", (Offset, Signed16)),
+    instr!(Bc1f,    "0100 0101 0000 0000 ffff ffff ffff ffff", (Offset, Signed16)),
+    instr!(Bc2f,    "0100 1001 0000 0000 ffff ffff ffff ffff", (Offset, Signed16)),
+    instr!(Bc0fl,   "0100 0001 0000 0010 ffff ffff ffff ffff", (Offset, Signed16)),
+    instr!(Bc1fl,   "0100 0101 0000 0010 ffff ffff ffff ffff", (Offset, Signed16)),
+    instr!(Bc2fl,   "0100 1001 0000 0010 ffff ffff ffff ffff", (Offset, Signed16)),
+    instr!(Bc0t,    "0100 0001 0000 0001 ffff ffff ffff ffff", (Offset, Signed16)),
+    instr!(Bc1t,    "0100 0101 0000 0001 ffff ffff ffff ffff", (Offset, Signed16)),
+    instr!(Bc2t,    "0100 1001 0000 0001 ffff ffff ffff ffff", (Offset, Signed16)),
+    instr!(Bc0tl,   "0100 0001 0000 0011 ffff ffff ffff ffff", (Offset, Signed16)),
+    instr!(Bc1tl,   "0100 0101 0000 0011 ffff ffff ffff ffff", (Offset, Signed16)),
+    instr!(Bc2tl,   "0100 1001 0000 0011 ffff ffff ffff ffff", (Offset, Signed16)),
     instr!(Beq,     "0001 00ss ssst tttt ffff ffff ffff ffff", (Source)(Target)(Offset, Signed16)),
     instr!(Beql,    "0101 00ss ssst tttt ffff ffff ffff ffff", (Source)(Target)(Offset, Signed16)),
     instr!(Bgez,    "0000 01ss sss0 0001 ffff ffff ffff ffff", (Source)(Offset, Signed16)),
@@ -632,7 +652,9 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Div,     "0000 00ss ssst tttt 0000 0000 0001 1010", (Source)(Target)),
     instr!(Divu,    "0000 00ss ssst tttt 0000 0000 0001 1011", (Source)(Target)),
     instr!(Dmfc0,   "0100 0000 001t tttt dddd d000 0000 0000", (Target)(Destination)),
+    instr!(Dmfc1,   "0100 0100 001t tttt SSSS S000 0000 0000", (Target)(FloatSource)),
     instr!(Dmtc0,   "0100 0000 101t tttt dddd d000 0000 0000", (Target)(Destination)),
+    instr!(Dmtc1,   "0100 0100 101t tttt SSSS S000 0000 0000", (Target)(FloatSource)),
     instr!(Dmult,   "0000 00ss ssst tttt 0000 0000 0001 1100", (Source)(Target)),
     instr!(Dmultu,  "0000 00ss ssst tttt 0000 0000 0001 1101", (Source)(Target)),
     instr!(Dsll,    "0000 0000 000t tttt dddd dkkk kk11 1000", (Destination)(Target)(Immediate)),
@@ -670,10 +692,12 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Lwr,     "1001 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Lwu,     "1001 11bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Mfc0,    "0100 0000 000t tttt dddd d000 0000 0000", (Target)(Destination)),
+    instr!(Mfc1,    "0100 0100 000t tttt SSSS S000 0000 0000", (Target)(FloatSource)),
     instr!(Mfc2,    "0100 1000 000t tttt dddd d000 0000 0000", (Target)(Destination)),
     instr!(Mfhi,    "0000 0000 0000 0000 dddd d000 0001 0000", (Destination)),
     instr!(Mflo,    "0000 0000 0000 0000 dddd d000 0001 0010", (Destination)),
     instr!(Mtc0,    "0100 0000 100t tttt dddd d000 0000 0000", (Target)(Destination)),
+    instr!(Mtc1,    "0100 0100 100t tttt SSSS S000 0000 0000", (Target)(FloatSource)),
     instr!(Mtc2,    "0100 1000 100t tttt dddd d000 0000 0000", (Target)(Destination)),
     instr!(Mthi,    "0000 00ss sss0 0000 0000 0000 0001 0001", (Source)),
     instr!(Mtlo,    "0000 00ss sss0 0000 0000 0000 0001 0011", (Source)),
@@ -731,10 +755,6 @@ const INSTRUCTIONS: &[Instruction] = &[
     // Floating point
     instr!(AbsFmt,     "0100 01aa aaa0 0000 SSSS SDDD DD00 0101", (Format)(FloatDestination)(FloatSource)),
     instr!(AddFmt,     "0100 01aa aaaT TTTT SSSS SDDD DD00 0000", (Format)(FloatDestination)(FloatSource)(FloatTarget)),
-    instr!(Bc1f,       "0100 0101 0000 0000 ffff ffff ffff ffff", (Offset)),
-    instr!(Bc1fl,      "0100 0101 0000 0010 ffff ffff ffff ffff", (Offset)),
-    instr!(Bc1t,       "0100 0101 0000 0001 ffff ffff ffff ffff", (Offset)),
-    instr!(Bc1tl,      "0100 0101 0000 0011 ffff ffff ffff ffff", (Offset)),
     instr!(CCondFmtFs, "0100 01aa aaaT TTTT SSSS S000 0011 cccc", (Format)(FloatSource)(FloatTarget)(Condition)),
     instr!(CeilLFmt,   "0100 01aa aaa0 0000 SSSS SDDD DD00 1010", (Format)(FloatDestination)(FloatSource)),
     instr!(CeilWFmt,   "0100 01aa aaa0 0000 SSSS SDDD DD00 1110", (Format)(FloatDestination)(FloatSource)),
