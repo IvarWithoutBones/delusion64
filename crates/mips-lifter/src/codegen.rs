@@ -7,8 +7,8 @@ use inkwell::{
     execution_engine::{ExecutionEngine, JitFunction},
     intrinsics::Intrinsic,
     module::Module,
-    types::IntType,
-    values::{CallSiteValue, FunctionValue, GlobalValue, IntValue, PointerValue},
+    types::{FloatType, IntType},
+    values::{CallSiteValue, FloatValue, FunctionValue, GlobalValue, IntValue, PointerValue},
 };
 use mips_decomp::{
     instruction::ParsedInstruction,
@@ -518,10 +518,22 @@ impl<'ctx> CodeGen<'ctx> {
     where
         T: Into<u64>,
     {
-        let reg = register::Fpu::from_repr(index.into() as _).unwrap();
+        let reg = register::Fpu::from_repr(index.into() as usize).unwrap();
         let name = format!("{}_", reg.name());
         let reg_ptr = self.register_pointer(reg);
         self.builder.build_load(ty, reg_ptr, &name).into_int_value()
+    }
+
+    pub fn read_fpu_register_float<T>(&self, ty: FloatType<'ctx>, index: T) -> FloatValue<'ctx>
+    where
+        T: Into<u64>,
+    {
+        let reg = register::Fpu::from_repr(index.into() as usize).unwrap();
+        let name = format!("{}_", reg.name());
+        let reg_ptr = self.register_pointer(reg);
+        self.builder
+            .build_load(ty, reg_ptr, &name)
+            .into_float_value()
     }
 
     /// Read the specified miscellaneous "special" register.
@@ -572,6 +584,15 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     pub fn write_fpu_register<T>(&self, index: T, value: IntValue<'ctx>)
+    where
+        T: Into<u64>,
+    {
+        let reg = register::Fpu::from_repr(index.into() as _).unwrap();
+        let reg_ptr = self.register_pointer(reg);
+        self.builder.build_store(reg_ptr, value);
+    }
+
+    pub fn write_fpu_register_float<T>(&self, index: T, value: FloatValue<'ctx>)
     where
         T: Into<u64>,
     {

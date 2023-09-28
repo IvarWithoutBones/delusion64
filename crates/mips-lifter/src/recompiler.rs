@@ -1,7 +1,7 @@
 use crate::{codegen::CodeGen, runtime::RuntimeFunction};
 use inkwell::{values::IntValue, IntPredicate};
 use mips_decomp::{
-    instruction::{Mnenomic, ParsedInstruction},
+    instruction::{FloatFormat, Mnenomic, ParsedInstruction},
     register, INSTRUCTION_SIZE,
 };
 
@@ -179,6 +179,8 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
     let i32_type = codegen.context.i32_type();
     let i64_type = codegen.context.i64_type();
     let i128_type = codegen.context.i128_type();
+    let f32_type = codegen.context.f32_type();
+    let f64_type = codegen.context.f64_type();
 
     match mnemonic {
         Mnenomic::Sync => {
@@ -1177,6 +1179,95 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             let target = codegen.read_general_register(i64_type, instr.rt());
             let result = codegen.builder.build_int_sub(source, target, "dsubu_res");
             codegen.write_general_register(instr.rd(), result);
+        }
+
+        Mnenomic::Ldc1 => {
+            // Copies double-word stored at memory address (base + offset), to CP1 register ft.
+            let addr = codegen.base_plus_offset(instr, "lwc1_addr");
+            let value = codegen.read_memory(i64_type, addr);
+            codegen.write_fpu_register(instr.ft(), value);
+        }
+
+        Mnenomic::Lwc1 => {
+            // Copies word stored at memory address (base + offset), to CP1 register ft.
+            let addr = codegen.base_plus_offset(instr, "lwc1_addr");
+            let value = codegen.read_memory(i32_type, addr);
+            // TODO: This should go in the upper/lower 32 bits depending on the FR field in CP0 Status
+            codegen.write_fpu_register(instr.ft(), value);
+        }
+
+        Mnenomic::Swc1 => {
+            // Stores word at CP1 register ft, to memory address (base + offset)
+            let value = codegen.read_fpu_register(i32_type, instr.ft());
+            let addr = codegen.base_plus_offset(instr, "swc1_addr");
+            codegen.write_memory(addr, value);
+        }
+
+        Mnenomic::Sdc1 => {
+            // Stores double-word at CP1 register ft, to memory address (base + offset)
+            let value = codegen.read_fpu_register(i64_type, instr.ft());
+            let addr = codegen.base_plus_offset(instr, "sdc1_addr");
+            codegen.write_memory(addr, value);
+        }
+
+        Mnenomic::AddFmt => {
+            // CP1 registers fs and ft are added together. The result is stored to CP1 register fd.
+            // TODO: is this correct?
+            let float_ty = match instr.float_format() {
+                FloatFormat::Single | FloatFormat::Word => f32_type,
+                FloatFormat::Double | FloatFormat::Long => f64_type,
+            };
+
+            let source = codegen.read_fpu_register_float(float_ty, instr.fs());
+            let target = codegen.read_fpu_register_float(float_ty, instr.ft());
+            let result = codegen.builder.build_float_add(source, target, "add.fmt");
+            codegen.write_fpu_register_float(instr.fd(), result);
+        }
+
+        Mnenomic::DivFmt => {
+            // CP1 register fs is divided by CP1 register ft. The result is stored to CP1 register rd.
+            // TODO: is this correct?
+            let float_ty = match instr.float_format() {
+                FloatFormat::Single | FloatFormat::Word => f32_type,
+                FloatFormat::Double | FloatFormat::Long => f64_type,
+            };
+
+            let source = codegen.read_fpu_register_float(float_ty, instr.fs());
+            let target = codegen.read_fpu_register_float(float_ty, instr.ft());
+            let result = codegen
+                .builder
+                .build_float_div(source, target, "div_fmt_res");
+            codegen.write_fpu_register_float(instr.fd(), result);
+        }
+
+        Mnenomic::CvtDFmt => {
+            // The contents of CP1 register fs are converted into a double-precision floating-point format. The result is stored to CP1 register fd.
+            // TODO: is this correct?
+            let float_ty = match instr.float_format() {
+                FloatFormat::Single | FloatFormat::Word => f32_type,
+                FloatFormat::Double | FloatFormat::Long => f64_type,
+            };
+
+            let source = codegen.read_fpu_register_float(float_ty, instr.fs());
+            let result = codegen
+                .builder
+                .build_float_cast(source, f64_type, "cvt_d_res");
+            codegen.write_fpu_register_float(instr.fd(), result);
+        }
+
+        Mnenomic::CvtSFmt => {
+            // The contents of CP1 register fs are converted into a single-precision floating-point format. The result is stored to CP1 register fd.
+            // TODO: is this correct?
+            let float_ty = match instr.float_format() {
+                FloatFormat::Single | FloatFormat::Word => f32_type,
+                FloatFormat::Double | FloatFormat::Long => f64_type,
+            };
+
+            let source = codegen.read_fpu_register_float(float_ty, instr.fs());
+            let result = codegen
+                .builder
+                .build_float_cast(source, f32_type, "cvt_d_res");
+            codegen.write_fpu_register_float(instr.fd(), result);
         }
 
         _ => {

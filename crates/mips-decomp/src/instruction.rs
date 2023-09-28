@@ -340,6 +340,14 @@ pub enum FloatFormat {
 }
 
 impl FloatFormat {
+    pub const fn is_fixed_point(&self) -> bool {
+        matches!(self, FloatFormat::Word | FloatFormat::Long)
+    }
+
+    pub const fn is_floating_point(&self) -> bool {
+        matches!(self, FloatFormat::Single | FloatFormat::Double)
+    }
+
     pub const fn as_char(&self) -> char {
         match self {
             FloatFormat::Single => 's',
@@ -594,6 +602,10 @@ impl ParsedInstruction {
         self.get(Operand::Coprocessor).unwrap()
     }
 
+    pub fn float_format(&self) -> FloatFormat {
+        FloatFormat::from_repr(self.get(Operand::Format).unwrap() as u8).unwrap()
+    }
+
     pub fn cache_operation(&self) -> CacheOperation {
         self.instr.get_cache_operation(self.raw).unwrap()
     }
@@ -736,7 +748,7 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Lld,     "1101 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Lui,     "0011 1100 000t tttt kkkk kkkk kkkk kkkk", (Target)(Immediate, Signed16)),
     instr!(Lw,      "1000 11bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
-    instr!(Lwc1,    "1100 01bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Lwc1,    "1100 01bb bbbT TTTT ffff ffff ffff ffff", (FloatTarget)(Offset, Signed16)(Base)),
     instr!(Lwc2,    "1100 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Lwl,     "1000 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Lwr,     "1001 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
