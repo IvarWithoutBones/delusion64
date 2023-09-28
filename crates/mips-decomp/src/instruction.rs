@@ -161,47 +161,47 @@ pub enum Mnenomic {
     Xori,
 
     // Floating point unit
-    #[strum(serialize = "abs.fmt")]
+    #[strum(serialize = "abs")]
     AbsFmt,
-    #[strum(serialize = "add.fmt")]
+    #[strum(serialize = "add")]
     AddFmt,
-    #[strum(serialize = "c.cond.fmt")]
+    #[strum(serialize = "c.cond")]
     CCondFmtFs,
-    #[strum(serialize = "ceil.l.fmt")]
+    #[strum(serialize = "ceil.l")]
     CeilLFmt,
-    #[strum(serialize = "ceil.w.fmt")]
+    #[strum(serialize = "ceil.w")]
     CeilWFmt,
-    #[strum(serialize = "cvt.d.fmt")]
+    #[strum(serialize = "cvt.d")]
     CvtDFmt,
-    #[strum(serialize = "cvt.l.fmt")]
+    #[strum(serialize = "cvt.l")]
     CvtLFmt,
-    #[strum(serialize = "cvt.s.fmt")]
+    #[strum(serialize = "cvt.s")]
     CvtSFmt,
-    #[strum(serialize = "cvt.w.fmt")]
+    #[strum(serialize = "cvt.w")]
     CvtWFmt,
-    #[strum(serialize = "div.fmt")]
+    #[strum(serialize = "div")]
     DivFmt,
-    #[strum(serialize = "floor.l.fmt")]
+    #[strum(serialize = "floor.l")]
     FloorLFmt,
-    #[strum(serialize = "floor.w.fmt")]
+    #[strum(serialize = "floor.w")]
     FloorWFmt,
-    #[strum(serialize = "mov.fmt")]
+    #[strum(serialize = "mov")]
     MovFmt,
-    #[strum(serialize = "mul.fmt")]
+    #[strum(serialize = "mul")]
     MulFmt,
-    #[strum(serialize = "neg.fmt")]
+    #[strum(serialize = "neg")]
     NegFmt,
-    #[strum(serialize = "round.l.fmt")]
+    #[strum(serialize = "round.l")]
     RoundLFmt,
-    #[strum(serialize = "round.w.fmt")]
+    #[strum(serialize = "round.w")]
     RoundWFmt,
-    #[strum(serialize = "sqrt.fmt")]
+    #[strum(serialize = "sqrt")]
     SqrtFmt,
-    #[strum(serialize = "sub.fmt")]
+    #[strum(serialize = "sub")]
     SubFmt,
-    #[strum(serialize = "trunc.l.fmt")]
+    #[strum(serialize = "trunc.l")]
     TruncLFmt,
-    #[strum(serialize = "trunc.w.fmt")]
+    #[strum(serialize = "trunc.w")]
     TruncWFmt,
 }
 
@@ -211,6 +211,33 @@ impl Mnenomic {
         matches!(
             self,
             Mnenomic::Mfc0 | Mnenomic::Mtc0 | Mnenomic::Dmfc0 | Mnenomic::Dmtc0
+        )
+    }
+
+    pub const fn is_fpu_instruction(&self) -> bool {
+        matches!(
+            self,
+            Mnenomic::AbsFmt
+                | Mnenomic::AddFmt
+                | Mnenomic::CCondFmtFs
+                | Mnenomic::CeilLFmt
+                | Mnenomic::CeilWFmt
+                | Mnenomic::CvtDFmt
+                | Mnenomic::CvtLFmt
+                | Mnenomic::CvtSFmt
+                | Mnenomic::CvtWFmt
+                | Mnenomic::DivFmt
+                | Mnenomic::FloorLFmt
+                | Mnenomic::FloorWFmt
+                | Mnenomic::MovFmt
+                | Mnenomic::MulFmt
+                | Mnenomic::NegFmt
+                | Mnenomic::RoundLFmt
+                | Mnenomic::RoundWFmt
+                | Mnenomic::SqrtFmt
+                | Mnenomic::SubFmt
+                | Mnenomic::TruncLFmt
+                | Mnenomic::TruncWFmt
         )
     }
 
@@ -287,6 +314,18 @@ impl Mnenomic {
 
     pub const fn name(&self) -> &'static str {
         Self::VARIANTS[*self as usize]
+    }
+
+    /// The name of the instruction, including the `fmt` field for floating point instructions.
+    /// This is useful to differentiate between `add` and `add.fmt` for example.
+    /// Using `name()` is preferable, since this function requires heap allocation for formatting.
+    pub fn full_name(&self) -> String {
+        let name = self.name();
+        if self.is_fpu_instruction() {
+            format!("{name}.fmt")
+        } else {
+            name.to_string()
+        }
     }
 }
 
@@ -388,7 +427,22 @@ impl Instruction {
             return "nop".to_string();
         }
 
-        let mut result = format!("{: <15}", self.mnenomic.name());
+        let mut result = {
+            let space = |s: &str| -> String { format!("{s: <15}") };
+            let name = self.mnenomic.name();
+            if self.mnenomic.is_fpu_instruction() {
+                // FPU instructions are formatted as follows, where fmt is the FloatFormat:
+                //     add.fmt <args>
+                // For example:
+                //     add.w <args>
+                let fmt =
+                    FloatFormat::from_repr(self.pattern.get(Operand::Format, raw).unwrap() as u8)
+                        .unwrap();
+                space(&format!("{name}.{fmt}"))
+            } else {
+                space(name)
+            }
+        };
 
         for (i, (op, sign)) in self.operands.iter().enumerate() {
             let num = self
@@ -397,6 +451,11 @@ impl Instruction {
                 .unwrap_or_else(|| panic!("failed to get operand {op:?} for {:?}", self.mnenomic));
 
             match op {
+                Operand::Format => {
+                    // Already taken care of when creating instruction name.
+                    continue;
+                }
+
                 Operand::CacheOpcode => {
                     if let Some(cache_op) = self.get_cache_operation(raw) {
                         result.push_str(&cache_op.to_string());
@@ -408,15 +467,6 @@ impl Instruction {
                 Operand::CacheSubject => {
                     // Already covered by the `CacheOpcode`.
                     continue;
-                }
-
-                Operand::Format => {
-                    // TODO: could be formatted nicer by replacing `fmt` with this.
-                    if let Some(format) = FloatFormat::from_repr(num as u8) {
-                        result.push(format.as_char());
-                    } else {
-                        result.push_str(&format!("???({num})"));
-                    }
                 }
 
                 Operand::Offset => {

@@ -1180,7 +1180,7 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
         }
 
         _ => {
-            stub(codegen, instr.mnemonic().name());
+            stub(codegen, &instr.mnemonic().full_name());
             return None;
         }
     };
