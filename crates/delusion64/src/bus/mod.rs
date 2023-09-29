@@ -22,6 +22,7 @@ pub struct Bus {
     pub rdram: Box<[u8; BusSection::RdramMemory.len()]>,
     pub rsp_dmem: Box<[u8; BusSection::RspDMemory.len()]>,
     pub rsp_imem: Box<[u8; BusSection::RspIMemory.len()]>,
+    pub pif_ram: Box<[u8; BusSection::PifRam.len()]>,
     pub cartridge_rom: Box<[u8]>,
     pub pi: PeripheralInterface,
     pub mi: MipsInterface,
@@ -40,6 +41,7 @@ impl Bus {
         Self {
             rdram: boxed_array(),
             rsp_imem: boxed_array(),
+            pif_ram: boxed_array(),
             rsp_dmem,
             cartridge_rom,
             pi: PeripheralInterface::new(cartridge.header.pi_bsd_domain_1_flags),
@@ -160,6 +162,7 @@ impl BusInterface for Bus {
             BusSection::RdramMemory => Int::from_slice(&self.rdram[address.offset..]),
             BusSection::RspDMemory => Int::from_slice(&self.rsp_dmem[address.offset..]),
             BusSection::RspIMemory => Int::from_slice(&self.rsp_imem[address.offset..]),
+            BusSection::PifRam => Int::from_slice(&self.pif_ram[address.offset..]),
 
             BusSection::MipsInterface => Int::new(
                 self.mi
@@ -209,6 +212,7 @@ impl BusInterface for Bus {
             BusSection::RdramMemory => self.rdram[range].copy_from_slice(value.as_slice()),
             BusSection::RspDMemory => self.rsp_dmem[range].copy_from_slice(value.as_slice()),
             BusSection::RspIMemory => self.rsp_imem[range].copy_from_slice(value.as_slice()),
+            BusSection::PifRam => self.pif_ram[range].copy_from_slice(value.as_slice()),
 
             BusSection::MipsInterface => self
                 .mi
@@ -220,7 +224,6 @@ impl BusInterface for Bus {
                 .write(address.offset, value.try_into()?)
                 .ok_or(BusError::OffsetOutOfBounds(address))?,
 
-            // TODO: invalidate JIT blocks in the case of a DMA transfer.
             BusSection::PeripheralInterface => {
                 let mutated = self
                     .pi
