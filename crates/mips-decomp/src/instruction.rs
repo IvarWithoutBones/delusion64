@@ -165,8 +165,8 @@ pub enum Mnenomic {
     AbsFmt,
     #[strum(serialize = "add")]
     AddFmt,
-    #[strum(serialize = "c.cond")]
-    CCondFmtFs,
+    #[strum(serialize = "c")]
+    CCondFmt,
     #[strum(serialize = "ceil.l")]
     CeilLFmt,
     #[strum(serialize = "ceil.w")]
@@ -219,7 +219,7 @@ impl Mnenomic {
             self,
             Mnenomic::AbsFmt
                 | Mnenomic::AddFmt
-                | Mnenomic::CCondFmtFs
+                | Mnenomic::CCondFmt
                 | Mnenomic::CeilLFmt
                 | Mnenomic::CeilWFmt
                 | Mnenomic::CvtDFmt
@@ -241,41 +241,8 @@ impl Mnenomic {
         )
     }
 
-    pub const fn is_conditional_branch(&self) -> bool {
-        matches!(
-            self,
-            Mnenomic::Bc0f
-                | Mnenomic::Bc1f
-                | Mnenomic::Bc2f
-                | Mnenomic::Bc0fl
-                | Mnenomic::Bc1fl
-                | Mnenomic::Bc2fl
-                | Mnenomic::Bc0t
-                | Mnenomic::Bc1t
-                | Mnenomic::Bc2t
-                | Mnenomic::Bc0tl
-                | Mnenomic::Bc1tl
-                | Mnenomic::Bc2tl
-                | Mnenomic::Beq
-                | Mnenomic::Beql
-                | Mnenomic::Bgez
-                | Mnenomic::Bgezal
-                | Mnenomic::Bgezall
-                | Mnenomic::Bgezl
-                | Mnenomic::Bgtz
-                | Mnenomic::Bgtzl
-                | Mnenomic::Blez
-                | Mnenomic::Blezl
-                | Mnenomic::Bltz
-                | Mnenomic::Bltzal
-                | Mnenomic::Bltzall
-                | Mnenomic::Bltzl
-                | Mnenomic::Bne
-                | Mnenomic::Bnel
-        )
-    }
-
-    pub const fn discards_delay_slot(&self) -> bool {
+    /// A likely branch discards the delay slot instruction when the branch is not taken.
+    pub const fn is_likely_branch(&self) -> bool {
         matches!(self, |Mnenomic::Bc0fl| Mnenomic::Bc1fl
             | Mnenomic::Bc2fl
             | Mnenomic::Bc0tl
@@ -291,8 +258,28 @@ impl Mnenomic {
             | Mnenomic::Bnel)
     }
 
+    pub const fn is_branch(&self) -> bool {
+        matches!(
+            self,
+            Mnenomic::Bc0f
+                | Mnenomic::Bc1f
+                | Mnenomic::Bc2f
+                | Mnenomic::Bc0t
+                | Mnenomic::Bc1t
+                | Mnenomic::Bc2t
+                | Mnenomic::Beq
+                | Mnenomic::Bgez
+                | Mnenomic::Bgezal
+                | Mnenomic::Bgtz
+                | Mnenomic::Blez
+                | Mnenomic::Bltz
+                | Mnenomic::Bltzal
+                | Mnenomic::Bne
+        ) || self.is_likely_branch()
+    }
+
     pub const fn ends_block(&self) -> bool {
-        self.is_conditional_branch()
+        self.is_branch()
             || matches!(self, |Mnenomic::Break| Mnenomic::Eret
                 | Mnenomic::J
                 | Mnenomic::Jal
@@ -309,7 +296,7 @@ impl Mnenomic {
     }
 
     pub const fn has_delay_slot(&self) -> bool {
-        !matches!(self, Mnenomic::Break | Mnenomic::Eret) && self.ends_block()
+        self.ends_block() && !matches!(self, Mnenomic::Break | Mnenomic::Eret)
     }
 
     pub const fn name(&self) -> &'static str {
@@ -322,7 +309,11 @@ impl Mnenomic {
     pub fn full_name(&self) -> String {
         let name = self.name();
         if self.is_fpu_instruction() {
-            format!("{name}.fmt")
+            if self == &Mnenomic::CCondFmt {
+                format!("{name}.cond.fmt")
+            } else {
+                format!("{name}.fmt")
+            }
         } else {
             name.to_string()
         }
@@ -361,6 +352,57 @@ impl FloatFormat {
 impl fmt::Display for FloatFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.as_char())
+    }
+}
+
+/// The `cond` field of floating point compare instruction, meant to be parsed with `Operand::Condition`.
+#[derive(FromRepr, Debug, PartialEq, Eq, Clone, Copy)]
+#[repr(u8)]
+pub enum FloatCondition {
+    False = 0,
+    Unordered = 1,
+    Equal = 2,
+    UnorderedOrEqual = 3,
+    OrderedLessThan = 4,
+    UnorderedLessThan = 5,
+    OrderedLessThanorEqual = 6,
+    UnorderedLessThanorEqual = 7,
+    SignalingFalse = 8,
+    NotGreaterThanOrLessThanOrEqual = 9,
+    SignalingEqual = 10,
+    NotGreaterThanOrLessThan = 11,
+    LessThan = 12,
+    NotGreaterThanOrEqual = 13,
+    LessThanOrEqual = 14,
+    NotGreaterThan = 15,
+}
+
+impl FloatCondition {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            FloatCondition::False => "f",
+            FloatCondition::Unordered => "un",
+            FloatCondition::Equal => "eq",
+            FloatCondition::UnorderedOrEqual => "ueq",
+            FloatCondition::OrderedLessThan => "olt",
+            FloatCondition::UnorderedLessThan => "ult",
+            FloatCondition::OrderedLessThanorEqual => "ole",
+            FloatCondition::UnorderedLessThanorEqual => "ule",
+            FloatCondition::SignalingFalse => "sf",
+            FloatCondition::NotGreaterThanOrLessThanOrEqual => "ngle",
+            FloatCondition::SignalingEqual => "seq",
+            FloatCondition::NotGreaterThanOrLessThan => "ngl",
+            FloatCondition::LessThan => "lt",
+            FloatCondition::NotGreaterThanOrEqual => "nge",
+            FloatCondition::LessThanOrEqual => "le",
+            FloatCondition::NotGreaterThan => "ngt",
+        }
+    }
+}
+
+impl fmt::Display for FloatCondition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
     }
 }
 
@@ -410,7 +452,7 @@ impl Instruction {
     }
 
     pub const fn try_resolve_static_jump(&self, raw: u32, pc: u64) -> Option<u64> {
-        if !self.mnenomic.is_conditional_branch() {
+        if !self.mnenomic.is_branch() {
             return None;
         }
 
@@ -439,16 +481,22 @@ impl Instruction {
             let space = |s: &str| -> String { format!("{s: <15}") };
             let name = self.mnenomic.name();
             if self.mnenomic.is_fpu_instruction() {
-                // FPU instructions are formatted as follows, where fmt is the FloatFormat:
-                //     add.fmt <args>
-                // For example:
-                //     add.w <args>
                 let fmt =
                     FloatFormat::from_repr(self.pattern.get(Operand::Format, raw).unwrap() as u8)
                         .unwrap();
-                space(&format!("{name}.{fmt}"))
+
+                if self.mnenomic == Mnenomic::CCondFmt {
+                    // This is unfortunately a bit of a special case, not much we can do about it.
+                    let cond = FloatCondition::from_repr(
+                        self.pattern.get(Operand::Condition, raw).unwrap() as u8,
+                    )
+                    .unwrap();
+                    space(&format!("{name}.{cond}.{fmt}"))
+                } else {
+                    space(&format!("{name}.{fmt}"))
+                }
             } else {
-                space(name)
+                space(self.mnenomic.name())
             }
         };
 
@@ -459,7 +507,7 @@ impl Instruction {
                 .unwrap_or_else(|| panic!("failed to get operand {op:?} for {:?}", self.mnenomic));
 
             match op {
-                Operand::Format => {
+                Operand::Format | Operand::Condition => {
                     // Already taken care of when creating instruction name.
                     continue;
                 }
@@ -551,7 +599,7 @@ impl ParsedInstruction {
     }
 
     pub const fn discards_delay_slot(&self) -> bool {
-        self.instr.mnenomic.discards_delay_slot()
+        self.instr.mnenomic.is_likely_branch()
     }
 
     pub const fn get(&self, op: Operand) -> Option<u32> {
@@ -817,7 +865,7 @@ const INSTRUCTIONS: &[Instruction] = &[
     // Floating point
     instr!(AbsFmt,     "0100 01aa aaa0 0000 SSSS SDDD DD00 0101", (Format)(FloatDestination)(FloatSource)),
     instr!(AddFmt,     "0100 01aa aaaT TTTT SSSS SDDD DD00 0000", (Format)(FloatDestination)(FloatSource)(FloatTarget)),
-    instr!(CCondFmtFs, "0100 01aa aaaT TTTT SSSS S000 0011 cccc", (Format)(FloatSource)(FloatTarget)(Condition)),
+    instr!(CCondFmt,   "0100 01aa aaaT TTTT SSSS S000 0011 cccc", (Format)(Condition)(FloatSource)(FloatTarget)),
     instr!(CeilLFmt,   "0100 01aa aaa0 0000 SSSS SDDD DD00 1010", (Format)(FloatDestination)(FloatSource)),
     instr!(CeilWFmt,   "0100 01aa aaa0 0000 SSSS SDDD DD00 1110", (Format)(FloatDestination)(FloatSource)),
     instr!(CvtDFmt,    "0100 01aa aaa0 0000 SSSS SDDD DD10 0001", (Format)(FloatDestination)(FloatSource)),

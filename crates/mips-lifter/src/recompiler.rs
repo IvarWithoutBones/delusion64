@@ -34,7 +34,7 @@ pub fn compile_instruction_with_delay_slot(
     debug_assert!(instr.mnemonic().has_delay_slot());
     let delay_slot_pc = pc + INSTRUCTION_SIZE as u64;
 
-    if instr.mnemonic().is_conditional_branch() {
+    if instr.mnemonic().is_branch() {
         // Evaluate the branch condition prior to running the delay slot instruction,
         // as the delay slot instruction can influence the branch condition. TODO: Is this correct?
         let name = &format!("{}_cmp", instr.mnemonic().name());
@@ -43,7 +43,7 @@ pub fn compile_instruction_with_delay_slot(
             codegen.builder.build_int_compare(pred, lhs, rhs, name)
         };
 
-        if !instr.mnemonic().discards_delay_slot() {
+        if !instr.mnemonic().is_likely_branch() {
             // If the delay slot instruction is not discarded, it gets executed regardless of the branch condition.
             on_instruction(delay_slot_pc);
             compile_instruction(codegen, delay_slot_instr);
@@ -51,7 +51,7 @@ pub fn compile_instruction_with_delay_slot(
 
         on_instruction(pc);
         codegen.build_if(name, comparison, || {
-            if instr.mnemonic().discards_delay_slot() {
+            if instr.mnemonic().is_likely_branch() {
                 // If the delay slot is discarded, the delay slot instruction only gets executed when the branch is taken.
                 on_instruction(delay_slot_pc);
                 compile_instruction(codegen, delay_slot_instr);
