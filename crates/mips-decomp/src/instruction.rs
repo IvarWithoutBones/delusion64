@@ -654,6 +654,10 @@ impl ParsedInstruction {
         FloatFormat::from_repr(self.get(Operand::Format).unwrap() as u8).unwrap()
     }
 
+    pub fn float_condition(&self) -> FloatCondition {
+        FloatCondition::from_repr(self.get(Operand::Condition).unwrap() as u8).unwrap()
+    }
+
     pub fn cache_operation(&self) -> CacheOperation {
         self.instr.get_cache_operation(self.raw).unwrap()
     }

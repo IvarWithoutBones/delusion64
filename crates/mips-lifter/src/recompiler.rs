@@ -1,7 +1,7 @@
 use crate::{codegen::CodeGen, runtime::RuntimeFunction};
-use inkwell::{values::IntValue, IntPredicate};
+use inkwell::{values::IntValue, FloatPredicate, IntPredicate};
 use mips_decomp::{
-    instruction::{FloatFormat, Mnenomic, ParsedInstruction},
+    instruction::{FloatCondition, FloatFormat, Mnenomic, ParsedInstruction},
     register, INSTRUCTION_SIZE,
 };
 
@@ -165,6 +165,22 @@ fn evaluate_conditional_branch<'ctx>(
             // If rs is greater than zero, branch to address.
             let source = codegen.read_general_register(i64_type, instr.rs());
             (IntPredicate::SGT, source, i64_type.const_zero())
+        }
+
+        Mnenomic::Bc1t | Mnenomic::Bc1tl => {
+            // If the last floating-point compare is true, branch to address.
+            let source = codegen.read_register(i64_type, register::Fpu::F31);
+            let mask = i64_type.const_int(1 << 23, false); // C bit
+            let masked = codegen.builder.build_and(source, mask, "bc1t_mask");
+            (IntPredicate::NE, masked, i64_type.const_zero())
+        }
+
+        Mnenomic::Bc1f | Mnenomic::Bc1fl => {
+            // If the last floating-point compare is false, branch to address.
+            let source = codegen.read_register(i64_type, register::Fpu::F31);
+            let mask = i64_type.const_int(1 << 23, false); // C bit
+            let masked = codegen.builder.build_and(source, mask, "bc1t_mask");
+            (IntPredicate::EQ, masked, i64_type.const_zero())
         }
 
         _ => todo!("evaluate_conditional_branch: {}", instr.mnemonic().name()),
@@ -1241,7 +1257,7 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
         }
 
         Mnenomic::CvtDFmt => {
-            // The contents of CP1 register fs are converted into a double-precision floating-point format. The result is stored to CP1 register fd.
+            // CP1 register fs is converted into a double-precision floating-point format. The result is stored to CP1 register fd.
             // TODO: is this correct?
             let float_ty = match instr.float_format() {
                 FloatFormat::Single | FloatFormat::Word => f32_type,
@@ -1256,7 +1272,7 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
         }
 
         Mnenomic::CvtSFmt => {
-            // The contents of CP1 register fs are converted into a single-precision floating-point format. The result is stored to CP1 register fd.
+            // CP1 register fs is converted into a single-precision floating-point format. The result is stored to CP1 register fd.
             // TODO: is this correct?
             let float_ty = match instr.float_format() {
                 FloatFormat::Single | FloatFormat::Word => f32_type,
@@ -1268,6 +1284,47 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
                 .builder
                 .build_float_cast(source, f32_type, "cvt_d_res");
             codegen.write_fpu_register_float(instr.fd(), result);
+        }
+
+        Mnenomic::TruncWFmt => {
+            // CP1 register fs is arithmetically converted to a 32-bit fixed-point single format. The result is stored to CP1 register fd.
+            // TODO: is this correct?
+            let float_ty = match instr.float_format() {
+                FloatFormat::Single | FloatFormat::Word => f32_type,
+                FloatFormat::Double | FloatFormat::Long => f64_type,
+            };
+
+            let source = codegen.read_fpu_register_float(float_ty, instr.fs());
+            let result = codegen
+                .builder
+                .build_float_trunc(source, f32_type, "trunc_w_res");
+            codegen.write_fpu_register_float(instr.fd(), result);
+        }
+
+        Mnenomic::CCondFmt => {
+            // Compares CP1 register fs and CP1 register ft using cond. The result is stored to the C bit of FCR31.
+            // TODO: is this correct?
+            let float_ty = match instr.float_format() {
+                FloatFormat::Single | FloatFormat::Word => f32_type,
+                FloatFormat::Double | FloatFormat::Long => f64_type,
+            };
+            let cond = match instr.float_condition() {
+                FloatCondition::LessThanOrEqual => FloatPredicate::ULE,
+                _ => todo!("float condition {:?}", instr.float_condition()),
+            };
+
+            let source = codegen.read_fpu_register_float(float_ty, instr.fs());
+            let target = codegen.read_fpu_register_float(float_ty, instr.ft());
+            let cmp = codegen
+                .builder
+                .build_float_compare(cond, source, target, "c_cond_res");
+
+            let shift = i32_type.const_int(23, false); // C bit
+            let mask = codegen.builder.build_left_shift(cmp, shift, "c_cond_shift");
+
+            let fcr = codegen.read_fpu_register(i32_type, register::Fpu::F31);
+            let fcr_with_cmp = codegen.builder.build_and(fcr, mask, "c_cond_mask");
+            codegen.write_fpu_register(register::Fpu::F31, fcr_with_cmp);
         }
 
         _ => {
