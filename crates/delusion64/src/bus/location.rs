@@ -89,6 +89,14 @@ impl BusSection {
     }
 
     pub const fn safe_to_stub(&self) -> bool {
-        true
+        matches!(
+            self,
+            BusSection::RdramInterface
+                | BusSection::RdramRegisters
+                | BusSection::RdramRegistersWriteOnly
+                | BusSection::RspRegisters
+                | BusSection::SerialInterface
+                | BusSection::AudioInterface
+        )
     }
 }

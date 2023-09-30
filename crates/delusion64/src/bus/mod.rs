@@ -107,8 +107,8 @@ pub enum BusError {
     /// The offset is out of bounds for the given region.
     /// This is an internal error which can only occur if the `MemorySection` was improperly created.
     OffsetOutOfBounds(Address<BusSection>),
-    /// The memory region is not yet implemented, and cannot be stubbed.
-    Unimplemented(BusSection),
+    /// The memory section is not yet implemented, and cannot be stubbed.
+    UnimplementedSection(BusSection),
 }
 
 impl BusInterface for Bus {
@@ -196,7 +196,7 @@ impl BusInterface for Bus {
                     eprintln!("STUB: memory read at {address:#x?}");
                     Int::default()
                 })
-                .ok_or(BusError::Unimplemented(*section))?),
+                .ok_or(BusError::UnimplementedSection(*section))?),
         };
         Ok(value?.into())
     }
@@ -253,7 +253,7 @@ impl BusInterface for Bus {
             section => section
                 .safe_to_stub()
                 .then(|| eprintln!("STUB: memory write of {value:#x?} at {address:#x?}"))
-                .ok_or(BusError::Unimplemented(*section))?,
+                .ok_or(BusError::UnimplementedSection(*section))?,
         };
         Ok(result)
     }
