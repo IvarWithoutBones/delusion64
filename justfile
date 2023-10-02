@@ -5,7 +5,7 @@ alias swap := endian-swap
 
 # Ensures the terminal is in a sane state upon exit (it might not be when GDB crashes).
 gdb:
-    gdb --quiet || stty -onlcr
+    gdb || stty -sane
 
 # Show a disassembly of a MIPS ELF file.
 disassemble elf *args:
