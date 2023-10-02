@@ -91,7 +91,8 @@ impl BusSection {
     pub const fn safe_to_stub(&self) -> bool {
         matches!(
             self,
-            BusSection::RdramInterface
+            BusSection::CartridgeRom // https://n64brew.dev/wiki/Peripheral_Interface#Open_bus_behavior
+                | BusSection::RdramInterface
                 | BusSection::RdramRegisters
                 | BusSection::RdramRegistersWriteOnly
                 | BusSection::RspRegisters

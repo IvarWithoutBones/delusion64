@@ -182,7 +182,11 @@ impl BusInterface for Bus {
                     .map_err(BusError::PeripheralInterfaceError)?,
             ),
 
-            BusSection::CartridgeRom => Int::from_slice(&self.cartridge_rom[address.offset..]),
+            BusSection::CartridgeRom => Int::from_slice(
+                self.cartridge_rom
+                    .get(address.offset..)
+                    .unwrap_or(&[0_u8; SIZE]),
+            ),
 
             section @ BusSection::RdramRegistersWriteOnly => {
                 Err(BusError::WriteOnlyRegionRead(*section))?
@@ -242,7 +246,7 @@ impl BusInterface for Bus {
                 }
             }
 
-            BusSection::DiskDriveIpl4Rom | BusSection::CartridgeRom | BusSection::PifRom => {
+            BusSection::DiskDriveIpl4Rom | BusSection::PifRom => {
                 Err(BusError::ReadOnlyRegionWrite(*address.section))?
             }
 

@@ -19,11 +19,6 @@ fn jump_address(delay_slot_pc: u64, target: u32) -> u64 {
     shifted_target | masked_delay_slot
 }
 
-fn set_return_address(codegen: &CodeGen, return_address: u64) {
-    let return_address = codegen.context.i64_type().const_int(return_address, false);
-    codegen.write_general_register(register::GeneralPurpose::Ra, return_address);
-}
-
 pub fn compile_instruction_with_delay_slot(
     codegen: &CodeGen,
     pc: u64,
@@ -89,7 +84,8 @@ fn compile_unconditional_branch(codegen: &CodeGen, instr: &ParsedInstruction, de
 
         Mnenomic::Jal => {
             // Jump to target address, stores return address in r31 (ra)
-            set_return_address(codegen, delay_slot_pc + INSTRUCTION_SIZE as u64);
+            let return_address = i64_type.const_int(delay_slot_pc + INSTRUCTION_SIZE as u64, false);
+            codegen.write_register(register::GeneralPurpose::Ra, return_address);
             let addr = jump_address(delay_slot_pc, instr.immediate());
             codegen.build_constant_jump(addr);
         }
@@ -143,7 +139,8 @@ fn evaluate_conditional_branch<'ctx>(
 
         Mnenomic::Bgezal | Mnenomic::Bgezall => {
             // If rs is greater than or equal to zero, branch to address. Unconditionally stores return address to r31 (ra).
-            set_return_address(codegen, delay_slot_pc + INSTRUCTION_SIZE as u64);
+            let return_address = i64_type.const_int(delay_slot_pc + INSTRUCTION_SIZE as u64, false);
+            codegen.write_register(register::GeneralPurpose::Ra, return_address);
             let source = codegen.read_general_register(i64_type, instr.rs());
             (IntPredicate::SGE, source, i64_type.const_zero())
         }
@@ -156,7 +153,8 @@ fn evaluate_conditional_branch<'ctx>(
 
         Mnenomic::Bltzal | Mnenomic::Bltzall => {
             // If rs is less than zero, branch to address. Unconditionally stores return address to r31 (ra).
-            set_return_address(codegen, delay_slot_pc + INSTRUCTION_SIZE as u64);
+            let return_address = i64_type.const_int(delay_slot_pc + INSTRUCTION_SIZE as u64, false);
+            codegen.write_register(register::GeneralPurpose::Ra, return_address);
             let source = codegen.read_general_register(i64_type, instr.rs());
             (IntPredicate::SLT, source, i64_type.const_zero())
         }

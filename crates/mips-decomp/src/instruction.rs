@@ -79,8 +79,6 @@ pub enum Mnenomic {
     J,
     Jal,
     Jalr,
-    #[strum(serialize = "jalr")]
-    JalrR31,
     Jr,
     Lb,
     Lbu,
@@ -284,7 +282,6 @@ impl Mnenomic {
                 | Mnenomic::J
                 | Mnenomic::Jal
                 | Mnenomic::Jalr
-                | Mnenomic::JalrR31
                 | Mnenomic::Jr
                 | Mnenomic::Syscall
                 | Mnenomic::Teq
@@ -786,7 +783,6 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(J,       "0000 10kk kkkk kkkk kkkk kkkk kkkk kkkk", (Immediate)),
     instr!(Jal,     "0000 11kk kkkk kkkk kkkk kkkk kkkk kkkk", (Immediate)),
     instr!(Jalr,    "0000 00ss sss0 0000 dddd d000 0000 1001", (Destination)(Source)),
-    instr!(JalrR31, "0000 00ss sss0 0000 1111 1000 0000 1001", (Source)),
     instr!(Jr,      "0000 00ss sss0 0000 0000 0000 0000 1000", (Source)),
     instr!(Lb,      "1000 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Lbu,     "1001 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
@@ -824,7 +820,7 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Sc,      "1110 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Scd,     "1111 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Sd,      "1111 11bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
-    instr!(Sdc1,    "1111 01bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Sdc1,    "1111 01bb bbbT TTTT ffff ffff ffff ffff", (FloatTarget)(Offset, Signed16)(Base)),
     instr!(Sdl,     "1011 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Sdr,     "1011 01bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Sh,      "1010 01bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
