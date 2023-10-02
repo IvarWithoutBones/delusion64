@@ -19,14 +19,16 @@ fn boxed_array<T: Default + Clone, const LEN: usize>() -> Box<[T; LEN]> {
 }
 
 pub struct Bus {
-    pub rdram: Box<[u8; BusSection::RdramMemory.len()]>,
-    pub rsp_dmem: Box<[u8; BusSection::RspDMemory.len()]>,
-    pub rsp_imem: Box<[u8; BusSection::RspIMemory.len()]>,
-    pub pif_ram: Box<[u8; BusSection::PifRam.len()]>,
-    pub cartridge_rom: Box<[u8]>,
-    pub pi: PeripheralInterface,
-    pub mi: MipsInterface,
-    pub vi: VideoInterface,
+    rdram: Box<[u8; BusSection::RdramMemory.len()]>,
+    rsp_dmem: Box<[u8; BusSection::RspDMemory.len()]>,
+    rsp_imem: Box<[u8; BusSection::RspIMemory.len()]>,
+    pif_ram: Box<[u8; BusSection::PifRam.len()]>,
+    cartridge_rom: Box<[u8]>,
+    pi: PeripheralInterface,
+    mi: MipsInterface,
+    vi: VideoInterface,
+    // Buffer to view the result of unit tests from n64_systemtest. See https://github.com/lemmy-64/n64-systemtest#isviewer.
+    n64_systemtest_isviewer_buffer: Box<[u8; 0x200]>,
 }
 
 impl Bus {
@@ -47,6 +49,7 @@ impl Bus {
             pi: PeripheralInterface::new(cartridge.header.pi_bsd_domain_1_flags),
             mi: MipsInterface::new(),
             vi: VideoInterface::new(),
+            n64_systemtest_isviewer_buffer: boxed_array(),
         }
     }
 
@@ -197,7 +200,10 @@ impl BusInterface for Bus {
             section => Ok(section
                 .safe_to_stub()
                 .then(|| {
-                    eprintln!("STUB: memory read at {address:#x?}");
+                    eprintln!(
+                        "STUB: memory read at {:#x} = {address:#x?}",
+                        address.physical_address()
+                    );
                     Int::default()
                 })
                 .ok_or(BusError::UnimplementedSection(*section))?),
@@ -211,6 +217,28 @@ impl BusInterface for Bus {
         value: Int<SIZE>,
     ) -> BusResult<(), Self::Error> {
         let mut result = BusValue::default();
+
+        {
+            // n64-systemtest isviewer output support
+            const ISVIEWER_RANGE: std::ops::RangeInclusive<u32> = 0x13FF0020..=0x13FF0220;
+            const ISVIEWER_WRITE: u32 = 0x13FF0014;
+            let paddr = address.physical_address();
+            if ISVIEWER_RANGE.contains(&paddr) || ISVIEWER_RANGE.contains(&(paddr + SIZE as u32)) {
+                // Write to buffer
+                let offset = (paddr - ISVIEWER_RANGE.start()) as usize;
+                self.n64_systemtest_isviewer_buffer[offset..offset + SIZE]
+                    .copy_from_slice(value.as_slice());
+                return Ok(result);
+            } else if paddr == ISVIEWER_WRITE {
+                // Print the buffer out
+                let len: u32 = value.try_into()?;
+                let str = std::str::from_utf8(&self.n64_systemtest_isviewer_buffer[..len as usize])
+                    .unwrap();
+                println!("n64-systemtest: {str}");
+                return Ok(result);
+            }
+        }
+
         let range = address.offset..address.offset + SIZE;
         match address.section {
             BusSection::RdramMemory => self.rdram[range].copy_from_slice(value.as_slice()),
@@ -256,7 +284,12 @@ impl BusInterface for Bus {
 
             section => section
                 .safe_to_stub()
-                .then(|| eprintln!("STUB: memory write of {value:#x?} at {address:#x?}"))
+                .then(|| {
+                    eprintln!(
+                        "STUB: memory write of {value:#x?} at {:#x} = {address:#x?}",
+                        address.physical_address()
+                    )
+                })
                 .ok_or(BusError::UnimplementedSection(*section))?,
         };
         Ok(result)

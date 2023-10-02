@@ -206,7 +206,7 @@ macro_rules! format_int {
 
 format_int!(
     (fmt::Display, ""),
-    (fmt::Debug, "#"),
+    (fmt::Debug, "#x"),
     (fmt::LowerHex, "x"),
     (fmt::UpperHex, "X")
 );

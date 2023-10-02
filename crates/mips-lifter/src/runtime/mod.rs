@@ -261,11 +261,11 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
             let mut codegen = self.codegen.take().unwrap();
 
             if let Some(existing) = codegen.labels.iter().find(|l| l.label.start() == offset) {
-                println!("found existing block at {vaddr:#x} (offset={offset:#x})");
+                // println!("found existing block at {vaddr:#x} (offset={offset:#x})");
                 let name = existing.function.get_name().to_str().unwrap().to_string();
                 return (codegen, name);
             } else {
-                println!("generating new block at {vaddr:#x} (offset={offset:#x})");
+                // println!("generating new block at {vaddr:#x} (offset={offset:#x})");
             }
 
             let bin = {
@@ -317,10 +317,10 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
                         .iter()
                         .find(|l| l.label.start() == lab.label.end())
                     {
-                        println!(
-                            "  found fallthrough block at {:#x}",
-                            fallthrough.label.start(),
-                        );
+                        // println!(
+                        //     "  found fallthrough block at {:#x}",
+                        //     fallthrough.label.start(),
+                        // );
 
                         // See the comment in `label.rs` for more context.
                         if fallthrough.label.instructions.len() == 1 {
@@ -370,13 +370,13 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         }
 
         let pc_vaddr = self.registers[register::Special::Pc];
-        let pc_paddr = self.virtual_to_physical_address(pc_vaddr, AccessMode::Read);
+        // let pc_paddr = self.virtual_to_physical_address(pc_vaddr, AccessMode::Read);
 
-        let instr = ParsedInstruction::try_from(u32::from_be_bytes(
-            *self.read(pc_paddr).unwrap().as_slice(),
-        ))
-        .unwrap();
-        println!("{pc_vaddr:06x}: {instr}");
+        // let instr = ParsedInstruction::try_from(u32::from_be_bytes(
+        //     *self.read(pc_paddr).unwrap().as_slice(),
+        // ))
+        // .unwrap();
+        // println!("{pc_vaddr:06x}: {instr}");
 
         self.bus
             .tick()
@@ -389,7 +389,6 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         if self.debugger.is_some() {
             self.update_debugger();
             self.debugger.as_mut().unwrap().on_instruction(pc_vaddr);
-            self.update_debugger();
             while self.debugger.as_ref().unwrap().is_paused() {
                 // Block until the debugger tells us to continue
                 self.update_debugger();
