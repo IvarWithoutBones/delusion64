@@ -925,6 +925,94 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             codegen.write_general_register(instr.rt(), result);
         }
 
+        Mnenomic::Ldl => {
+            // Loads a portion of a doubleword beginning at memory address (base + offset), stores 1-8 bytes in high-order portion of rt.
+            let address = codegen.base_plus_offset(instr, "ldl_addr");
+
+            let shift = {
+                let zero = i64_type.const_zero();
+                let seven = i64_type.const_int(7, false);
+                let eight = i64_type.const_int(8, false);
+                let xored = codegen.builder.build_xor(address, zero, "ldl_shift_xor");
+                let anded = codegen.builder.build_and(xored, seven, "ldl_shift_and");
+                codegen.builder.build_int_mul(eight, anded, "ldl_shift_mul")
+            };
+
+            let data = {
+                let data = {
+                    let addr = codegen.builder.build_and(
+                        address,
+                        i64_type.const_int(!7, false),
+                        "ldl_addr_masked",
+                    );
+                    codegen.read_memory(i64_type, addr)
+                };
+                codegen
+                    .builder
+                    .build_left_shift(data, shift, "ldl_data_shifted")
+            };
+
+            let old_target = {
+                let mask = {
+                    let mask = codegen.builder.build_left_shift(
+                        i64_type.const_all_ones(),
+                        shift,
+                        "ldl_rt_mask",
+                    );
+                    codegen.builder.build_not(mask, "ldl_rt_mask_not")
+                };
+                let target = codegen.read_general_register(i64_type, instr.rt());
+                codegen.builder.build_and(target, mask, "ldl_rt_masked")
+            };
+
+            let result = codegen.builder.build_or(old_target, data, "ldl_result");
+            codegen.write_general_register(instr.rt(), result);
+        }
+
+        Mnenomic::Ldr => {
+            // Loads a portion of a doubleword beginning at memory address (base + offset), stores 1-8 bytes in low-order portion of rt.
+            let address = codegen.base_plus_offset(instr, "ldr_addr");
+
+            let shift = {
+                let seven = i64_type.const_int(7, false);
+                let eight = i64_type.const_int(8, false);
+                let xored = codegen.builder.build_xor(address, seven, "ldr_shift_xor");
+                let anded = codegen.builder.build_and(xored, seven, "ldr_shift_and");
+                codegen.builder.build_int_mul(eight, anded, "ldr_shift_mul")
+            };
+
+            let data = {
+                let data = {
+                    let addr = codegen.builder.build_and(
+                        address,
+                        i64_type.const_int(!7, false),
+                        "ldr_addr_masked",
+                    );
+                    codegen.read_memory(i64_type, addr)
+                };
+                codegen
+                    .builder
+                    .build_right_shift(data, shift, false, "ldr_data_shifted")
+            };
+
+            let old_target = {
+                let mask = {
+                    let mask = codegen.builder.build_right_shift(
+                        i64_type.const_all_ones(),
+                        shift,
+                        false,
+                        "ldr_rt_mask",
+                    );
+                    codegen.builder.build_not(mask, "ldr_rt_mask_not")
+                };
+                let target = codegen.read_general_register(i64_type, instr.rt());
+                codegen.builder.build_and(target, mask, "ldr_rt_masked")
+            };
+
+            let result = codegen.builder.build_or(old_target, data, "ldr_result");
+            codegen.write_general_register(instr.rt(), result);
+        }
+
         Mnenomic::Sw => {
             // Stores word from rt, to memory address (base + offset)
             let target = codegen.read_general_register(i32_type, instr.rt());
