@@ -60,7 +60,8 @@ fn main() {
         (register::Cp0::Random.into(), 0x0000_001F),
         (register::Cp0::Status.into(), 0x3400_0000),
         (register::Cp0::PRId.into(), 0x0000_0B00),
-        (register::Cp0::Config.into(), 0x0006_E463),
+        (register::Cp0::Config.into(), 0x7006_E463),
+        (register::Fpu::F31.into(), 0x0100_0800),
         (register::Special::Pc.into(), 0x0000_0000_A400_0040),
     ];
 

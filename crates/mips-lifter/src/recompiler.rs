@@ -197,6 +197,8 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
     let f64_type = codegen.context.f64_type();
 
     match mnemonic {
+        Mnenomic::Lwl => {}
+
         Mnenomic::Sync => {
             // Executed as NOP on the VR4300
         }
@@ -305,13 +307,14 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
         Mnenomic::Mfc0 => {
             // Copy contents of CP0 register rd, to GPR rt
             let destination = codegen.read_cp0_register(i32_type, instr.rd());
-            codegen.write_general_register(instr.rt(), destination);
+            codegen
+                .write_general_register(instr.rt(), codegen.sign_extend_to(i64_type, destination));
         }
 
         Mnenomic::Mfc1 => {
             // Copy contents of CP1 register fs, to GPR rt
             let source = codegen.read_fpu_register(i32_type, instr.fs());
-            codegen.write_general_register(instr.rt(), source);
+            codegen.write_general_register(instr.rt(), codegen.sign_extend_to(i64_type, source));
         }
 
         Mnenomic::Dmtc0 => {
@@ -437,56 +440,70 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
 
         Mnenomic::Div => {
             // Divide signed rs by signed rt, store quotient in register LO and remainder in HI
-            let source = codegen.read_general_register(i32_type, instr.rs());
-            let target = codegen.read_general_register(i32_type, instr.rt());
-
-            let quotient = codegen.sign_extend_to(
+            let source = codegen.sign_extend_to(
                 i64_type,
-                codegen
-                    .builder
-                    .build_int_signed_div(source, target, "divu_quot"),
+                codegen.read_general_register(i32_type, instr.rs()),
             );
-            let remainder = codegen.sign_extend_to(
+            let target = codegen.sign_extend_to(
                 i64_type,
-                codegen
-                    .builder
-                    .build_int_signed_rem(source, target, "divu_rem"),
+                codegen.read_general_register(i32_type, instr.rt()),
             );
 
-            codegen.write_register(register::Special::Lo, quotient);
-            codegen.write_register(register::Special::Hi, remainder);
-        }
+            let is_zero = codegen.builder.build_int_compare(
+                IntPredicate::EQ,
+                target,
+                i32_type.const_zero(),
+                "div_divisor_is_zero",
+            );
 
-        Mnenomic::Ddiv => {
-            // Divide signed rs by signed rt, store quotient in register LO and remainder in HI
-            let source = codegen.read_general_register(i64_type, instr.rs());
-            let target = codegen.read_general_register(i64_type, instr.rt());
+            codegen.build_if_else(
+                "div_zero_divisor",
+                is_zero,
+                || {
+                    codegen.write_register(register::Special::Hi, source);
 
-            let quotient = codegen
-                .builder
-                .build_int_signed_div(source, target, "ddiv_quot");
-            let remainder = codegen
-                .builder
-                .build_int_signed_rem(source, target, "ddiv_rem");
+                    let dividend_positive = codegen.builder.build_int_compare(
+                        IntPredicate::SGE,
+                        source,
+                        i32_type.const_zero(),
+                        "div_dividend_positive",
+                    );
 
-            codegen.write_register(register::Special::Lo, quotient);
-            codegen.write_register(register::Special::Hi, remainder);
-        }
+                    codegen.build_if_else(
+                        "div_dividend_positive",
+                        dividend_positive,
+                        || codegen.write_register(register::Special::Lo, i64_type.const_all_ones()),
+                        || {
+                            codegen
+                                .write_register(register::Special::Lo, i64_type.const_int(1, false))
+                        },
+                    );
+                },
+                || {
+                    let quotient = codegen.sign_extend_to(
+                        i64_type,
+                        codegen.truncate_to(
+                            i32_type,
+                            codegen
+                                .builder
+                                .build_int_signed_div(source, target, "div_quotient"),
+                        ),
+                    );
 
-        Mnenomic::Ddivu => {
-            // Divide unsigned rs by unsigned rt, store quotient in register LO and remainder in HI
-            let source = codegen.read_general_register(i64_type, instr.rs());
-            let target = codegen.read_general_register(i64_type, instr.rt());
+                    let remainder = codegen.sign_extend_to(
+                        i64_type,
+                        codegen.truncate_to(
+                            i32_type,
+                            codegen
+                                .builder
+                                .build_int_signed_rem(source, target, "div_remainder"),
+                        ),
+                    );
 
-            let quotient = codegen
-                .builder
-                .build_int_unsigned_div(source, target, "ddivu_quot");
-            let remainder = codegen
-                .builder
-                .build_int_unsigned_rem(source, target, "ddivu_rem");
-
-            codegen.write_register(register::Special::Lo, quotient);
-            codegen.write_register(register::Special::Hi, remainder);
+                    codegen.write_register(register::Special::Lo, quotient);
+                    codegen.write_register(register::Special::Hi, remainder);
+                },
+            );
         }
 
         Mnenomic::Divu => {
@@ -494,15 +511,153 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             let source = codegen.read_general_register(i32_type, instr.rs());
             let target = codegen.read_general_register(i32_type, instr.rt());
 
-            let quotient = codegen
-                .builder
-                .build_int_unsigned_div(source, target, "divu_quot");
-            let remainder = codegen
-                .builder
-                .build_int_unsigned_rem(source, target, "divu_rem");
+            let is_zero = codegen.builder.build_int_compare(
+                IntPredicate::EQ,
+                target,
+                i32_type.const_zero(),
+                "divu_divisor_is_zero",
+            );
 
-            codegen.write_register(register::Special::Lo, quotient);
-            codegen.write_register(register::Special::Hi, remainder);
+            codegen.build_if_else(
+                "divu_zero_divisor",
+                is_zero,
+                || {
+                    codegen.write_register(register::Special::Lo, i64_type.const_all_ones());
+                    codegen.write_register(
+                        register::Special::Hi,
+                        codegen.sign_extend_to(i64_type, source),
+                    );
+                },
+                || {
+                    let quotient = codegen.sign_extend_to(
+                        i64_type,
+                        codegen.truncate_to(
+                            i32_type,
+                            codegen
+                                .builder
+                                .build_int_signed_div(source, target, "divu_quotient"),
+                        ),
+                    );
+
+                    let remainder = codegen.sign_extend_to(
+                        i64_type,
+                        codegen.truncate_to(
+                            i32_type,
+                            codegen
+                                .builder
+                                .build_int_signed_rem(source, target, "divu_remainder"),
+                        ),
+                    );
+
+                    codegen.write_register(register::Special::Lo, quotient);
+                    codegen.write_register(register::Special::Hi, remainder);
+                },
+            );
+        }
+
+        Mnenomic::Ddiv => {
+            // Divide signed rs by signed rt, store quotient in register LO and remainder in HI
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            let target = codegen.read_general_register(i64_type, instr.rt());
+
+            let is_zero = codegen.builder.build_int_compare(
+                IntPredicate::EQ,
+                target,
+                i64_type.const_zero(),
+                "ddiv_divisor_is_zero",
+            );
+
+            codegen.build_if_else(
+                "ddiv_valid_divisor",
+                is_zero,
+                || {
+                    codegen.write_register(register::Special::Hi, source);
+
+                    let dividend_positive = codegen.builder.build_int_compare(
+                        IntPredicate::SGE,
+                        source,
+                        i64_type.const_zero(),
+                        "ddiv_dividend_positive",
+                    );
+
+                    codegen.build_if_else(
+                        "ddiv_dividend_positive",
+                        dividend_positive,
+                        || codegen.write_register(register::Special::Lo, i64_type.const_all_ones()),
+                        || {
+                            codegen
+                                .write_register(register::Special::Lo, i64_type.const_int(1, false))
+                        },
+                    );
+                },
+                || {
+                    let is_min_int = codegen.builder.build_int_compare(
+                        IntPredicate::EQ,
+                        source,
+                        i64_type.const_int(i64::MIN as u64, false),
+                        "ddiv_dividend_is_min_int",
+                    );
+
+                    codegen.build_if_else(
+                        "ddiv_dividend_min_int",
+                        is_min_int,
+                        || {
+                            codegen.write_register(register::Special::Hi, i64_type.const_zero());
+                            codegen.write_register(register::Special::Lo, source);
+                        },
+                        || {
+                            let quotient = codegen.builder.build_int_signed_div(
+                                source,
+                                target,
+                                "ddiv_quotient",
+                            );
+                            let remainder = codegen.builder.build_int_signed_rem(
+                                source,
+                                target,
+                                "ddiv_remainder",
+                            );
+
+                            codegen.write_register(register::Special::Lo, quotient);
+                            codegen.write_register(register::Special::Hi, remainder);
+                        },
+                    );
+                },
+            );
+        }
+
+        Mnenomic::Ddivu => {
+            // Divide unsigned rs by unsigned rt, store quotient in register LO and remainder in HI
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            let target = codegen.read_general_register(i64_type, instr.rt());
+
+            let is_zero = codegen.builder.build_int_compare(
+                IntPredicate::EQ,
+                target,
+                i64_type.const_zero(),
+                "ddiv_divisor_is_zero",
+            );
+
+            codegen.build_if_else(
+                "ddivu_zero_divisor",
+                is_zero,
+                || {
+                    codegen.write_register(register::Special::Hi, source);
+                    codegen.write_register(register::Special::Lo, i64_type.const_all_ones());
+                },
+                || {
+                    let quotient =
+                        codegen
+                            .builder
+                            .build_int_unsigned_div(source, target, "ddivu_quotient");
+                    let remainder =
+                        codegen
+                            .builder
+                            .build_int_unsigned_rem(source, target, "ddivu_remainder");
+
+                    codegen.write_register(register::Special::Lo, quotient);
+                    codegen.write_register(register::Special::Hi, remainder);
+                },
+            );
         }
 
         Mnenomic::Or => {
@@ -578,20 +733,20 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
         Mnenomic::Dsrl => {
             // Shift rt right by sa bits, store sign-extended result in rd
             let target = codegen.read_general_register(i64_type, instr.rt());
-            let shift = i64_type.const_int(instr.sa() as _, false);
+            let shift = i64_type.const_int(instr.sa() as u64, false);
             let result = codegen
                 .builder
-                .build_right_shift(target, shift, true, "dsrl32_shift");
+                .build_right_shift(target, shift, false, "dsrl_shift");
             codegen.write_general_register(instr.rd(), result);
         }
 
         Mnenomic::Dsrl32 => {
             // Shift rt right by (32 + sa) bits, store sign-extended result in rd
             let target = codegen.read_general_register(i64_type, instr.rt());
-            let shift = i64_type.const_int((instr.sa() + 32) as _, false);
+            let shift = i64_type.const_int((instr.sa() + 32) as u64, false);
             let result = codegen
                 .builder
-                .build_right_shift(target, shift, true, "dsrl32_shift");
+                .build_right_shift(target, shift, false, "dsrl32_shift");
             codegen.write_general_register(instr.rd(), result);
         }
 
@@ -606,7 +761,7 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
 
             let result = codegen
                 .builder
-                .build_right_shift(target, source, true, "dsrlv_shift");
+                .build_right_shift(target, source, false, "dsrlv_shift");
             codegen.write_general_register(instr.rd(), result);
         }
 
@@ -1303,8 +1458,8 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
         Mnenomic::Slti => {
             // If signed rs is less than sign-extended 16-bit immediate, store one in rd, otherwise store zero
             let imm =
-                codegen.sign_extend_to(i32_type, i16_type.const_int(instr.immediate() as _, true));
-            let source = codegen.read_general_register(i32_type, instr.rs());
+                codegen.sign_extend_to(i64_type, i16_type.const_int(instr.immediate() as _, true));
+            let source = codegen.read_general_register(i64_type, instr.rs());
             let cmp = codegen.zero_extend_to(
                 i64_type,
                 codegen
@@ -1350,20 +1505,15 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             let source = codegen.read_general_register(i32_type, instr.rs());
             let target = codegen.read_general_register(i32_type, instr.rt());
             let result = codegen.builder.build_int_sub(source, target, "sub_res");
-            codegen.write_general_register(instr.rd(), result);
+            codegen.write_general_register(instr.rd(), codegen.sign_extend_to(i64_type, result));
         }
 
         Mnenomic::Subu => {
             // Subtract rt from rs, store result in rd
             let source = codegen.read_general_register(i32_type, instr.rs());
             let target = codegen.read_general_register(i32_type, instr.rt());
-
-            let result = codegen.sign_extend_to(
-                i64_type,
-                codegen.builder.build_int_sub(source, target, "subu_res"),
-            );
-
-            codegen.write_general_register(instr.rd(), result);
+            let result = codegen.builder.build_int_sub(source, target, "subu_res");
+            codegen.write_general_register(instr.rd(), codegen.sign_extend_to(i64_type, result));
         }
 
         Mnenomic::Dsub => {

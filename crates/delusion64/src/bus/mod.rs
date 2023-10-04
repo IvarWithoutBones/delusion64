@@ -232,9 +232,10 @@ impl BusInterface for Bus {
             } else if paddr == ISVIEWER_WRITE {
                 // Print the buffer out
                 let len: u32 = value.try_into()?;
-                let str = std::str::from_utf8(&self.n64_systemtest_isviewer_buffer[..len as usize])
-                    .unwrap();
-                println!("n64-systemtest: {str}");
+                let str =
+                    String::from_utf8_lossy(&self.n64_systemtest_isviewer_buffer[..len as usize]);
+                print!("{str}");
+                self.n64_systemtest_isviewer_buffer.fill(0);
                 return Ok(result);
             }
         }
