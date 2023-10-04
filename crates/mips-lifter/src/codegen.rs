@@ -624,7 +624,7 @@ impl<'ctx> CodeGen<'ctx> {
             16 => RuntimeFunction::ReadI16,
             32 => RuntimeFunction::ReadI32,
             64 => RuntimeFunction::ReadI64,
-            _ => panic!("unimplemented load_memory type: {ty}"),
+            _ => panic!("unimplemented read_memory type: {ty}"),
         };
 
         env_call!(self, func, [address])
@@ -641,9 +641,50 @@ impl<'ctx> CodeGen<'ctx> {
             16 => RuntimeFunction::WriteI16,
             32 => RuntimeFunction::WriteI32,
             64 => RuntimeFunction::WriteI64,
-            _ => panic!("unimplemented store_memory type: {ty}"),
+            _ => panic!("unimplemented write_memory type: {ty}"),
         };
 
         env_call!(self, func, [address, value]);
+    }
+
+    pub fn read_physical_memory(
+        &self,
+        ty: IntType<'ctx>,
+        address: IntValue<'ctx>,
+    ) -> IntValue<'ctx> {
+        let func = match ty.get_bit_width() {
+            8 => RuntimeFunction::ReadPhysicalI8,
+            16 => RuntimeFunction::ReadPhysicalI16,
+            32 => RuntimeFunction::ReadPhysicalI32,
+            64 => RuntimeFunction::ReadPhysicalI64,
+            _ => panic!("unimplemented read_physical_memory type: {ty}"),
+        };
+
+        env_call!(self, func, [address])
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_int_value()
+    }
+
+    pub fn write_physical_memory(&self, address: IntValue<'ctx>, value: IntValue<'ctx>) {
+        let ty = value.get_type();
+        let func = match ty.get_bit_width() {
+            8 => RuntimeFunction::WritePhysicalI8,
+            16 => RuntimeFunction::WritePhysicalI16,
+            32 => RuntimeFunction::WritePhysicalI32,
+            64 => RuntimeFunction::WritePhysicalI64,
+            _ => panic!("unimplemented write_physical_memory type: {ty}"),
+        };
+
+        env_call!(self, func, [address, value]);
+    }
+
+    pub fn get_physical_address(&self, vaddr: IntValue<'ctx>) -> IntValue<'ctx> {
+        env_call!(self, RuntimeFunction::GetPhysicalAddress, [vaddr])
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_int_value()
     }
 }

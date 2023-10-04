@@ -568,7 +568,7 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
         Mnenomic::Dsll32 => {
             // Shift rt left by (32 + sa) bits, store result in rd
             let target = codegen.read_general_register(i64_type, instr.rt());
-            let shift = i64_type.const_int((instr.sa() + 32) as _, false);
+            let shift = i64_type.const_int((instr.sa() + 32) as u64, false);
             let result = codegen
                 .builder
                 .build_left_shift(target, shift, "dsll32_shift");
@@ -832,95 +832,97 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
 
         Mnenomic::Sdl => {
             // Loads a portion of rt, stores 1-8 bytes in high-order portion of memory address (base + offset)
-            let address = codegen.base_plus_offset(instr, "sdl_addr");
-            let data = {
-                let addr = codegen.builder.build_and(
-                    address,
-                    i64_type.const_int(!7, false),
-                    "sdl_data_and",
-                );
-                codegen.read_memory(i64_type, addr)
+            let vaddr = codegen.base_plus_offset(instr, "sdl_addr");
+            let paddr = {
+                let paddr = codegen.get_physical_address(vaddr);
+                codegen.builder.build_and(
+                    paddr,
+                    i32_type.const_int(7, false).const_not(),
+                    "sdl_paddr_masked",
+                )
             };
 
             let shift = {
                 let zero = i64_type.const_zero();
                 let seven = i64_type.const_int(7, false);
                 let eight = i64_type.const_int(8, false);
-
-                let xor = codegen.builder.build_xor(address, zero, "sdl_shift_xor");
+                let xor = codegen.builder.build_xor(vaddr, zero, "sdl_shift_xor");
                 let and = codegen.builder.build_and(xor, seven, "sdl_shift_and");
                 codegen.builder.build_int_mul(eight, and, "sdl_shift_mul")
             };
 
-            let old_register = {
-                let reg = codegen.zero_extend_to(
-                    i64_type,
-                    codegen.read_general_register(i32_type, instr.rt()),
-                );
-                codegen
-                    .builder
-                    .build_right_shift(reg, shift, false, "sdl_reg_shift")
-            };
-
-            let mask = {
-                let max = i64_type.const_all_ones();
-                let mask = codegen
-                    .builder
-                    .build_right_shift(max, shift, false, "sdl_mask");
-                codegen.builder.build_not(mask, "sdl_mask_not")
-            };
-
             let result = {
-                let and = codegen.builder.build_and(data, mask, "sdl_result_and");
-                codegen.builder.build_or(and, old_register, "sdl_result_or")
+                let data = {
+                    let mask = {
+                        let raw = codegen.builder.build_right_shift(
+                            i64_type.const_all_ones(),
+                            shift,
+                            false,
+                            "sdl_data_mask_shift",
+                        );
+                        codegen.builder.build_not(raw, "sdl_data_mask_not")
+                    };
+                    let data = codegen.read_physical_memory(i64_type, paddr);
+                    codegen.builder.build_and(data, mask, "sdl_data_and")
+                };
+
+                let target = {
+                    let rt = codegen.read_general_register(i64_type, instr.rt());
+                    codegen
+                        .builder
+                        .build_right_shift(rt, shift, false, "sdl_rt_shift")
+                };
+
+                codegen.builder.build_or(data, target, "sdl_result_or")
             };
 
-            codegen.write_general_register(instr.rt(), result);
+            codegen.write_physical_memory(paddr, result);
         }
 
         Mnenomic::Sdr => {
             // Loads a portion of rt, stores 1-8 bytes in low-order portion of memory address (base + offset)
-            let address = codegen.base_plus_offset(instr, "sdr_addr");
-            let data = {
-                let addr = codegen.builder.build_and(
-                    address,
-                    i64_type.const_int(!7, false),
-                    "sdr_data_and",
-                );
-                codegen.read_memory(i64_type, addr)
+            let vaddr = codegen.base_plus_offset(instr, "sdr_addr");
+            let paddr = {
+                let paddr = codegen.get_physical_address(vaddr);
+                codegen.builder.build_and(
+                    paddr,
+                    i32_type.const_int(7, false).const_not(),
+                    "sdr_paddr_masked",
+                )
             };
 
             let shift = {
                 let seven = i64_type.const_int(7, false);
                 let eight = i64_type.const_int(8, false);
-
-                let xor = codegen.builder.build_xor(address, seven, "sdr_shift_xor");
+                let xor = codegen.builder.build_xor(vaddr, seven, "sdr_shift_xor");
                 let and = codegen.builder.build_and(xor, seven, "sdr_shift_and");
                 codegen.builder.build_int_mul(eight, and, "sdr_shift_mul")
             };
 
-            let old_register = {
-                let reg = codegen.zero_extend_to(
-                    i64_type,
-                    codegen.read_general_register(i32_type, instr.rt()),
-                );
-                codegen
-                    .builder
-                    .build_left_shift(reg, shift, "sdr_reg_shift")
-            };
-
-            let mask = {
-                let max = i64_type.const_all_ones();
-                let mask = codegen.builder.build_left_shift(max, shift, "sdr_mask");
-                codegen.builder.build_not(mask, "sdr_mask_not")
-            };
-
             let result = {
-                let and = codegen.builder.build_and(data, mask, "sdr_result_and");
-                codegen.builder.build_or(and, old_register, "sdr_result_or")
+                let data = {
+                    let mask = {
+                        let raw = codegen.builder.build_left_shift(
+                            i64_type.const_all_ones(),
+                            shift,
+                            "sdr_data_mask_shift",
+                        );
+                        codegen.builder.build_not(raw, "sdr_data_mask_not")
+                    };
+
+                    let data = codegen.read_physical_memory(i64_type, paddr);
+                    codegen.builder.build_and(data, mask, "sdr_data_and")
+                };
+
+                let target = {
+                    let rt = codegen.read_general_register(i64_type, instr.rt());
+                    codegen.builder.build_left_shift(rt, shift, "sdr_rt_shift")
+                };
+
+                codegen.builder.build_or(data, target, "sdr_result_or")
             };
 
-            codegen.write_general_register(instr.rt(), result);
+            codegen.write_physical_memory(paddr, result);
         }
 
         Mnenomic::Ldl => {
@@ -1009,6 +1011,104 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
 
             let result = codegen.builder.build_or(old_target, data, "ldr_result");
             codegen.write_general_register(instr.rt(), result);
+        }
+
+        Mnenomic::Swl => {
+            // Loads a portion of rt, stores 1-4 bytes in high-order portion of memory address (base + offset)
+            let address = codegen.base_plus_offset(instr, "swl_addr");
+
+            let shift = {
+                let zero = i64_type.const_zero();
+                let three = i64_type.const_int(3, false);
+                let eight = i32_type.const_int(8, false);
+                let xor = codegen.builder.build_xor(address, zero, "swl_shift_xor");
+                let and = codegen.truncate_to(
+                    i32_type,
+                    codegen.builder.build_and(xor, three, "swl_shift_and"),
+                );
+                codegen.builder.build_int_mul(eight, and, "swl_shift_mul")
+            };
+
+            let address_masked = codegen.builder.build_and(
+                address,
+                i64_type.const_int(!3, false),
+                "swl_addr_masked",
+            );
+
+            let result = {
+                let data = {
+                    let mask = {
+                        let mask = codegen.builder.build_right_shift(
+                            i32_type.const_all_ones(),
+                            shift,
+                            false,
+                            "swl_mask",
+                        );
+                        codegen.builder.build_not(mask, "swl_mask_not")
+                    };
+
+                    let data = codegen.read_memory(i32_type, address_masked);
+                    codegen.builder.build_and(data, mask, "swl_data_and")
+                };
+
+                let target = {
+                    let reg = codegen.read_general_register(i32_type, instr.rt());
+                    codegen
+                        .builder
+                        .build_right_shift(reg, shift, false, "swl_rt_shift")
+                };
+
+                codegen.builder.build_or(data, target, "swl_result_or")
+            };
+
+            codegen.write_memory(address_masked, result);
+        }
+
+        Mnenomic::Swr => {
+            // Loads a portion of rt, stores 1-4 bytes in low-order portion of memory address (base + offset)
+            let address = codegen.base_plus_offset(instr, "swr_addr");
+
+            let shift = {
+                let three = i64_type.const_int(3, false);
+                let eight = i32_type.const_int(8, false);
+                let xor = codegen.builder.build_xor(address, three, "swr_shift_xor");
+                let and = codegen.truncate_to(
+                    i32_type,
+                    codegen.builder.build_and(xor, three, "swr_shift_and"),
+                );
+                codegen.builder.build_int_mul(eight, and, "swr_shift_mul")
+            };
+
+            let address_masked = codegen.builder.build_and(
+                address,
+                i64_type.const_int(!3, false),
+                "swr_addr_masked",
+            );
+
+            let result = {
+                let data = {
+                    let mask = {
+                        let mask = codegen.builder.build_left_shift(
+                            i32_type.const_all_ones(),
+                            shift,
+                            "swr_mask",
+                        );
+                        codegen.builder.build_not(mask, "swr_mask_not")
+                    };
+
+                    let data = codegen.read_memory(i32_type, address_masked);
+                    codegen.builder.build_and(data, mask, "swr_data_and")
+                };
+
+                let target = {
+                    let reg = codegen.read_general_register(i32_type, instr.rt());
+                    codegen.builder.build_left_shift(reg, shift, "swr_rt_shift")
+                };
+
+                codegen.builder.build_or(data, target, "swr_result_or")
+            };
+
+            codegen.write_memory(address_masked, result);
         }
 
         Mnenomic::Sw => {

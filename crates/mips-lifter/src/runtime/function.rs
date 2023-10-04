@@ -12,6 +12,7 @@ pub enum RuntimeFunction {
     OnInstruction,
     GetFunctionPtr,
 
+    GetPhysicalAddress,
     ProbeTlbEntry,
     ReadTlbEntry,
     WriteTlbEntry,
@@ -24,6 +25,14 @@ pub enum RuntimeFunction {
     WriteI16,
     WriteI32,
     WriteI64,
+    ReadPhysicalI8,
+    ReadPhysicalI16,
+    ReadPhysicalI32,
+    ReadPhysicalI64,
+    WritePhysicalI8,
+    WritePhysicalI16,
+    WritePhysicalI32,
+    WritePhysicalI64,
 }
 
 impl RuntimeFunction {
@@ -62,6 +71,8 @@ impl RuntimeFunction {
             // `Environment::get_function_ptr(&mut self, vaddr: u64) -> u64
             Self::GetFunctionPtr => sig!(i64_type, [vaddr: i64_type]),
 
+            // `Environment::get_physical_address(&mut self, vaddr: u64) -> u32`
+            Self::GetPhysicalAddress => sig!(i32_type, [vaddr: i64_type]),
             // `Environment::probe_tlb_entry(&mut self, index: u64)`
             Self::ProbeTlbEntry => sig!(void_type, []),
             // `Environment::write_tlb_entry(&mut self, index: u64)`
@@ -85,11 +96,27 @@ impl RuntimeFunction {
             Self::WriteI32 => sig!(void_type, [vaddr: i64_type, value: i32_type]),
             // `Environment::write_u64(&mut self, vaddr: u64, value: u64)`
             Self::WriteI64 => sig!(void_type, [vaddr: i64_type, value: i64_type]),
+
+            // `Environment::read_physical_u8(&mut self, paddr: u32) -> u8`
+            Self::ReadPhysicalI8 => sig!(i8_type, [paddr: i32_type]),
+            // `Environment::read_physical_u16(&mut self, paddr: u32) -> u16`
+            Self::ReadPhysicalI16 => sig!(i16_type, [paddr: i32_type]),
+            // `Environment::read_physical_u32(&mut self, paddr: u32) -> u32`
+            Self::ReadPhysicalI32 => sig!(i32_type, [paddr: i32_type]),
+            // `Environment::read_physical_u64(&mut self, paddr: u32) -> u64`
+            Self::ReadPhysicalI64 => sig!(i64_type, [paddr: i32_type]),
+            // `Environment::write_physical_u8(&mut self, paddr: u32, value: u8)`
+            Self::WritePhysicalI8 => sig!(void_type, [paddr: i32_type, value: i8_type]),
+            // `Environment::write_physical_u16(&mut self, paddr: u32, value: u16)`
+            Self::WritePhysicalI16 => sig!(void_type, [paddr: i32_type, value: i16_type]),
+            // `Environment::write_physical_u32(&mut self, paddr: u32, value: u32)`
+            Self::WritePhysicalI32 => sig!(void_type, [paddr: i32_type, value: i32_type]),
+            // `Environment::write_physical_u64(&mut self, paddr: u32, value: u64)`
+            Self::WritePhysicalI64 => sig!(void_type, [paddr: i32_type, value: i64_type]),
         }
     }
 
     /// Maps the function into the given `ExecutionEngine`, at the given pointer.
-    #[inline]
     pub fn map_into<'ctx>(
         &self,
         context: &ContextRef<'ctx>,

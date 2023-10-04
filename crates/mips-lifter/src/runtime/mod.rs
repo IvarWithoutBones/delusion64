@@ -163,6 +163,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
                 RuntimeFunction::OnInstruction => Self::on_instruction as _,
                 RuntimeFunction::GetFunctionPtr => Self::get_function_ptr as _,
 
+                RuntimeFunction::GetPhysicalAddress => Self::get_physical_address as _,
                 RuntimeFunction::ProbeTlbEntry => Self::probe_tlb_entry as _,
                 RuntimeFunction::ReadTlbEntry => Self::read_tlb_entry as _,
                 RuntimeFunction::WriteTlbEntry => Self::write_tlb_entry as _,
@@ -176,6 +177,15 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
                 RuntimeFunction::WriteI16 => Self::write_u16 as _,
                 RuntimeFunction::WriteI32 => Self::write_u32 as _,
                 RuntimeFunction::WriteI64 => Self::write_u64 as _,
+
+                RuntimeFunction::ReadPhysicalI8 => Self::read_physical_u8 as _,
+                RuntimeFunction::ReadPhysicalI16 => Self::read_physical_u16 as _,
+                RuntimeFunction::ReadPhysicalI32 => Self::read_physical_u32 as _,
+                RuntimeFunction::ReadPhysicalI64 => Self::read_physical_u64 as _,
+                RuntimeFunction::WritePhysicalI8 => Self::write_physical_u8 as _,
+                RuntimeFunction::WritePhysicalI16 => Self::write_physical_u16 as _,
+                RuntimeFunction::WritePhysicalI32 => Self::write_physical_u32 as _,
+                RuntimeFunction::WritePhysicalI64 => Self::write_physical_u64 as _,
             };
 
             func.map_into(&context, module, execution_engine, ptr);
@@ -249,6 +259,10 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
     /*
         Runtime functions. These are not meant to be called directly, but rather by JIT'ed code.
     */
+
+    unsafe extern "C" fn get_physical_address(&mut self, vaddr: u64) -> u32 {
+        self.virtual_to_physical_address(vaddr, AccessMode::Read)
+    }
 
     // TODO: split this up and prettify it a bit, it is rather unwieldy right now.
     unsafe extern "C" fn get_function_ptr(&mut self, vaddr: u64) -> u64 {

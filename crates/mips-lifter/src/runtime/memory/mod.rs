@@ -64,19 +64,29 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         });
     }
 
-    fn read_or_panic<const SIZE: usize>(&mut self, vaddr: u64, paddr: u32) -> Int<SIZE> {
+    fn read_or_panic<const SIZE: usize>(&mut self, vaddr: Option<u64>, paddr: u32) -> Int<SIZE> {
         self.read(paddr).unwrap_or_else(|err| {
-            let message =
-                format!("memory read failed at vaddr={vaddr:#x} paddr={paddr:#x}: {err:#x?}");
+            let message = if let Some(vaddr) = vaddr {
+                format!("memory read failed at vaddr={vaddr:#x} paddr={paddr:#x}: {err:#x?}")
+            } else {
+                format!("memory read failed at paddr={paddr:#x}: {err:#x?}")
+            };
             self.panic_update_debugger(&message)
         })
     }
 
-    fn write_or_panic<const SIZE: usize>(&mut self, vaddr: u64, paddr: u32, value: Int<SIZE>) {
+    fn write_or_panic<const SIZE: usize>(
+        &mut self,
+        vaddr: Option<u64>,
+        paddr: u32,
+        value: Int<SIZE>,
+    ) {
         self.write(paddr, value).unwrap_or_else(|err| {
-            let message = format!(
-                "memory write of {value:#?} at vaddr={vaddr:#x} paddr={paddr:#x} failed: {err:#x?}"
-            );
+            let message = if let Some(vaddr) = vaddr {
+                format!("memory write of {value:#?} at vaddr={vaddr:#x} paddr={paddr:#x} failed: {err:#x?}")
+            } else {
+                format!("memory write of {value:#?} at paddr={paddr:#x} failed: {err:#x?}")
+            };
             self.panic_update_debugger(&message)
         })
     }
@@ -87,41 +97,74 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
 
     pub(crate) unsafe extern "C" fn read_u8(&mut self, vaddr: u64) -> u8 {
         let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
-        self.read_or_panic(vaddr, paddr).into()
+        self.read_or_panic(Some(vaddr), paddr).into()
     }
 
     pub(crate) unsafe extern "C" fn read_u16(&mut self, vaddr: u64) -> u16 {
         let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
-        self.read_or_panic(vaddr, paddr).into()
+        self.read_or_panic(Some(vaddr), paddr).into()
     }
 
     pub(crate) unsafe extern "C" fn read_u32(&mut self, vaddr: u64) -> u32 {
         let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
-        self.read_or_panic(vaddr, paddr).into()
+        self.read_or_panic(Some(vaddr), paddr).into()
     }
 
     pub(crate) unsafe extern "C" fn read_u64(&mut self, vaddr: u64) -> u64 {
         let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
-        self.read_or_panic(vaddr, paddr).into()
+        self.read_or_panic(Some(vaddr), paddr).into()
     }
 
     pub(crate) unsafe extern "C" fn write_u8(&mut self, vaddr: u64, value: u8) {
         let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Write);
-        self.write_or_panic(vaddr, paddr, value.into())
+        self.write_or_panic(Some(vaddr), paddr, value.into())
     }
 
     pub(crate) unsafe extern "C" fn write_u16(&mut self, vaddr: u64, value: u16) {
         let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Write);
-        self.write_or_panic(vaddr, paddr, value.into())
+        self.write_or_panic(Some(vaddr), paddr, value.into())
     }
 
     pub(crate) unsafe extern "C" fn write_u32(&mut self, vaddr: u64, value: u32) {
         let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Write);
-        self.write_or_panic(vaddr, paddr, value.into())
+        self.write_or_panic(Some(vaddr), paddr, value.into())
     }
 
     pub(crate) unsafe extern "C" fn write_u64(&mut self, vaddr: u64, value: u64) {
         let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Write);
-        self.write_or_panic(vaddr, paddr, value.into())
+        self.write_or_panic(Some(vaddr), paddr, value.into())
     }
+
+    pub(crate) unsafe extern "C" fn read_physical_u8(&mut self, paddr: u32) -> u8 {
+        self.read_or_panic(None, paddr).into()
+    }
+
+    pub(crate) unsafe extern "C" fn read_physical_u16(&mut self, paddr: u32) -> u16 {
+        self.read_or_panic(None, paddr).into()
+    }
+
+    pub(crate) unsafe extern "C" fn read_physical_u32(&mut self, paddr: u32) -> u32 {
+        self.read_or_panic(None, paddr).into()
+    }
+
+    pub(crate) unsafe extern "C" fn read_physical_u64(&mut self, paddr: u32) -> u32 {
+        self.read_or_panic(None, paddr).into()
+    }
+
+    pub(crate) unsafe extern "C" fn write_physical_u8(&mut self, paddr: u32, value: u8) {
+        self.write_or_panic(None, paddr, value.into())
+    }
+
+    pub(crate) unsafe extern "C" fn write_physical_u16(&mut self, paddr: u32, value: u16) {
+        self.write_or_panic(None, paddr, value.into())
+    }
+
+    pub(crate) unsafe extern "C" fn write_physical_u32(&mut self, paddr: u32, value: u32) {
+        self.write_or_panic(None, paddr, value.into())
+    }
+
+    pub(crate) unsafe extern "C" fn write_physical_u64(&mut self, paddr: u32, value: u64) {
+        self.write_or_panic(None, paddr, value.into())
+    }
+
 }
