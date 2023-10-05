@@ -197,8 +197,6 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
     let f64_type = codegen.context.f64_type();
 
     match mnemonic {
-        Mnenomic::Lwl => {}
-
         Mnenomic::Sync => {
             // Executed as NOP on the VR4300
         }
@@ -938,6 +936,52 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             // This should produce incorrect results if any of the two following instructions modify LO register, probably fine to ignore.
             let hi = codegen.read_register(i64_type, register::Special::Hi);
             codegen.write_general_register(instr.rd(), hi);
+        }
+
+        Mnenomic::Lwl => {
+            // Loads a portion of a word beginning at memory address (base + offset), stores 1-4 bytes in high-order portion of rt
+            let address = codegen.base_plus_offset(instr, "lwl_addr");
+
+            let shift = {
+                let zero = i32_type.const_zero();
+                let three = i32_type.const_int(3, false);
+                let eight = i32_type.const_int(8, false);
+                let xor = codegen.builder.build_xor(address, zero, "lwl_shift_xor");
+                let and = codegen.builder.build_and(xor, three, "lwl_shift_and");
+                codegen.builder.build_int_mul(eight, and, "lwl_shift_mul")
+            };
+
+            let result = {
+                let data = {
+                    let addr = codegen.builder.build_and(
+                        address,
+                        i32_type.const_int(!3, false),
+                        "lwl_data_and",
+                    );
+                    let data = codegen.read_memory(i32_type, addr);
+                    codegen
+                        .builder
+                        .build_left_shift(data, shift, "lwl_data_shift")
+                };
+
+                let target = {
+                    let mask = {
+                        let initial = i32_type.const_int(0xFFFF_FFFF, false);
+                        let mask = codegen.builder.build_left_shift(initial, shift, "lwl_mask");
+                        codegen.builder.build_not(mask, "lwl_mask_not")
+                    };
+
+                    let target = codegen.read_general_register(i32_type, instr.rt());
+                    codegen.builder.build_and(target, mask, "lwl_result_and")
+                };
+
+                codegen.sign_extend_to(
+                    i64_type,
+                    codegen.builder.build_or(target, data, "lwl_result_or"),
+                )
+            };
+
+            codegen.write_general_register(instr.rt(), result);
         }
 
         Mnenomic::Lwr => {
