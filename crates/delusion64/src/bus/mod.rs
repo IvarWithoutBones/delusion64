@@ -185,11 +185,16 @@ impl BusInterface for Bus {
                     .map_err(BusError::PeripheralInterfaceError)?,
             ),
 
-            BusSection::CartridgeRom => Int::from_slice(
-                self.cartridge_rom
-                    .get(address.offset..)
-                    .unwrap_or(&[0_u8; SIZE]),
-            ),
+            BusSection::CartridgeRom => {
+                // Align the offset to 4 bytes. The check should get monomorphized away.
+                let offset = if (SIZE % 4) != 0 {
+                    (address.offset + 2) & !(SIZE + 1)
+                } else {
+                    address.offset
+                };
+
+                Int::from_slice(self.cartridge_rom.get(offset..).unwrap_or(&[0_u8; SIZE]))
+            }
 
             section @ BusSection::RdramRegistersWriteOnly => {
                 Err(BusError::WriteOnlyRegionRead(*section))?
