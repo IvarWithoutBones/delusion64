@@ -91,13 +91,22 @@ impl BusSection {
     pub const fn safe_to_stub(&self) -> bool {
         matches!(
             self,
-            BusSection::CartridgeRom // https://n64brew.dev/wiki/Peripheral_Interface#Open_bus_behavior
-                | BusSection::RdramInterface
-                | BusSection::RdramRegisters
+            |BusSection::RdramInterface| BusSection::RdramRegisters
                 | BusSection::RdramRegistersWriteOnly
                 | BusSection::RspRegisters
                 | BusSection::SerialInterface
                 | BusSection::AudioInterface
         )
+    }
+}
+
+impl<'a> From<&'a BusSection> for n64_pi::BusDevice {
+    fn from(section: &'a BusSection) -> Self {
+        match section {
+            BusSection::CartridgeRom => n64_pi::BusDevice::CartridgeRom,
+            BusSection::CartridgeSram => n64_pi::BusDevice::CartridgeSram,
+            BusSection::PifRom => n64_pi::BusDevice::PifRom,
+            _ => unimplemented!(),
+        }
     }
 }

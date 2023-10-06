@@ -23,7 +23,6 @@ pub struct Bus {
     rsp_dmem: Box<[u8; BusSection::RspDMemory.len()]>,
     rsp_imem: Box<[u8; BusSection::RspIMemory.len()]>,
     pif_ram: Box<[u8; BusSection::PifRam.len()]>,
-    cartridge_rom: Box<[u8]>,
     pi: PeripheralInterface,
     mi: MipsInterface,
     vi: VideoInterface,
@@ -33,7 +32,13 @@ pub struct Bus {
 
 impl Bus {
     pub fn new(cartridge: Cartridge) -> Self {
-        let cartridge_rom = cartridge.read().unwrap();
+        let cartridge_rom = {
+            let mut array: Box<[u8; BusSection::CartridgeRom.len()]> = boxed_array();
+            let rom = cartridge.read().unwrap();
+            let len = array.len().min(rom.len());
+            array[..len].copy_from_slice(&rom[..len]);
+            array
+        };
 
         // Copy the first 0x1000 bytes of the PIF ROM to the RSP DMEM, simulating IPL2.
         let mut rsp_dmem = boxed_array();
@@ -45,8 +50,7 @@ impl Bus {
             rsp_imem: boxed_array(),
             pif_ram: boxed_array(),
             rsp_dmem,
-            cartridge_rom,
-            pi: PeripheralInterface::new(cartridge.header.pi_bsd_domain_1_flags),
+            pi: PeripheralInterface::new(cartridge_rom, cartridge.header.pi_bsd_domain_1_flags),
             mi: MipsInterface::new(),
             vi: VideoInterface::new(),
             n64_systemtest_isviewer_buffer: boxed_array(),
@@ -181,23 +185,18 @@ impl BusInterface for Bus {
 
             BusSection::PeripheralInterface => Int::new(
                 self.pi
-                    .read(address.offset)
+                    .read_register(address.offset)
                     .map_err(BusError::PeripheralInterfaceError)?,
             ),
 
-            BusSection::CartridgeRom => {
-                // Align the offset to 4 bytes. The check should get monomorphized away.
-                let offset = if (SIZE % 4) != 0 {
-                    (address.offset + 2) & !(SIZE + 1)
-                } else {
-                    address.offset
-                };
+            BusSection::CartridgeRom | BusSection::CartridgeSram | BusSection::PifRom => Int::new(
+                self.pi
+                    .read_bus::<SIZE>(address.section.into(), address.offset)
+                    .map_err(BusError::PeripheralInterfaceError)?,
+            ),
 
-                Int::from_slice(self.cartridge_rom.get(offset..).unwrap_or(&[0_u8; SIZE]))
-            }
-
-            section @ BusSection::RdramRegistersWriteOnly => {
-                Err(BusError::WriteOnlyRegionRead(*section))?
+            BusSection::RdramRegistersWriteOnly => {
+                Err(BusError::WriteOnlyRegionRead(*address.section))?
             }
 
             BusSection::RspMemoryMirrors => unreachable!("rsp memory mirrors should be resolved"),
@@ -265,12 +264,7 @@ impl BusInterface for Bus {
             BusSection::PeripheralInterface => {
                 let mutated = self
                     .pi
-                    .write(
-                        address.offset,
-                        value.try_into()?,
-                        self.rdram.as_mut_slice(),
-                        self.cartridge_rom.as_mut(),
-                    )
+                    .write_register(address.offset, value.try_into()?, self.rdram.as_mut_slice())
                     .map_err(BusError::PeripheralInterfaceError)?;
 
                 // Invalidate JIT blocks if RDRAM was mutated, since code may reside there.
@@ -280,9 +274,12 @@ impl BusInterface for Bus {
                 }
             }
 
-            BusSection::DiskDriveIpl4Rom | BusSection::PifRom => {
-                Err(BusError::ReadOnlyRegionWrite(*address.section))?
-            }
+            BusSection::CartridgeRom | BusSection::CartridgeSram | BusSection::PifRom => self
+                .pi
+                .write_bus::<SIZE>(address.section.into(), address.offset, value.as_slice())
+                .map_err(BusError::PeripheralInterfaceError)?,
+
+            BusSection::DiskDriveIpl4Rom => Err(BusError::ReadOnlyRegionWrite(*address.section))?,
 
             BusSection::RspMemoryMirrors => {
                 unreachable!("rsp memory mirrors should be resolved")

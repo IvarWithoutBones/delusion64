@@ -5,7 +5,7 @@ use self::register::{
     CartAddress, DramAddress, Latch, PageSize, PulseWidth, ReadLength, Register, Release, Status,
     WriteLength,
 };
-use std::ops::{Range, RangeInclusive};
+use std::ops::Range;
 
 mod register;
 
@@ -16,15 +16,17 @@ pub enum PiError {
         region: Region,
         domain: Domain,
     },
-    RdramAddressOutOfRange {
-        range: RangeInclusive<usize>,
+    RdramAddressOutOfBounds {
+        range: Range<usize>,
         rdram_len: usize,
     },
-    CartridgeAddressOutOfRange {
-        range: RangeInclusive<usize>,
+    CartridgeAddressOutOfBounds {
+        range: Range<usize>,
         cartridge_len: usize,
     },
 }
+
+pub type PiResult<T> = Result<T, PiError>;
 
 /// See https://n64brew.dev/wiki/Peripheral_Interface#Domains.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -84,6 +86,23 @@ pub struct Mutated {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum BusDevice {
+    CartridgeRom,
+    CartridgeSram,
+    PifRom,
+}
+
+impl BusDevice {
+    const fn cycles(&self) -> u32 {
+        // TODO: implement this properly, these values are just guesses
+        match self {
+            BusDevice::CartridgeRom | BusDevice::CartridgeSram => 150,
+            BusDevice::PifRom => 1,
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum DmaStatus {
     Idle,
     Busy,
@@ -91,9 +110,12 @@ pub enum DmaStatus {
 }
 
 /// The Peripheral Interface (PI), used for communication with the cartridge and disk drive.
-/// See https://n64brew.dev/wiki/Peripheral_Interface, and https://github.com/Dillonb/n64-resources/blob/master/pi_dma.org.
+/// See https://n64brew.dev/wiki/Peripheral_Interface.
 #[derive(Default, Debug, PartialEq, Eq)]
 pub struct PeripheralInterface {
+    cartridge: Box<[u8]>,
+    latch: Option<u32>,
+    latch_cycles_remaining: Option<u32>,
     dma_cycles_remaining: Option<u32>,
 
     // Registers
@@ -101,9 +123,7 @@ pub struct PeripheralInterface {
     cart_address: CartAddress,
     read_length: ReadLength,
     write_length: WriteLength,
-    // NOTE: Differentiates when reading or writing to it.
-    status_read: Status,
-    status_write: Status,
+    status: Status,
     domain_1_latch: Latch,
     domain_2_latch: Latch,
     domain_1_pulse_width: PulseWidth,
@@ -115,34 +135,110 @@ pub struct PeripheralInterface {
 }
 
 impl PeripheralInterface {
-    pub fn new(bsd_domain_1_flags: u32) -> Self {
+    pub fn new(cartridge: Box<[u8]>, bsd_domain_1_flags: u32) -> Self {
         // Initialize the PI registers based on the flags from the cartridge header.
-        let mut pi = Self::default();
-        for (i, byte) in bsd_domain_1_flags
-            .to_be_bytes()
-            .iter()
-            .enumerate()
-            .skip(1) // Unsure what the first byte is used for? Matches amount of bytes for unaligned DMA, and ReadLength/WriteLength read values.
-            .map(|(i, b)| (i, *b as u32))
-        {
-            match i {
-                1 => {
-                    pi.domain_1_page_size = PageSize::from(byte);
-                    pi.domain_1_release = Release::from(byte);
-                }
-                2 => pi.domain_1_pulse_width = PulseWidth::from(byte),
-                3 => pi.domain_1_latch = Latch::from(byte),
-                _ => unreachable!(),
-            }
+        // Unsure what the first byte is used for? Matches amount of bytes for unaligned DMA, and ReadLength/WriteLength read values.
+        let bsd_flags = bsd_domain_1_flags.to_be_bytes();
+        let domain_1_page_size = PageSize::from(bsd_flags[1] as u32);
+        let domain_1_release = Release::from(bsd_flags[1] as u32);
+        let domain_1_pulse_width = PulseWidth::from(bsd_flags[2] as u32);
+        let domain_1_latch = Latch::from(bsd_flags[3] as u32);
+
+        Self {
+            cartridge,
+            domain_1_page_size,
+            domain_1_release,
+            domain_1_pulse_width,
+            domain_1_latch,
+            ..Default::default()
         }
-        pi
     }
 
-    pub fn read(&self, offset: usize) -> Result<u32, PiError> {
+    pub fn read_bus<const SIZE: usize>(
+        &mut self,
+        device: BusDevice,
+        offset: usize,
+    ) -> PiResult<[u8; SIZE]> {
+        // Reading from the latch will make it disappear, so in the case of a write -> read -> read, only the first read will return the latch value.
+        if let Some(latch) = self.latch.take() {
+            self.status.set_io_busy(false);
+            let mut result = [0_u8; SIZE];
+            match SIZE {
+                1 => result[..SIZE].copy_from_slice(&[(latch >> 24) as u8]),
+                2 => result[..SIZE].copy_from_slice(&((latch >> 16) as u16).to_be_bytes()),
+                4 => result[..SIZE].copy_from_slice(&latch.to_be_bytes()),
+                8 => result[..SIZE].copy_from_slice(&((latch as u64) << 32).to_be_bytes()),
+                _ => unreachable!(),
+            };
+            return Ok(result);
+        }
+
+        // Align the offset to 4 bytes. The check should get monomorphized away.
+        let offset = if (SIZE % 4) != 0 {
+            (offset + 2) & !(SIZE + 1)
+        } else {
+            offset
+        };
+
+        match device {
+            BusDevice::PifRom | BusDevice::CartridgeSram => todo!("PI: read PIF ROM"),
+
+            BusDevice::CartridgeRom => self
+                .cartridge
+                .get(offset..offset + SIZE)
+                .ok_or(PiError::CartridgeAddressOutOfBounds {
+                    range: offset..offset + SIZE,
+                    cartridge_len: self.cartridge.len(),
+                })
+                .map(|slice| {
+                    // SAFETY: We just checked that the slice is SIZE bytes long.
+                    unsafe { slice.try_into().unwrap_unchecked() }
+                }),
+        }
+    }
+
+    pub fn write_bus<const SIZE: usize>(
+        &mut self,
+        device: BusDevice,
+        offset: usize,
+        value: &[u8; SIZE],
+    ) -> PiResult<()> {
+        if self.status.io_busy() {
+            // The latch is still active, ignore the write
+            return Ok(());
+        }
+
+        // SAFETY: we always check the size is correct before using it.
+        self.latch = Some(match SIZE {
+            1 => {
+                let shift = 24 - ((offset & 1) * 8);
+                (unsafe { *value.get_unchecked(0) } as u32) << shift
+            }
+            2 => {
+                (u16::from_be_bytes(unsafe {
+                    value.get_unchecked(..).try_into().unwrap_unchecked()
+                }) as u32)
+                    << 16
+            }
+            4 => {
+                u32::from_be_bytes(unsafe { value.get_unchecked(..).try_into().unwrap_unchecked() })
+            }
+            8 => u32::from_be_bytes(unsafe {
+                value.get_unchecked(..4).try_into().unwrap_unchecked()
+            }),
+            _ => unreachable!(),
+        });
+
+        self.status.set_io_busy(true);
+        self.latch_cycles_remaining = Some(device.cycles());
+        Ok(())
+    }
+
+    pub fn read_register(&self, offset: usize) -> PiResult<u32> {
         match Register::new(offset)? {
             Register::DramAddress => Ok(self.dram_address.into()),
             Register::CartAddress => Ok(self.cart_address.into()),
-            Register::Status => Ok(self.status_read.into()),
+            Register::Status => Ok(self.status.into()),
             Register::ReadLength => Ok(ReadLength::READ_VALUE),
             Register::WriteLength => Ok(WriteLength::READ_VALUE),
 
@@ -168,13 +264,12 @@ impl PeripheralInterface {
         }
     }
 
-    pub fn write(
+    pub fn write_register(
         &mut self,
         offset: usize,
         value: u32,
         rdram: &mut [u8],
-        cart: &mut [u8],
-    ) -> Result<Mutated, PiError> {
+    ) -> PiResult<Mutated> {
         let mut mutated = None;
         match Register::new(offset)? {
             Register::DramAddress => self.dram_address = DramAddress::from(value),
@@ -187,23 +282,19 @@ impl PeripheralInterface {
 
             Register::WriteLength => {
                 self.write_length = WriteLength::from(value);
-                mutated = Some(self.dma(rdram, cart)?);
+                mutated = Some(self.dma(rdram)?);
             }
 
             Register::Status => {
-                let mut status = Status::from(value);
-
+                let status = Status::from(value);
                 if status.reset_dma() {
-                    self.status_read.set_dma_busy(false);
-                    self.status_read.set_io_busy(false);
+                    self.status.set_dma_busy(false);
                     self.reset_dma();
                 }
 
                 if status.clear_interrupt() {
-                    self.status_read.set_interrupt(false);
+                    self.status.set_interrupt(false);
                 }
-
-                self.status_write = status.with_reset_dma(false).with_clear_interrupt(false);
             }
 
             Register::Latch(dom) => match dom {
@@ -231,6 +322,16 @@ impl PeripheralInterface {
     }
 
     pub fn tick(&mut self) -> DmaStatus {
+        if let Some(cycles) = &mut self.latch_cycles_remaining {
+            if *cycles == 0 {
+                self.latch_cycles_remaining.take();
+                self.latch.take();
+                self.status.set_io_busy(false);
+            } else {
+                *cycles -= 1;
+            }
+        }
+
         if let Some(cycles) = &mut self.dma_cycles_remaining {
             if *cycles == 0 {
                 self.reset_dma();
@@ -246,54 +347,45 @@ impl PeripheralInterface {
 
     fn reset_dma(&mut self) {
         self.dma_cycles_remaining.take();
-        self.status_read.set_dma_busy(false);
-        self.status_read.set_io_busy(false);
+        self.status.set_dma_busy(false);
     }
 
     const fn dma_cycles(&self) -> u32 {
-        100000 // TODO: implement this properly
+        1 // TODO: implement this properly
     }
 
-    fn dma(&mut self, rdram: &mut [u8], cart: &[u8]) -> Result<Mutated, PiError> {
+    fn dma(&mut self, rdram: &mut [u8]) -> PiResult<Mutated> {
         // TODO: use the configured `PageSize`
         self.dma_cycles_remaining = Some(self.dma_cycles());
-        self.status_read.set_dma_busy(true);
-        self.status_read.set_io_busy(true);
+        self.status.set_dma_busy(true);
 
         let cart_address = self.cart_address.address() as usize;
         match Region::new(cart_address as u32) {
             Region::CartridgeRom => {
-                let len = self.write_length.length() as usize;
+                let len = self.write_length.length() as usize + 1;
 
                 let cart_offset = Region::CartridgeRom.offset(cart_address as u32) as usize;
-                let cart_end = (cart.len() - 1).min(cart_offset + len) - cart_offset; // Ensure we dont read past the end of the cart
-                let cart_slice = cart.get(cart_offset..=cart_offset + cart_end).ok_or(
-                    PiError::CartridgeAddressOutOfRange {
-                        range: cart_offset..=cart_offset + len,
-                        cartridge_len: cart.len(),
+                let cart_slice = self.cartridge.get(cart_offset..(cart_offset + len)).ok_or(
+                    PiError::CartridgeAddressOutOfBounds {
+                        range: cart_offset..(cart_offset + len),
+                        cartridge_len: self.cartridge.len(),
                     },
                 )?;
 
                 let rdram_offset = self.dram_address.address() as usize;
                 let rdram_slice = {
-                    let range = rdram_offset..=rdram_offset + len;
+                    let range = rdram_offset..(rdram_offset + len);
                     let rdram_len = rdram.len();
                     rdram
                         .get_mut(range.clone())
-                        .ok_or(PiError::RdramAddressOutOfRange { range, rdram_len })?
+                        .ok_or(PiError::RdramAddressOutOfBounds { range, rdram_len })?
                 };
 
                 println!("PI: DMA from cart {cart_offset:#x} to rdram {rdram_offset:#x} (length {len:#x})");
-
-                rdram_slice[..=cart_end].copy_from_slice(cart_slice);
-                if cart_end < len {
-                    // Copy zeros into the remainder of the RDRAM slice in case the cartridge is not big enough
-                    println!("WARNING: cartridge is not big enough to fill requested RDRAM range, writing zeros");
-                    rdram_slice[cart_end..].fill(0);
-                }
+                rdram_slice[..len].copy_from_slice(cart_slice);
 
                 Ok(Mutated {
-                    rdram: Some(rdram_offset as u32..(rdram_offset + len + 1) as u32),
+                    rdram: Some(rdram_offset as u32..(rdram_offset + len) as u32),
                 })
             }
 
