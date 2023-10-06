@@ -301,7 +301,7 @@ impl<Bus: bus::Bus> SingleThreadBase for Environment<'_, Bus> {
         regs.pc = self.registers[register::Special::Pc] as _;
         regs.hi = self.registers[register::Special::Hi] as _;
         regs.lo = self.registers[register::Special::Lo] as _;
-        regs.cp0.cause = self.registers[register::Cp0::Cache] as _;
+        regs.cp0.cause = self.registers[register::Cp0::CacheErr] as _;
         regs.cp0.status = self.registers[register::Cp0::Status] as _;
         regs.cp0.badvaddr = self.registers[register::Cp0::BadVAddr] as _;
         for (i, r) in regs.r.iter_mut().enumerate() {

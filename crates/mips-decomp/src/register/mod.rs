@@ -159,9 +159,9 @@ pub enum Cp0 {
     #[strum(serialize = "Reserved")]
     Reserved25,
     /// Error Cache parity bits
-    Parity,
+    PErr,
     /// Error Cache Error and Status register
-    Cache,
+    CacheErr,
     /// Cache Tag register low
     TagLo,
     /// Cache Tag register high
@@ -174,6 +174,21 @@ pub enum Cp0 {
 }
 
 impl_reg!(Cp0);
+
+impl Cp0 {
+    pub const fn is_reserved(self) -> bool {
+        matches!(
+            self,
+            Self::Reserved7
+                | Self::Reserved21
+                | Self::Reserved22
+                | Self::Reserved23
+                | Self::Reserved24
+                | Self::Reserved25
+                | Self::Reserved31
+        )
+    }
+}
 
 /// A MIPS 3 FPU (coprocessor 1, or CP1) register.
 #[derive(EnumCount, FromRepr, EnumVariantNames, Debug, PartialEq, Eq, Clone, Copy)]

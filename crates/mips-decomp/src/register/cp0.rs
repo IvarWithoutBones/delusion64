@@ -43,6 +43,9 @@ bitfield! {
 }
 
 impl Index {
+    /// A mask that covers all the writable bits of the register.
+    pub const WRITE_MASK: u64 = 0b1000_0000_0000_0000_0000_0000_0011_1111;
+
     pub const fn new(raw: u32) -> Self {
         Self(raw)
     }
@@ -200,6 +203,9 @@ bitfield! {
 }
 
 impl Status {
+    /// A mask that covers all the writable bits of the register.
+    pub const WRITE_MASK: u64 = 0b1111_1111_1111_0111_1111_1111_1111_1111;
+
     pub const fn new(raw: u32) -> Self {
         Self(raw)
     }
@@ -258,5 +264,149 @@ impl Cause {
 
     pub const fn raw(&self) -> u32 {
         self.0
+    }
+}
+
+bitfield! {
+    /// The format of the CP0 register Context, for 64-bit mode.
+    #[derive(Ord, PartialOrd, Hash)]
+    pub struct Context(u64) {
+        /// Page number of virtual address whose translation is invalid divided by 2
+        [4..=22] pub bad_virtual_page_number: u32,
+        /// Base address of page table entry.
+        [23..=63] pub page_table_entry_base_address: u64,
+    }
+}
+
+impl Context {
+    /// A mask that covers BadVPN2 and prior reserved bits of the register. This should not be writable by software.
+    pub const READ_ONLY_MASK: u64 = 0b111_1111_1111_1111_1111_1111;
+
+    /// A mask that covers all the writable bits of the register.
+    pub const PAGE_TABLE_ENTRY_BASE_MASK: u64 = !Self::READ_ONLY_MASK;
+
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+}
+
+bitfield! {
+    /// The format of the CP0 register XContext, for 64-bit mode.
+    #[derive(Ord, PartialOrd, Hash)]
+    pub struct XContext(u64) {
+        /// Page number of virtual address whose translation is invalid divided by 2
+        [4..=30] pub bad_virtual_page_number: u32,
+        /// The ASID of the process that owns the page table entry.
+        [31..=32] pub address_space_id: u8,
+        /// Base address of page table entry.
+        [33..=63] pub page_table_entry_base_address: u32,
+    }
+}
+
+impl XContext {
+    /// A mask that covers BadVPN2 and prior reserved bits of the register. This should not be writable by software.
+    pub const READ_ONLY_MASK: u64 = 0b1_1111_1111_1111_1111_1111_1111_1111_1111;
+
+    /// A mask that covers all the writable bits of the register.
+    pub const PAGE_TABLE_ENTRY_BASE_MASK: u64 = !Self::READ_ONLY_MASK;
+
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+}
+
+bitfield! {
+    /// The format of the CP0 register Wired.
+    #[derive(Ord, PartialOrd, Hash)]
+    pub struct Wired(u32) {
+        /// TLB Wired boundary
+        [0..=5] pub wired: u8,
+    }
+}
+
+impl Wired {
+    /// A mask that covers all the writable bits of the register.
+    pub const WRITE_MASK: u64 = 0b11_1111;
+
+    pub const fn new(raw: u32) -> Self {
+        Self(raw)
+    }
+}
+
+bitfield! {
+    /// The format of the CP0 register LLAddr.
+    #[derive(Ord, PartialOrd, Hash)]
+    pub struct LLAddr(u32) {
+        /// The physical address read by the most recent Load Linked instruction.
+        [0..=31] pub physical_address: u32,
+    }
+}
+
+impl LLAddr {
+    /// A mask that covers all the writable bits of the register.
+    pub const WRITE_MASK: u64 = u32::MAX as u64;
+
+    pub const fn new(raw: u32) -> Self {
+        Self(raw)
+    }
+}
+
+bitfield! {
+    /// The format of the CP0 register Config.
+    #[derive(Ord, PartialOrd, Hash)]
+    pub struct Config(u32) {
+        /// Describes the kseg0 cache coherency algorithm.
+        [0..=2] pub kseg0_cache_coherency: u8,
+        /// Reserved for future use, but can be read and written by software.
+        [3] pub reserved,
+        /// The endianness of the system. When this is set, big-endian, when unset, little-endian.
+        [15] pub big_endian,
+        /// When zero, the "D" data rate is used. When 6, "DxxDxx" is used instead. All other values are reserved for future use.
+        [24..=27] pub data_transfer_pattern: u8,
+        /// The value displayed corresponds to the frequency ratio set by the DivMode pins on power application.
+        [28..=30] pub frequency_ratio: u8,
+    }
+}
+
+impl Config {
+    /// A mask that covers all the writable bits of the register.
+    pub const WRITE_MASK: u64 = 0b1111_0000_0000_1000_0000_0000_1111;
+
+    pub const fn new(raw: u32) -> Self {
+        Self(raw)
+    }
+}
+
+bitfield! {
+    /// The format of the CP0 register PRId, the Processor Revision Identifier.
+    #[derive(Ord, PartialOrd, Hash)]
+    pub struct PRId(u32) {
+        /// The processors revision number
+        [0..=7] pub revision: u8,
+        /// The processors identifier number.
+        [8..=15] pub identifier: u8,
+    }
+}
+
+impl PRId {
+    pub const fn new(raw: u32) -> Self {
+        Self(raw)
+    }
+}
+
+bitfield! {
+    /// The format of the CP0 register PErr, which is unused by the VR4300.
+    #[derive(Ord, PartialOrd, Hash)]
+    pub struct PErr(u32) {
+        /// The self-diagnostic area.
+        [0..=7] pub diagnostic: u8,
+    }
+}
+
+impl PErr {
+    pub const WRITE_MASK: u64 = 0b1111_1111;
+
+    pub const fn new(raw: u32) -> Self {
+        Self(raw)
     }
 }

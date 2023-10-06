@@ -16,6 +16,11 @@ use mips_decomp::{
     INSTRUCTION_SIZE,
 };
 
+/// There are a few coprocessor 0 registers which are reserved, and therefore not properly implemented in hardware.
+/// Writing to any of them will fill a latch with the value, which can then be read back from any other reserved register.
+/// Because the latch is global across all reserved registers, we arbitrarily pick one to store its contents.
+const RESERVED_CP0_REGISTER_LATCH: register::Cp0 = register::Cp0::Reserved31;
+
 pub const FUNCTION_PREFIX: &str = "delusion64_jit_";
 
 #[macro_export]
@@ -506,7 +511,12 @@ impl<'ctx> CodeGen<'ctx> {
     where
         T: Into<u64>,
     {
-        let reg = register::Cp0::from_repr(index.into() as _).unwrap();
+        let mut reg = register::Cp0::from_repr(index.into() as usize).unwrap();
+        if reg.is_reserved() {
+            // Reserved registers use a global latch, redirect to the place we store it.
+            reg = RESERVED_CP0_REGISTER_LATCH;
+        }
+
         let name = &format!("{}_", reg.name());
         let register = self.register_pointer(reg);
         self.builder.build_load(ty, register, name).into_int_value()
@@ -574,13 +584,142 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
-    pub fn write_cp0_register<T>(&self, index: T, value: IntValue<'ctx>)
+    pub fn write_cp0_register<T>(&self, index: T, mut value: IntValue<'ctx>)
     where
         T: Into<u64>,
     {
-        let reg = register::Cp0::from_repr(index.into() as _).unwrap();
+        let mut reg = register::Cp0::from_repr(index.into() as usize).unwrap();
+        match reg {
+            register::Cp0::BadVAddr | register::Cp0::PRId | register::Cp0::CacheErr => {
+                // Read-only
+                return;
+            }
+
+            register::Cp0::Config => {
+                // All writable get set zero prior to writing.
+                let mask = value
+                    .get_type()
+                    .const_int(register::cp0::Config::WRITE_MASK, false);
+                let masked_value = self
+                    .builder
+                    .build_and(value, mask, "cop0_config_value_mask");
+                let masked_config = {
+                    let config = self.read_register(value.get_type(), register::Cp0::Config);
+                    self.builder
+                        .build_and(config, mask.const_not(), "cop0_config_reg_mask")
+                };
+
+                value = self
+                    .builder
+                    .build_or(masked_config, masked_value, "cop0_config_value");
+            }
+
+            register::Cp0::Status => {
+                // Bit 19 of the Status register is writable, and neither are the upper 32 bits. Mask them out.
+                let mask = value
+                    .get_type()
+                    .const_int(register::cp0::Status::WRITE_MASK, false);
+                value = self.builder.build_and(value, mask, "cop0_status_masked");
+            }
+
+            register::Cp0::PErr => {
+                // Only the lower 8 bits are writable.
+                let mask = value
+                    .get_type()
+                    .const_int(register::cp0::PErr::WRITE_MASK, false);
+                value = self.builder.build_and(value, mask, "cop0_perr_masked");
+            }
+
+            register::Cp0::LLAddr => {
+                // 32-bit register, mask out the upper bits.
+                let mask = value
+                    .get_type()
+                    .const_int(register::cp0::LLAddr::WRITE_MASK, false);
+                value = self.builder.build_and(value, mask, "cop0_lladdr_masked");
+            }
+
+            register::Cp0::Index => {
+                // Not all bits of the Index register are writable, mask them out.
+                let mask = value
+                    .get_type()
+                    .const_int(register::cp0::Index::WRITE_MASK, false);
+                value = self.builder.build_and(value, mask, "cop0_index_masked");
+            }
+
+            register::Cp0::Wired => {
+                // Not all bits of the Wired register are writable, mask them out.
+                let mask = value
+                    .get_type()
+                    .const_int(register::cp0::Wired::WRITE_MASK, false);
+                value = self.builder.build_and(value, mask, "cop0_index_masked");
+            }
+
+            register::Cp0::Context => {
+                // Combine the existent BadVPN2, together with PTEBase from the value.
+                let i64_type = self.context.i64_type();
+                let masked_value = {
+                    let mask = i64_type
+                        .const_int(register::cp0::Context::PAGE_TABLE_ENTRY_BASE_MASK, false);
+                    self.builder.build_and(
+                        self.sign_extend_to(i64_type, value),
+                        mask,
+                        "cop0_context_value_mask",
+                    )
+                };
+
+                let masked_context = {
+                    let context = self.read_register(i64_type, register::Cp0::Context);
+                    let mask = i64_type.const_int(register::cp0::Context::READ_ONLY_MASK, false);
+                    self.builder
+                        .build_and(context, mask, "cop0_context_reg_mask")
+                };
+
+                value = self
+                    .builder
+                    .build_or(masked_context, masked_value, "cp0_context_value");
+            }
+
+            register::Cp0::XContext => {
+                // Combine the existent BadVPN2 and ASID, together with PTEBase from the value.
+                let i64_type = self.context.i64_type();
+                let masked_value = {
+                    let mask = i64_type
+                        .const_int(register::cp0::XContext::PAGE_TABLE_ENTRY_BASE_MASK, false);
+                    self.builder.build_and(
+                        self.sign_extend_to(i64_type, value),
+                        mask,
+                        "cop0_xcontext_value_mask",
+                    )
+                };
+
+                let masked_context = {
+                    let context = self.read_register(i64_type, register::Cp0::XContext);
+                    let mask = i64_type.const_int(register::cp0::XContext::READ_ONLY_MASK, false);
+                    self.builder
+                        .build_and(context, mask, "cop0_xcontext_reg_mask")
+                };
+
+                value = self
+                    .builder
+                    .build_or(masked_context, masked_value, "cp0_xcontext_value");
+            }
+
+            _ => {
+                if reg.is_reserved() {
+                    // Reserved registers store the value in a global latch, redirect to that.
+                    reg = RESERVED_CP0_REGISTER_LATCH;
+                }
+            }
+        }
+
         let reg_ptr = self.register_pointer(reg);
         self.builder.build_store(reg_ptr, value);
+
+        if reg != RESERVED_CP0_REGISTER_LATCH {
+            // Any CP0 register write sets the reserved latch as well as the target register.
+            let reserved_latch = self.register_pointer(RESERVED_CP0_REGISTER_LATCH);
+            self.builder.build_store(reserved_latch, value);
+        }
     }
 
     pub fn write_fpu_register<T>(&self, index: T, value: IntValue<'ctx>)
