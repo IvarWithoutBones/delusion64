@@ -2,7 +2,7 @@
 
 use self::memory::tlb::{AccessMode, TranslationLookasideBuffer};
 use crate::{
-    codegen::{self, CodeGen, FallthroughAmount, RegisterGlobals},
+    codegen::{self, CodeGen, FallthroughAmount, RegisterGlobals, RESERVED_CP0_REGISTER_LATCH},
     InitialRegisters,
 };
 use inkwell::{
@@ -31,6 +31,7 @@ pub(crate) struct Registers {
     general_purpose: UnsafeCell<[u64; register::GeneralPurpose::count()]>,
     cp0: UnsafeCell<[u64; register::Cp0::count()]>,
     fpu: UnsafeCell<[u64; register::Fpu::count()]>,
+    fpu_control: UnsafeCell<[u64; register::FpuControl::count()]>,
     special: UnsafeCell<[u64; register::Special::count()]>,
 }
 
@@ -51,6 +52,11 @@ impl Registers {
 
         let cp0 = map_array("cp0_registers", self.cp0.get(), register::Cp0::count());
         let fpu = map_array("fpu_registers", self.fpu.get(), register::Fpu::count());
+        let fpu_control = map_array(
+            "fpu_control_registers",
+            self.fpu_control.get(),
+            register::FpuControl::count(),
+        );
         let general_purpose = map_array(
             "general_purpose_registers",
             self.general_purpose.get(),
@@ -66,6 +72,7 @@ impl Registers {
             general_purpose,
             cp0,
             fpu,
+            fpu_control,
             special,
         }
     }
@@ -80,6 +87,10 @@ impl Registers {
 
     pub fn fpu(&self) -> impl Iterator<Item = u64> {
         unsafe { (*self.fpu.get()).iter().copied() }
+    }
+
+    pub fn fpu_control(&self) -> impl Iterator<Item = u64> {
+        unsafe { (*self.fpu_control.get()).iter().copied() }
     }
 
     pub fn special(&self) -> impl Iterator<Item = u64> {
@@ -448,6 +459,7 @@ impl Default for Registers {
             cp0: UnsafeCell::new([0; register::Cp0::count()]),
             fpu: UnsafeCell::new([0; register::Fpu::count()]),
             special: UnsafeCell::new([0; register::Special::count()]),
+            fpu_control: UnsafeCell::new([0; register::FpuControl::count()]),
         }
     }
 }
@@ -456,24 +468,41 @@ impl fmt::Debug for Registers {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "\ngeneral registers:")?;
         for (i, r) in self.general_purpose().enumerate() {
-            let name = register::GeneralPurpose::name_from_index(i as _);
+            let name = register::GeneralPurpose::name_from_index(i);
             writeln!(f, "{name: <9} = {r:#x}")?;
         }
-        writeln!(f, "\ncoprocessor 1 registers:")?;
+
+        writeln!(f, "\ncoprocessor 0 registers:")?;
         for (i, r) in self.cp0().enumerate() {
-            let name = register::Cp0::name_from_index(i as _);
-            writeln!(f, "{name: <9} = {r:#x}")?;
+            let reg = register::Cp0::from_repr(i).unwrap();
+            if !reg.is_reserved() || reg == RESERVED_CP0_REGISTER_LATCH {
+                // Skip all but one of the reserved registers, they're latched together.
+                let name = reg.name();
+                writeln!(f, "{name: <9} = {r:#x}")?;
+            }
         }
+
         writeln!(f, "\nspecial registers:")?;
         for (i, r) in self.special().enumerate() {
-            let name = register::Special::name_from_index(i as _);
+            let name = register::Special::name_from_index(i);
             writeln!(f, "{name: <9} = {r:#x}")?;
         }
-        writeln!(f, "\nfpu registers:")?;
+
+        writeln!(f, "\nfpu general registers:")?;
         for (i, r) in self.fpu().enumerate() {
-            let name = register::Fpu::name_from_index(i as _);
+            let name = register::Fpu::name_from_index(i);
             writeln!(f, "{name: <9} = {r:#x}")?;
         }
+
+        writeln!(f, "\nfpu control registers:")?;
+        for (i, r) in self.fpu_control().enumerate() {
+            let reg = register::FpuControl::from_repr(i).unwrap();
+            if !reg.is_reserved() {
+                let name = reg.name();
+                writeln!(f, "{name: <22} = {r:#x}")?;
+            }
+        }
+
         Ok(())
     }
 }
@@ -503,7 +532,8 @@ impl_index!(
     (register::GeneralPurpose, Registers::general_purpose),
     (register::Special, Registers::special),
     (register::Cp0, Registers::cp0),
-    (register::Fpu, Registers::fpu)
+    (register::Fpu, Registers::fpu),
+    (register::FpuControl, Registers::fpu_control)
 );
 
 impl std::ops::Index<Register> for Registers {
@@ -515,6 +545,7 @@ impl std::ops::Index<Register> for Registers {
             Register::Special(r) => &self[r],
             Register::Cp0(r) => &self[r],
             Register::Fpu(r) => &self[r],
+            Register::FpuControl(r) => &self[r],
         }
     }
 }
@@ -526,6 +557,7 @@ impl std::ops::IndexMut<Register> for Registers {
             Register::Special(r) => &mut self[r],
             Register::Cp0(r) => &mut self[r],
             Register::Fpu(r) => &mut self[r],
+            Register::FpuControl(r) => &mut self[r],
         }
     }
 }

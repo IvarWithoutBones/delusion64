@@ -61,7 +61,11 @@ fn main() {
         (register::Cp0::Status.into(), 0x3400_0000),
         (register::Cp0::PRId.into(), 0x0000_0B22),
         (register::Cp0::Config.into(), 0x7006_E463),
-        (register::Fpu::F31.into(), 0x0100_0800),
+        (
+            register::FpuControl::ImplementationRevision.into(),
+            0x0000_0A00,
+        ),
+        (register::FpuControl::ControlStatus.into(), 0x0100_0800),
         (register::Special::Pc.into(), 0x0000_0000_A400_0040),
     ];
 

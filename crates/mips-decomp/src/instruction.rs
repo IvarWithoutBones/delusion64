@@ -540,6 +540,10 @@ impl Instruction {
                     }
                 }
 
+                Operand::FloatControlRegister => {
+                    result.push_str(register::FpuControl::name_from_index(num as usize))
+                }
+
                 Operand::Destination if self.mnenomic.uses_cp0_destination() => {
                     result.push_str(register::Cp0::name_from_index(num as _));
                 }
@@ -625,6 +629,10 @@ impl ParsedInstruction {
 
     pub fn fd(&self) -> u32 {
         self.get(Operand::FloatDestination).unwrap()
+    }
+
+    pub fn fcr(&self) -> u32 {
+        self.get(Operand::FloatControlRegister).unwrap()
     }
 
     pub fn sa(&self) -> u32 {
@@ -749,10 +757,10 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Bnel,    "0101 01ss ssst tttt ffff ffff ffff ffff", (Source)(Target)(Offset, Signed16)),
     instr!(Break,   "0000 00kk kkkk kkkk kkkk kkkk kk00 1101"),
     instr!(Cache,   "1011 11bb bbby yyjj ffff ffff ffff ffff", (CacheOpcode)(CacheSubject)(Offset, Signed16)(Base)),
-    instr!(Cfc1,    "0100 0100 010t tttt SSSS S000 0000 0000", (Target)(FloatSource)),
+    instr!(Cfc1,    "0100 0100 010t tttt CCCC C000 0000 0000", (Target)(FloatControlRegister)),
     instr!(Cfc2,    "0100 1000 010t tttt dddd d000 0000 0000", (Target)(Destination)),
     instr!(Cop2,    "0100 101k kkkk kkkk kkkk kkkk kkkk kkkk", (Immediate)),
-    instr!(Ctc1,    "0100 0100 110t tttt SSSS S000 0000 0000", (Target)(FloatSource)),
+    instr!(Ctc1,    "0100 0100 110t tttt CCCC C000 0000 0000", (Target)(FloatControlRegister)),
     instr!(Ctc2,    "0100 1000 110t tttt dddd d000 0000 0000", (Target)(Destination)),
     instr!(Dadd,    "0000 00ss ssst tttt dddd d000 0010 1100", (Destination)(Source)(Target)),
     instr!(Daddi,   "0110 00ss ssst tttt kkkk kkkk kkkk kkkk", (Target)(Source)(Immediate, Signed16)),

@@ -19,7 +19,7 @@ use mips_decomp::{
 /// There are a few coprocessor 0 registers which are reserved, and therefore not properly implemented in hardware.
 /// Writing to any of them will fill a latch with the value, which can then be read back from any other reserved register.
 /// Because the latch is global across all reserved registers, we arbitrarily pick one to store its contents.
-const RESERVED_CP0_REGISTER_LATCH: register::Cp0 = register::Cp0::Reserved31;
+pub(crate) const RESERVED_CP0_REGISTER_LATCH: register::Cp0 = register::Cp0::Reserved31;
 
 pub const FUNCTION_PREFIX: &str = "delusion64_jit_";
 
@@ -50,8 +50,9 @@ pub fn function_attributes(context: &Context) -> [Attribute; ATTRIBUTE_NAMES.len
 pub struct RegisterGlobals<'ctx> {
     pub general_purpose: GlobalValue<'ctx>,
     pub cp0: GlobalValue<'ctx>,
-    pub fpu: GlobalValue<'ctx>,
     pub special: GlobalValue<'ctx>,
+    pub fpu: GlobalValue<'ctx>,
+    pub fpu_control: GlobalValue<'ctx>,
 }
 
 #[derive(Debug)]
@@ -476,6 +477,7 @@ impl<'ctx> CodeGen<'ctx> {
             Register::Special(_) => self.globals.registers.special.as_pointer_value(),
             Register::Cp0(_) => self.globals.registers.cp0.as_pointer_value(),
             Register::Fpu(_) => self.globals.registers.fpu.as_pointer_value(),
+            Register::FpuControl(_) => self.globals.registers.fpu_control.as_pointer_value(),
         };
 
         unsafe {
@@ -546,6 +548,18 @@ impl<'ctx> CodeGen<'ctx> {
             .into_float_value()
     }
 
+    /// Read the floating-point unit (FPU) control register at the given index.
+    /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits returned.
+    pub fn read_fpu_control_register<T>(&self, ty: IntType<'ctx>, index: T) -> IntValue<'ctx>
+    where
+        T: Into<u64>,
+    {
+        let reg = register::FpuControl::from_repr(index.into() as usize).unwrap();
+        let name = format!("{}_", reg.name());
+        let reg_ptr = self.register_pointer(reg);
+        self.builder.build_load(ty, reg_ptr, &name).into_int_value()
+    }
+
     /// Read the specified miscellaneous "special" register.
     /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits returned.
     pub fn read_special_register(
@@ -569,6 +583,7 @@ impl<'ctx> CodeGen<'ctx> {
             Register::Special(reg) => self.read_special_register(ty, reg),
             Register::Cp0(reg) => self.read_cp0_register(ty, reg),
             Register::Fpu(reg) => self.read_fpu_register(ty, reg),
+            Register::FpuControl(reg) => self.read_fpu_control_register(ty, reg),
         }
     }
 
@@ -740,6 +755,22 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.build_store(reg_ptr, value);
     }
 
+    pub fn write_fpu_control_register<T>(&self, index: T, mut value: IntValue<'ctx>)
+    where
+        T: Into<u64>,
+    {
+        let reg = register::FpuControl::from_repr(index.into() as usize).unwrap();
+        if reg == register::FpuControl::ControlStatus {
+            let mask = value
+                .get_type()
+                .const_int(register::fpu::ControlStatus::WRITE_MASK, false);
+            value = self.builder.build_and(value, mask, "fpu_control_masked");
+
+            let reg_ptr = self.register_pointer(reg);
+            self.builder.build_store(reg_ptr, value);
+        }
+    }
+
     pub fn write_special_register(&self, reg: register::Special, value: IntValue<'ctx>) {
         let register = self.register_pointer(reg);
         self.builder.build_store(register, value);
@@ -753,6 +784,7 @@ impl<'ctx> CodeGen<'ctx> {
             Register::GeneralPurpose(reg) => self.write_general_register(reg, value),
             Register::Cp0(reg) => self.write_cp0_register(reg, value),
             Register::Fpu(reg) => self.write_fpu_register(reg, value),
+            Register::FpuControl(reg) => self.write_fpu_control_register(reg, value),
             Register::Special(reg) => self.write_special_register(reg, value),
         }
     }

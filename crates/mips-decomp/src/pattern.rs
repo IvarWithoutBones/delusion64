@@ -76,6 +76,7 @@ pub enum Operand {
     FloatDestination,
     FloatSource,
     FloatTarget,
+    FloatControlRegister,
 }
 
 impl Operand {
@@ -96,6 +97,7 @@ impl Operand {
             'S' => Self::FloatSource,
             'D' => Self::FloatDestination,
             'T' => Self::FloatTarget,
+            'C' => Self::FloatControlRegister,
             _ => panic!("Invalid operand"),
         }
     }

@@ -168,7 +168,7 @@ fn evaluate_conditional_branch<'ctx>(
         Mnenomic::Bc1t | Mnenomic::Bc1tl => {
             // If the last floating-point compare is true, branch to address.
             let source = codegen.read_register(i64_type, register::Fpu::F31);
-            let mask = i64_type.const_int(1 << 23, false); // C bit
+            let mask = i64_type.const_int(1 << register::fpu::ControlStatus::CONDITION_BIT, false);
             let masked = codegen.builder.build_and(source, mask, "bc1t_mask");
             (IntPredicate::NE, masked, i64_type.const_zero())
         }
@@ -176,7 +176,7 @@ fn evaluate_conditional_branch<'ctx>(
         Mnenomic::Bc1f | Mnenomic::Bc1fl => {
             // If the last floating-point compare is false, branch to address.
             let source = codegen.read_register(i64_type, register::Fpu::F31);
-            let mask = i64_type.const_int(1 << 23, false); // C bit
+            let mask = i64_type.const_int(1 << register::fpu::ControlStatus::CONDITION_BIT, false);
             let masked = codegen.builder.build_and(source, mask, "bc1t_mask");
             (IntPredicate::EQ, masked, i64_type.const_zero())
         }
@@ -265,16 +265,14 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
         }
 
         Mnenomic::Ctc1 => {
-            // Copy contents of GPR rt, to CP1's control register fs. Only valid if fs equals 0 or 31
-            assert!(instr.fs() == 0 || instr.fs() == 31);
+            // Copy contents of GPR rt, to CP1's control register fcr
             let target = codegen.read_general_register(i64_type, instr.rt());
-            codegen.write_fpu_register(instr.fs(), target);
+            codegen.write_fpu_control_register(instr.fcr(), target);
         }
 
         Mnenomic::Cfc1 => {
-            // Copy contents of CP1's control register fs, to GPR rt. Only valid if fs equals 0 or 31
-            assert!(instr.fs() == 0 || instr.fs() == 31);
-            let source = codegen.read_fpu_register(i64_type, instr.fs());
+            // Copy contents of CP1's control register frc, to GPR rt
+            let source = codegen.read_fpu_control_register(i64_type, instr.fcr());
             codegen.write_general_register(instr.rt(), source);
         }
 
@@ -1699,12 +1697,12 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
                 .builder
                 .build_float_compare(cond, source, target, "c_cond_res");
 
-            let shift = i32_type.const_int(23, false); // C bit
+            let shift = i32_type.const_int(register::fpu::ControlStatus::CONDITION_BIT, false);
             let mask = codegen.builder.build_left_shift(cmp, shift, "c_cond_shift");
 
-            let fcr = codegen.read_fpu_register(i32_type, register::Fpu::F31);
-            let fcr_with_cmp = codegen.builder.build_and(fcr, mask, "c_cond_mask");
-            codegen.write_fpu_register(register::Fpu::F31, fcr_with_cmp);
+            let fcr31 = codegen.read_register(i32_type, register::FpuControl::ControlStatus);
+            let fcr_with_cmp = codegen.builder.build_and(fcr31, mask, "c_cond_mask");
+            codegen.write_register(register::FpuControl::ControlStatus, fcr_with_cmp);
         }
 
         _ => {

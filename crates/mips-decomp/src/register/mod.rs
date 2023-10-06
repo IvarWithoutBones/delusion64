@@ -1,6 +1,7 @@
 use strum::{EnumCount, EnumVariantNames, FromRepr, VariantNames};
 
 pub mod cp0;
+pub mod fpu;
 
 macro_rules! impl_from_and_try_from {
     ($ty:ident, $($num:ident),+) => {
@@ -190,7 +191,7 @@ impl Cp0 {
     }
 }
 
-/// A MIPS 3 FPU (coprocessor 1, or CP1) register.
+/// A general purpose MIPS 3 FPU (coprocessor 1, or CP1) register.
 #[derive(EnumCount, FromRepr, EnumVariantNames, Debug, PartialEq, Eq, Clone, Copy)]
 #[strum(serialize_all = "snake_case")]
 pub enum Fpu {
@@ -230,10 +231,116 @@ pub enum Fpu {
 
 impl_reg!(Fpu);
 
+/// A MIPS 3 FPU (coprocessor 1, or CP1) control register, or `FCR`.
+#[derive(EnumCount, FromRepr, EnumVariantNames, Debug, PartialEq, Eq, Clone, Copy)]
+pub enum FpuControl {
+    /// FPU Implementation/Revision Register `FCR0`.
+    ImplementationRevision,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved1,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved2,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved3,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved4,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved5,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved6,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved7,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved8,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved9,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved10,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved11,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved12,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved13,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved14,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved15,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved16,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved17,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved18,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved19,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved20,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved21,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved22,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved23,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved24,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved25,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved26,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved27,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved28,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved29,
+    /// Reserved for future use
+    #[strum(serialize = "Reserved")]
+    Reserved30,
+    /// FPU Control/Status Register `FCR31`.
+    ControlStatus,
+}
+
+impl_reg!(FpuControl);
+
+impl FpuControl {
+    pub const fn is_reserved(&self) -> bool {
+        !matches!(self, Self::ImplementationRevision | Self::ControlStatus)
+    }
+}
+
 /// A miscellaneous MIPS 3 register, which does not nicely fit into any other category.
 #[derive(EnumCount, FromRepr, EnumVariantNames, Debug, PartialEq, Eq, Clone, Copy)]
 #[strum(serialize_all = "snake_case")]
-#[repr(u8)]
 pub enum Special {
     /// The program counter, which is not directly accessible but here for bookkeeping purposes.
     Pc,
@@ -243,10 +350,6 @@ pub enum Special {
     Lo,
     /// A bit used by the `sc` family of instructions.
     LoadLink,
-    /// FPU Control/Status Register `FCR31`.
-    FpuControlStatus,
-    /// FPU Implementation/Revision Register `FCR0`.
-    FpuImplementationRevision,
 }
 
 impl_reg!(Special);
@@ -258,6 +361,7 @@ pub enum Register {
     Special(Special),
     Cp0(Cp0),
     Fpu(Fpu),
+    FpuControl(FpuControl),
 }
 
 impl Register {
@@ -267,6 +371,7 @@ impl Register {
             Self::Special(v) => v.name(),
             Self::Cp0(v) => v.name(),
             Self::Fpu(v) => v.name(),
+            Self::FpuControl(v) => v.name(),
         }
     }
 
@@ -276,6 +381,7 @@ impl Register {
             Self::Special(v) => v.to_repr(),
             Self::Cp0(v) => v.to_repr(),
             Self::Fpu(v) => v.to_repr(),
+            Self::FpuControl(v) => v.to_repr(),
         }
     }
 }
@@ -301,5 +407,11 @@ impl From<Cp0> for Register {
 impl From<Fpu> for Register {
     fn from(v: Fpu) -> Self {
         Self::Fpu(v)
+    }
+}
+
+impl From<FpuControl> for Register {
+    fn from(v: FpuControl) -> Self {
+        Self::FpuControl(v)
     }
 }
