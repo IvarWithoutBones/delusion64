@@ -36,15 +36,19 @@ impl<'a> From<&'a Registers> for Bits {
 }
 
 bitfield! {
-    struct VirtualAddress(u64) {
+    pub struct VirtualAddress(u64) {
         [0..=28] virtual_page_number_and_offset_32: u64,
         [29..=31] mode_32: u8 as OperatingMode,
-        [0..=39] virtual_page_number_and_offset_64: u64,
-        [62..=63] mode_64: u8 as OperatingMode,
+        [0..=39] pub virtual_page_number_and_offset_64: u64,
+        [62..=63] pub mode_64: u8 as OperatingMode,
     }
 }
 
 impl VirtualAddress {
+    pub fn new(vaddr: u64) -> Self {
+        Self(vaddr)
+    }
+
     fn virtual_page_number_and_offset(&self, bits: Bits) -> u64 {
         match bits {
             Bits::Bits32 => self.virtual_page_number_and_offset_32(),
@@ -52,13 +56,13 @@ impl VirtualAddress {
         }
     }
 
-    fn offset(&self, mask: PageMask, bits: Bits) -> u32 {
+    pub fn offset(&self, mask: PageMask, bits: Bits) -> u32 {
         // The virtual page number and offset are dynamic in size, depending on the page mask.
         (self.virtual_page_number_and_offset(bits) & mask.mask()) as u32
     }
 
-    fn virtual_page_number(&self, mask: PageMask, bits: Bits) -> u32 {
-        (self.virtual_page_number_and_offset(bits) >> mask.mask().count_ones()) as u32
+    pub fn virtual_page_number(&self, mask: PageMask, bits: Bits) -> u32 {
+        (self.virtual_page_number_and_offset(bits) >> (mask.mask().count_ones() + 1)) as u32
     }
 }
 

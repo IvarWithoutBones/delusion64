@@ -1,6 +1,6 @@
 //! The runtime environment which generated code can call into.
 
-use self::memory::tlb::{AccessMode, TranslationLookasideBuffer};
+use self::memory::tlb::{AccessMode, TranslationLookasideBuffer, VirtualAddress};
 use crate::{
     codegen::{self, CodeGen, FallthroughAmount, RegisterGlobals, RESERVED_CP0_REGISTER_LATCH},
     InitialRegisters,
@@ -11,7 +11,7 @@ use inkwell::{
 use mips_decomp::{
     instruction::ParsedInstruction,
     register::{self, Register},
-    Exception,
+    Exception, INSTRUCTION_SIZE,
 };
 use std::{
     cell::{Cell, UnsafeCell},
@@ -109,6 +109,18 @@ impl Registers {
         let raw: u32 = cause.into();
         self[register::Cp0::Cause] = raw as u64;
     }
+
+    pub fn page_mask(&self) -> register::cp0::PageMask {
+        register::cp0::PageMask::new(self[register::Cp0::PageMask] as u32)
+    }
+
+    pub fn context(&self) -> register::cp0::Context {
+        register::cp0::Context::new(self[register::Cp0::Context])
+    }
+
+    pub fn xcontext(&self) -> register::cp0::XContext {
+        register::cp0::XContext::new(self[register::Cp0::XContext])
+    }
 }
 
 pub struct Environment<'ctx, Bus: bus::Bus> {
@@ -153,6 +165,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         execution_engine: &ExecutionEngine<'ctx>,
     ) -> codegen::Globals<'ctx> {
         let context = module.get_context();
+        let bool_ptr_type = context.bool_type().ptr_type(Default::default());
         let i64_ptr_type = context.i64_type().ptr_type(Default::default());
 
         // Map a pointer to the environment struct
@@ -167,6 +180,12 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         // Map the registers into the modules globals
         let registers = self.registers.map_into(&context, module, execution_engine);
 
+        // Map delay slot metadata
+        let inside_delay_slot =
+            module.add_global(bool_ptr_type, Default::default(), "inside_delay_slo");
+        let inside_delay_slot_storage = Box::into_raw(Box::new(false));
+        execution_engine.add_global_mapping(&inside_delay_slot, inside_delay_slot_storage as usize);
+
         // Map the runtime functions
         for func in RuntimeFunction::iter() {
             let ptr: *const u8 = match func {
@@ -174,6 +193,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
                 RuntimeFunction::OnInstruction => Self::on_instruction as _,
                 RuntimeFunction::GetFunctionPtr => Self::get_function_ptr as _,
 
+                RuntimeFunction::HandleException => Self::handle_exception_jit as _,
                 RuntimeFunction::GetPhysicalAddress => Self::get_physical_address as _,
                 RuntimeFunction::ProbeTlbEntry => Self::probe_tlb_entry as _,
                 RuntimeFunction::ReadTlbEntry => Self::read_tlb_entry as _,
@@ -204,6 +224,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
 
         codegen::Globals {
             stack_frame: (stack_frame, stack_frame_storage),
+            inside_delay_slot: (inside_delay_slot, inside_delay_slot_storage),
             env_ptr,
             registers,
         }
@@ -245,22 +266,34 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         }
 
         // TODO: handle coprocessor field
-        let new_cause: u32 = self
-            .registers
-            .cause()
-            .with_exception_code(exception.into())
-            .into();
-        self.registers[register::Cp0::Cause] = new_cause as u64;
+        let mut cause = self.registers.cause().with_exception_code(exception.into());
 
         if !self.registers.status().exception_level() {
-            // TODO: if we are inside of a delay slot, this should be the address of the previous instruction,
-            // so that we dont skip over the branch. We also need to set `BD` in the Cause register when this happens.
-            let pc_vaddr = self.registers[register::Special::Pc];
+            // If we are inside of a delay slot, BadVAddr should be the address of the previous instruction, so that we dont skip over the branch.
+            let pc_vaddr = {
+                let mut pc = self.registers[register::Special::Pc];
+                if self
+                    .codegen
+                    .get_mut()
+                    .as_ref()
+                    .unwrap()
+                    .is_inside_delay_slot()
+                {
+                    pc -= INSTRUCTION_SIZE as u64;
+                    // We also need to set `BD` in the Cause register when this happens.
+                    cause.set_branch_delay(true);
+                }
+
+                // Sign extend from a u32 to a u64
+                pc as i32 as i64 as u64
+            };
             self.registers[register::Cp0::EPC] = pc_vaddr;
 
             let new_status: u32 = self.registers.status().with_exception_level(true).into();
             self.registers[register::Cp0::Status] = new_status as u64;
         }
+
+        self.registers[register::Cp0::Cause] = cause.raw() as u64;
 
         // Will set PC for us
         let jump_function = self.codegen.get_mut().as_ref().unwrap().jump_function();
@@ -270,6 +303,37 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
     /*
         Runtime functions. These are not meant to be called directly, but rather by JIT'ed code.
     */
+
+    unsafe extern "C" fn handle_exception_jit(
+        &mut self,
+        code: u64,
+        has_bad_vaddr: bool,
+        bad_vaddr: u64,
+    ) {
+        let exception = Exception::from_repr(code as usize).unwrap_or_else(|| {
+            let msg = format!("invalid exception code {code:#x}");
+            self.panic_update_debugger(&msg)
+        });
+
+        if has_bad_vaddr {
+            self.registers[register::Cp0::BadVAddr] = bad_vaddr;
+
+            let vaddr = VirtualAddress::new(bad_vaddr);
+            let vpn = vaddr.virtual_page_number(self.registers.page_mask(), Default::default());
+
+            let context = self.registers.context().with_bad_virtual_page_number(vpn);
+            self.registers[register::Cp0::Context] = context.into();
+
+            let xcontext = self
+                .registers
+                .xcontext()
+                .with_bad_virtual_page_number(vpn)
+                .with_address_space_id(vaddr.mode_64().into());
+            self.registers[register::Cp0::XContext] = xcontext.into();
+        }
+
+        self.handle_exception(exception);
+    }
 
     unsafe extern "C" fn get_physical_address(&mut self, vaddr: u64) -> u32 {
         self.virtual_to_physical_address(vaddr, AccessMode::Read)

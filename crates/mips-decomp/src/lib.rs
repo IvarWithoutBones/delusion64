@@ -1,4 +1,5 @@
 use crate::instruction::ParsedInstruction;
+use strum::FromRepr;
 
 pub mod cache;
 pub mod instruction;
@@ -15,7 +16,7 @@ pub const EXCEPTION_VECTOR_BASE: usize = 0x8000_0000;
 pub const GENERAL_EXCEPTION_VECTOR: usize = EXCEPTION_VECTOR_BASE + 0x180;
 
 /// See table 6-2 of the VR4300 manual.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromRepr)]
 pub enum Exception {
     Interrupt = 0,
     TlbModification = 1,

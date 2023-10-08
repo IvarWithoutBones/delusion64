@@ -13,6 +13,7 @@ pub enum RuntimeFunction {
     GetFunctionPtr,
 
     GetPhysicalAddress,
+    HandleException,
     ProbeTlbEntry,
     ReadTlbEntry,
     WriteTlbEntry,
@@ -42,6 +43,7 @@ impl RuntimeFunction {
 
     #[inline]
     fn signature<'ctx>(&self, context: &ContextRef<'ctx>) -> FunctionType<'ctx> {
+        let bool_type = context.bool_type();
         let i8_type = context.i8_type();
         let i16_type = context.i16_type();
         let i32_type = context.i32_type();
@@ -71,6 +73,10 @@ impl RuntimeFunction {
             // `Environment::get_function_ptr(&mut self, vaddr: u64) -> u64
             Self::GetFunctionPtr => sig!(i64_type, [vaddr: i64_type]),
 
+            // `Environment::handle_exception_jit(&mut self, exception_code: u64, has_bad_vaddr: bool, bad_vaddr: u64)`
+            Self::HandleException => {
+                sig!(void_type, [exception_code: i64_type, has_bad_vaddr: bool_type, bad_vaddr: i64_type])
+            }
             // `Environment::get_physical_address(&mut self, vaddr: u64) -> u32`
             Self::GetPhysicalAddress => sig!(i32_type, [vaddr: i64_type]),
             // `Environment::probe_tlb_entry(&mut self, index: u64)`

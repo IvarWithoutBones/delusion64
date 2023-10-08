@@ -25,9 +25,10 @@ impl From<u8> for OperatingMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Bits {
     Bits32,
+    #[default]
     Bits64,
 }
 

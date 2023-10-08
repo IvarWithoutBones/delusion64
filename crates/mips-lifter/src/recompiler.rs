@@ -2,7 +2,7 @@ use crate::{codegen::CodeGen, runtime::RuntimeFunction};
 use inkwell::{values::IntValue, FloatPredicate, IntPredicate};
 use mips_decomp::{
     instruction::{FloatCondition, FloatFormat, Mnenomic, ParsedInstruction},
-    register, INSTRUCTION_SIZE,
+    register, Exception, INSTRUCTION_SIZE,
 };
 
 fn stub(codegen: &CodeGen, name: &str) {
@@ -29,6 +29,14 @@ pub fn compile_instruction_with_delay_slot(
     debug_assert!(instr.mnemonic().has_delay_slot());
     let delay_slot_pc = pc + INSTRUCTION_SIZE as u64;
 
+    let compile_delay_slot_instr = || {
+        // Update runtime metadata about delay slots so we can properly handle traps
+        codegen.set_inside_delay_slot(true);
+        on_instruction(delay_slot_pc);
+        compile_instruction(codegen, delay_slot_instr);
+        codegen.set_inside_delay_slot(false);
+    };
+
     if instr.mnemonic().is_branch() {
         // Evaluate the branch condition prior to running the delay slot instruction,
         // as the delay slot instruction can influence the branch condition. TODO: Is this correct?
@@ -40,16 +48,14 @@ pub fn compile_instruction_with_delay_slot(
 
         if !instr.mnemonic().is_likely_branch() {
             // If the delay slot instruction is not discarded, it gets executed regardless of the branch condition.
-            on_instruction(delay_slot_pc);
-            compile_instruction(codegen, delay_slot_instr);
+            compile_delay_slot_instr();
         }
 
         on_instruction(pc);
         codegen.build_if(name, comparison, || {
             if instr.mnemonic().is_likely_branch() {
                 // If the delay slot is discarded, the delay slot instruction only gets executed when the branch is taken.
-                on_instruction(delay_slot_pc);
-                compile_instruction(codegen, delay_slot_instr);
+                compile_delay_slot_instr();
             }
 
             let target_pc = instr
@@ -58,10 +64,8 @@ pub fn compile_instruction_with_delay_slot(
             codegen.build_constant_jump(target_pc)
         });
     } else {
-        // Recompile the delay slot instruction first
-        on_instruction(delay_slot_pc);
-        compile_instruction(codegen, delay_slot_instr);
-        // Then the unconditional branch
+        // Recompile the delay slot instruction first, then the unconditional branch
+        compile_delay_slot_instr();
         on_instruction(pc);
         compile_unconditional_branch(codegen, instr, delay_slot_pc)
     }
@@ -1360,6 +1364,25 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
         Mnenomic::Lw => {
             // Loads word stored at memory address (base + offset), stores sign-extended word in rt
             let address = codegen.base_plus_offset(instr, "lw_addr");
+
+            // Check if the lower two bits of the address are zero. If not, throw an address error exception.
+            let lower_bits_not_zero = {
+                let mask = i64_type.const_int(0b11, false);
+                let and = codegen
+                    .builder
+                    .build_and(address, mask, "lw_addr_lower_bits_and");
+                codegen.builder.build_int_compare(
+                    inkwell::IntPredicate::NE,
+                    and,
+                    i64_type.const_zero(),
+                    "lw_addr_lower_bits_not_zero",
+                )
+            };
+
+            codegen.build_if("lw_addr_lower_bits_not_zero", lower_bits_not_zero, || {
+                codegen.throw_exception(Exception::AddressLoad, Some(address))
+            });
+
             let value = codegen.sign_extend_to(i64_type, codegen.read_memory(i32_type, address));
             codegen.write_general_register(instr.rt(), value);
         }

@@ -13,7 +13,7 @@ use inkwell::{
 use mips_decomp::{
     instruction::ParsedInstruction,
     register::{self, Register},
-    INSTRUCTION_SIZE,
+    Exception, INSTRUCTION_SIZE,
 };
 
 /// There are a few coprocessor 0 registers which are reserved, and therefore not properly implemented in hardware.
@@ -56,11 +56,13 @@ pub struct RegisterGlobals<'ctx> {
 }
 
 #[derive(Debug)]
+#[repr(C)]
 pub struct Globals<'ctx> {
     pub env_ptr: GlobalValue<'ctx>,
     pub registers: RegisterGlobals<'ctx>,
 
     // NOTE: The backing memory must be externally managed, so that the pointer remains valid across module reloads.
+    pub inside_delay_slot: (GlobalValue<'ctx>, *mut bool),
     pub stack_frame: (GlobalValue<'ctx>, *mut u64),
 }
 
@@ -187,6 +189,18 @@ impl<'ctx> CodeGen<'ctx> {
             FallthroughAmount::One => self.fallthrough_one_helper.unwrap(),
             FallthroughAmount::Two => self.fallthrough_two_helper.unwrap(),
         }
+    }
+
+    pub fn set_inside_delay_slot(&self, inside: bool) {
+        let (value, _storage) = self.globals.inside_delay_slot;
+        let new_value = self.context.bool_type().const_int(inside as u64, false);
+        self.builder
+            .build_store(value.as_pointer_value(), new_value);
+    }
+
+    pub fn is_inside_delay_slot(&self) -> bool {
+        let (_value, storage) = self.globals.inside_delay_slot;
+        unsafe { *storage }
     }
 
     /// Saves the host stack frame to a global pointer, so that it can be restored later.
@@ -459,7 +473,26 @@ impl<'ctx> CodeGen<'ctx> {
         let base = self.read_general_register(i32_type, instr.base());
         let offset = self.sign_extend_to(i32_type, i16_type.const_int(instr.offset() as _, true));
         let result = self.builder.build_int_add(base, offset, add_name);
-        self.zero_extend_to(i64_type, result)
+        self.sign_extend_to(i64_type, result)
+    }
+
+    pub fn throw_exception(&self, exception: Exception, bad_vaddr: Option<IntValue<'ctx>>) {
+        let i64_type = self.context.i64_type();
+        let exception = i64_type.const_int(exception as u64, false);
+
+        let has_bad_vaddr = self
+            .context
+            .bool_type()
+            .const_int(bad_vaddr.is_some() as u64, false);
+        let bad_vaddr = bad_vaddr.or_else(|| Some(i64_type.const_zero())).unwrap();
+
+        env_call!(
+            self,
+            RuntimeFunction::HandleException,
+            [exception, has_bad_vaddr, bad_vaddr]
+        );
+
+        self.builder.build_unreachable();
     }
 
     #[inline]
