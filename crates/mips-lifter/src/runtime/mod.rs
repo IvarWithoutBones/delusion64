@@ -282,6 +282,8 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
                     pc -= INSTRUCTION_SIZE as u64;
                     // We also need to set `BD` in the Cause register when this happens.
                     cause.set_branch_delay(true);
+                } else {
+                    cause.set_branch_delay(false);
                 }
 
                 // Sign extend from a u32 to a u64

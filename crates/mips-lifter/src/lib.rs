@@ -60,6 +60,9 @@ where
         // Its a rather bruteforce approach, but it works :)
         codegen.save_host_stack();
         codegen.build_dynamic_jump(codegen.read_register(i64_type, register::Special::Pc));
+
+        let a = codegen.context.i64_type().const_int(0, false);
+        cmps!(codegen, a <= a);
     }
 
     // Ensure the generated LLVM IR is valid.

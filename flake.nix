@@ -80,6 +80,7 @@
           rustToolchain.availableComponents.rust-analyzer
 
           # Optional debugging tools
+          pkgs.cargo-expand
           pkgs.just
           pkgs.gdb
           llvmPackages.clang

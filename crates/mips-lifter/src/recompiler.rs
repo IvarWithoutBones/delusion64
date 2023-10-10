@@ -218,12 +218,7 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             let erl_mask = i64_type.const_int(0b100, false);
             let erl_set = {
                 let status = codegen.builder.build_and(status, erl_mask, "eret_erl_mask");
-                codegen.builder.build_int_compare(
-                    IntPredicate::EQ,
-                    status,
-                    erl_mask,
-                    "eret_erl_set",
-                )
+                cmp!(codegen, status == erl_mask)
             };
 
             codegen.build_if_else(
@@ -344,14 +339,7 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
         Mnenomic::Sc => {
             // If LL bit is set, stores contents of rt, to memory address (base + offset), truncated to 32-bits
             let ll_bit = codegen.read_register(bool_type, register::Special::LoadLink);
-            let cmp = codegen.builder.build_int_compare(
-                IntPredicate::EQ,
-                ll_bit,
-                bool_type.const_int(1, false),
-                "sc_cmp",
-            );
-
-            codegen.build_if("sc_ll_set", cmp, || {
+            codegen.build_if("sc_ll_set", cmp!(codegen, ll_bit == 1), || {
                 let addr = codegen.base_plus_offset(instr, "sc_addr");
                 let value = codegen.read_general_register(i32_type, instr.rt());
                 codegen.write_memory(addr, value);
@@ -361,14 +349,7 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
         Mnenomic::Scd => {
             // If LL bit is set, stores contents of rt, to memory address (base + offset)
             let ll_bit = codegen.read_register(bool_type, register::Special::LoadLink);
-            let cmp = codegen.builder.build_int_compare(
-                IntPredicate::EQ,
-                ll_bit,
-                bool_type.const_int(1, false),
-                "scd_cmp",
-            );
-
-            codegen.build_if("scd_ll_set", cmp, || {
+            codegen.build_if("scd_ll_set", cmp!(codegen, ll_bit == 1), || {
                 let addr = codegen.base_plus_offset(instr, "scd_addr");
                 let value = codegen.read_general_register(i64_type, instr.rt());
                 codegen.write_memory(addr, value);
@@ -444,34 +425,20 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
                 i64_type,
                 codegen.read_general_register(i32_type, instr.rs()),
             );
+
             let target = codegen.sign_extend_to(
                 i64_type,
                 codegen.read_general_register(i32_type, instr.rt()),
             );
 
-            let is_zero = codegen.builder.build_int_compare(
-                IntPredicate::EQ,
-                target,
-                i32_type.const_zero(),
-                "div_divisor_is_zero",
-            );
-
             codegen.build_if_else(
                 "div_zero_divisor",
-                is_zero,
+                cmp!(codegen, target == 0),
                 || {
                     codegen.write_register(register::Special::Hi, source);
-
-                    let dividend_positive = codegen.builder.build_int_compare(
-                        IntPredicate::SGE,
-                        source,
-                        i32_type.const_zero(),
-                        "div_dividend_positive",
-                    );
-
                     codegen.build_if_else(
                         "div_dividend_positive",
-                        dividend_positive,
+                        cmps!(codegen, source >= 0),
                         || codegen.write_register(register::Special::Lo, i64_type.const_all_ones()),
                         || {
                             codegen
@@ -511,16 +478,9 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             let source = codegen.read_general_register(i32_type, instr.rs());
             let target = codegen.read_general_register(i32_type, instr.rt());
 
-            let is_zero = codegen.builder.build_int_compare(
-                IntPredicate::EQ,
-                target,
-                i32_type.const_zero(),
-                "divu_divisor_is_zero",
-            );
-
             codegen.build_if_else(
                 "divu_zero_divisor",
-                is_zero,
+                cmp!(codegen, target == 0),
                 || {
                     codegen.write_register(register::Special::Lo, i64_type.const_all_ones());
                     codegen.write_register(
@@ -560,29 +520,14 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             let source = codegen.read_general_register(i64_type, instr.rs());
             let target = codegen.read_general_register(i64_type, instr.rt());
 
-            let is_zero = codegen.builder.build_int_compare(
-                IntPredicate::EQ,
-                target,
-                i64_type.const_zero(),
-                "ddiv_divisor_is_zero",
-            );
-
             codegen.build_if_else(
                 "ddiv_valid_divisor",
-                is_zero,
+                cmp!(codegen, target == 0),
                 || {
                     codegen.write_register(register::Special::Hi, source);
-
-                    let dividend_positive = codegen.builder.build_int_compare(
-                        IntPredicate::SGE,
-                        source,
-                        i64_type.const_zero(),
-                        "ddiv_dividend_positive",
-                    );
-
                     codegen.build_if_else(
                         "ddiv_dividend_positive",
-                        dividend_positive,
+                        cmps!(codegen, source >= 0),
                         || codegen.write_register(register::Special::Lo, i64_type.const_all_ones()),
                         || {
                             codegen
@@ -591,16 +536,12 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
                     );
                 },
                 || {
-                    let is_min_int = codegen.builder.build_int_compare(
-                        IntPredicate::EQ,
-                        source,
-                        i64_type.const_int(i64::MIN as u64, false),
-                        "ddiv_dividend_is_min_int",
-                    );
-
                     codegen.build_if_else(
                         "ddiv_dividend_min_int",
-                        is_min_int,
+                        cmp!(
+                            codegen,
+                            source == i64_type.const_int(i64::MIN as u64, false)
+                        ),
                         || {
                             codegen.write_register(register::Special::Hi, i64_type.const_zero());
                             codegen.write_register(register::Special::Lo, source);
@@ -630,16 +571,9 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             let source = codegen.read_general_register(i64_type, instr.rs());
             let target = codegen.read_general_register(i64_type, instr.rt());
 
-            let is_zero = codegen.builder.build_int_compare(
-                IntPredicate::EQ,
-                target,
-                i64_type.const_zero(),
-                "ddiv_divisor_is_zero",
-            );
-
             codegen.build_if_else(
                 "ddivu_zero_divisor",
-                is_zero,
+                cmp!(codegen, target == 0),
                 || {
                     codegen.write_register(register::Special::Hi, source);
                     codegen.write_register(register::Special::Lo, i64_type.const_all_ones());
@@ -1313,9 +1247,16 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
         }
 
         Mnenomic::Sw => {
-            // Stores word from rt, to memory address (base + offset)
-            let target = codegen.read_general_register(i32_type, instr.rt());
+            // Stores word from rt, to memory address (base + offset). If the low two bits of the address are not zero, an address error exception occurs.
             let address = codegen.base_plus_offset(instr, "sw_addr");
+            let low_bits = codegen.build_mask(address, 0b11, "sw_addr_low_two_bits");
+            codegen.build_if(
+                "sw_addr_aligned",
+                cmp!(codegen, low_bits != i64_type.const_zero()),
+                || codegen.throw_exception(Exception::AddressStore, Some(address)),
+            );
+
+            let target = codegen.read_general_register(i32_type, instr.rt());
             codegen.write_memory(address, target);
         }
 
@@ -1367,16 +1308,8 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
 
             // Check if the lower two bits of the address are zero. If not, throw an address error exception.
             let lower_bits_not_zero = {
-                let mask = i64_type.const_int(0b11, false);
-                let and = codegen
-                    .builder
-                    .build_and(address, mask, "lw_addr_lower_bits_and");
-                codegen.builder.build_int_compare(
-                    inkwell::IntPredicate::NE,
-                    and,
-                    i64_type.const_zero(),
-                    "lw_addr_lower_bits_not_zero",
-                )
+                let lower_bits = codegen.build_mask(address, 0b11, "lw_addr_lower_bits");
+                cmp!(codegen, lower_bits != i64_type.const_zero())
             };
 
             codegen.build_if("lw_addr_lower_bits_not_zero", lower_bits_not_zero, || {
@@ -1511,27 +1444,16 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             // If signed rs is less than signed rt, store one in rd, otherwise store zero
             let source = codegen.read_general_register(i64_type, instr.rs());
             let target = codegen.read_general_register(i64_type, instr.rt());
-            let cmp = codegen.zero_extend_to(
-                i64_type,
-                codegen
-                    .builder
-                    .build_int_compare(IntPredicate::SLT, source, target, "slt_cmp"),
-            );
+            let cmp = codegen.zero_extend_to(i64_type, cmps!(codegen, source < target));
             codegen.write_general_register(instr.rd(), cmp);
         }
 
         Mnenomic::Slti => {
             // If signed rs is less than sign-extended 16-bit immediate, store one in rd, otherwise store zero
-            let imm =
+            let immediate =
                 codegen.sign_extend_to(i64_type, i16_type.const_int(instr.immediate() as _, true));
             let source = codegen.read_general_register(i64_type, instr.rs());
-            let cmp = codegen.zero_extend_to(
-                i64_type,
-                codegen
-                    .builder
-                    .build_int_compare(IntPredicate::SLT, source, imm, "slti_cmp"),
-            );
-
+            let cmp = codegen.zero_extend_to(i64_type, cmps!(codegen, source < immediate));
             codegen.write_general_register(instr.rt(), cmp);
         }
 
@@ -1539,28 +1461,16 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             // If unsigned rs is less than unsigned rt, store one in rd, otherwise store zero.
             let source = codegen.read_general_register(i64_type, instr.rs());
             let target = codegen.read_general_register(i64_type, instr.rt());
-            let cmp = codegen.zero_extend_to(
-                i64_type,
-                codegen
-                    .builder
-                    .build_int_compare(IntPredicate::ULT, source, target, "sltu_cmp"),
-            );
-
+            let cmp = codegen.zero_extend_to(i64_type, cmpu!(codegen, source < target));
             codegen.write_general_register(instr.rd(), cmp);
         }
 
         Mnenomic::Sltiu => {
             // If unsigned rs is less than sign-extended 16-bit immediate, store one in rt, otherwise store zero
-            let imm =
+            let immediate =
                 codegen.sign_extend_to(i64_type, i16_type.const_int(instr.immediate() as _, true));
             let source = codegen.read_general_register(i64_type, instr.rs());
-            let cmp = codegen.zero_extend_to(
-                i64_type,
-                codegen
-                    .builder
-                    .build_int_compare(IntPredicate::ULT, source, imm, "sltiu_cmp"),
-            );
-
+            let cmp = codegen.zero_extend_to(i64_type, cmpu!(codegen, source < immediate));
             codegen.write_general_register(instr.rt(), cmp);
         }
 

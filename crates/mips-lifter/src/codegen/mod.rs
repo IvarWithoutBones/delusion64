@@ -16,24 +16,27 @@ use mips_decomp::{
     Exception, INSTRUCTION_SIZE,
 };
 
+#[macro_use]
+mod comparison;
+
+#[macro_export]
+macro_rules! env_call {
+    ($codegen:expr, $func:expr, [$($args:expr),*]) => {{
+        // Type-check the arguments.
+        let codegen: &$crate::codegen::CodeGen = $codegen;
+        let func: &$crate::runtime::RuntimeFunction = &$func;
+        let args = &[codegen.globals.env_ptr.as_pointer_value().into(), $($args.into()),*];
+        let func = codegen.module.get_function(func.name()).unwrap();
+        codegen.builder.build_call(func, args, "env_call")
+    }};
+}
+
 /// There are a few coprocessor 0 registers which are reserved, and therefore not properly implemented in hardware.
 /// Writing to any of them will fill a latch with the value, which can then be read back from any other reserved register.
 /// Because the latch is global across all reserved registers, we arbitrarily pick one to store its contents.
 pub(crate) const RESERVED_CP0_REGISTER_LATCH: register::Cp0 = register::Cp0::Reserved31;
 
 pub const FUNCTION_PREFIX: &str = "delusion64_jit_";
-
-#[macro_export]
-macro_rules! env_call {
-    ($codegen:expr, $func:expr, [$($args:expr),*]) => {{
-        // Type-check the arguments.
-        let codegen: &CodeGen = $codegen;
-        let func: &RuntimeFunction = &$func;
-        let args = &[codegen.globals.env_ptr.as_pointer_value().into(), $($args.into()),*];
-        let func = codegen.module.get_function(func.name()).unwrap();
-        codegen.builder.build_call(func, args, "env_call")
-    }};
-}
 
 const ATTRIBUTE_NAMES: &[&str] = &["noreturn", "nounwind", "nosync", "nofree", "nocf_check"];
 pub fn function_attributes(context: &Context) -> [Attribute; ATTRIBUTE_NAMES.len()] {
@@ -493,6 +496,11 @@ impl<'ctx> CodeGen<'ctx> {
         );
 
         self.builder.build_unreachable();
+    }
+
+    pub fn build_mask(&self, to_mask: IntValue<'ctx>, mask: u64, name: &str) -> IntValue<'ctx> {
+        let mask = self.context.i64_type().const_int(mask, false);
+        self.builder.build_and(to_mask, mask, name)
     }
 
     #[inline]
