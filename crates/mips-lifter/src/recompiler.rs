@@ -30,7 +30,7 @@ pub fn compile_instruction_with_delay_slot(
     let delay_slot_pc = pc + INSTRUCTION_SIZE as u64;
 
     let compile_delay_slot_instr = || {
-        // Update runtime metadata about delay slots so we can properly handle traps
+        // Update runtime metadata about delay slots so we can properly handle traps and exceptions
         codegen.set_inside_delay_slot(true);
         on_instruction(delay_slot_pc);
         compile_instruction(codegen, delay_slot_instr);
@@ -67,7 +67,7 @@ pub fn compile_instruction_with_delay_slot(
         // Recompile the delay slot instruction first, then the unconditional branch
         compile_delay_slot_instr();
         on_instruction(pc);
-        compile_unconditional_branch(codegen, instr, delay_slot_pc)
+        compile_unconditional_branch(codegen, instr, delay_slot_pc);
     }
 }
 
@@ -81,8 +81,22 @@ fn compile_unconditional_branch(codegen: &CodeGen, instr: &ParsedInstruction, de
         }
 
         Mnenomic::Jr => {
-            // Jump to address stored in rs
+            // Jump to address stored in rs. If the address is not aligned to a 4-byte boundary, an address error exception occurs.
             let source = codegen.read_general_register(i64_type, instr.rs());
+            codegen.build_if(
+                "jr_addr_misaligned",
+                {
+                    let low_bits = codegen.build_mask(source, 0b11, "jr_addr_low_two_bits");
+                    cmp!(codegen, low_bits != 0)
+                },
+                || {
+                    // The exception occurs during the instruction fetch stage after finishing this instruction.
+                    // Setting PC here makes the runtime set EPC correctly, since that's how it works for other instructions.
+                    codegen.write_register(register::Special::Pc, source);
+                    codegen.throw_exception(Exception::AddressLoad, Some(source))
+                },
+            );
+
             codegen.build_dynamic_jump(source);
         }
 
@@ -1247,12 +1261,23 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
         }
 
         Mnenomic::Sw => {
-            // Stores word from rt, to memory address (base + offset). If the low two bits of the address are not zero, an address error exception occurs.
+            // Stores word from rt, to memory address (base + offset). If the address is not word-aligned, an address error exception occurs.
             let address = codegen.base_plus_offset(instr, "sw_addr");
-            let low_bits = codegen.build_mask(address, 0b11, "sw_addr_low_two_bits");
             codegen.build_if(
-                "sw_addr_aligned",
-                cmp!(codegen, low_bits != i64_type.const_zero()),
+                "sw_addr_invalid",
+                {
+                    let align = {
+                        let low = codegen.build_mask(address, 0b11, "sw_addr_low_bits");
+                        cmp!(codegen, low != 0)
+                    };
+
+                    let upper = {
+                        let high = codegen.build_mask(address, u64::MAX << 32, "sw_addr_high_bits");
+                        cmp!(codegen, high == 0)
+                    };
+
+                    codegen.builder.build_or(align, upper, "sw_addr_invalid")
+                },
                 || codegen.throw_exception(Exception::AddressStore, Some(address)),
             );
 
@@ -1303,18 +1328,26 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
         }
 
         Mnenomic::Lw => {
-            // Loads word stored at memory address (base + offset), stores sign-extended word in rt
+            // Loads word stored at memory address (base + offset), stores sign-extended word in rt.
+            // If the address is not aligned to 4 bytes, or the upper 32 bits of the address are not zero, an address error exception occurs.
             let address = codegen.base_plus_offset(instr, "lw_addr");
+            codegen.build_if(
+                "lw_addr_invalid",
+                {
+                    let align = {
+                        let low = codegen.build_mask(address, 0b11, "lw_addr_low_bits");
+                        cmp!(codegen, low != 0)
+                    };
 
-            // Check if the lower two bits of the address are zero. If not, throw an address error exception.
-            let lower_bits_not_zero = {
-                let lower_bits = codegen.build_mask(address, 0b11, "lw_addr_lower_bits");
-                cmp!(codegen, lower_bits != i64_type.const_zero())
-            };
+                    let upper = {
+                        let high = codegen.build_mask(address, u64::MAX << 32, "lw_addr_high_bits");
+                        cmp!(codegen, high == 0)
+                    };
 
-            codegen.build_if("lw_addr_lower_bits_not_zero", lower_bits_not_zero, || {
-                codegen.throw_exception(Exception::AddressLoad, Some(address))
-            });
+                    codegen.builder.build_or(align, upper, "lw_addr_invalid")
+                },
+                || codegen.throw_exception(Exception::AddressLoad, Some(address)),
+            );
 
             let value = codegen.sign_extend_to(i64_type, codegen.read_memory(i32_type, address));
             codegen.write_general_register(instr.rt(), value);

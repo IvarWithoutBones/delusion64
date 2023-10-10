@@ -269,8 +269,12 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         let mut cause = self.registers.cause().with_exception_code(exception.into());
 
         if !self.registers.status().exception_level() {
-            // If we are inside of a delay slot, BadVAddr should be the address of the previous instruction, so that we dont skip over the branch.
-            let pc_vaddr = {
+            let new_status: u32 = self.registers.status().with_exception_level(true).into();
+            self.registers[register::Cp0::Status] = new_status as u64;
+
+            // If we are inside of a delay slot BadVAddr should be the address of the previous instruction,
+            // so that we dont skip over the branch when we return from the exception. Notify the CPU of this by setting the BD bit.
+            self.registers[register::Cp0::EPC] = {
                 let mut pc = self.registers[register::Special::Pc];
                 if self
                     .codegen
@@ -280,19 +284,13 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
                     .is_inside_delay_slot()
                 {
                     pc -= INSTRUCTION_SIZE as u64;
-                    // We also need to set `BD` in the Cause register when this happens.
                     cause.set_branch_delay(true);
                 } else {
                     cause.set_branch_delay(false);
                 }
 
-                // Sign extend from a u32 to a u64
-                pc as i32 as i64 as u64
+                pc as i32 as u64 // Truncate and sign-extend
             };
-            self.registers[register::Cp0::EPC] = pc_vaddr;
-
-            let new_status: u32 = self.registers.status().with_exception_level(true).into();
-            self.registers[register::Cp0::Status] = new_status as u64;
         }
 
         self.registers[register::Cp0::Cause] = cause.raw() as u64;

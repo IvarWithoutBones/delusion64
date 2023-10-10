@@ -470,13 +470,10 @@ impl<'ctx> CodeGen<'ctx> {
 
     pub fn base_plus_offset(&self, instr: &ParsedInstruction, add_name: &str) -> IntValue<'ctx> {
         let i16_type = self.context.i16_type();
-        let i32_type = self.context.i32_type();
         let i64_type = self.context.i64_type();
-
-        let base = self.read_general_register(i32_type, instr.base());
-        let offset = self.sign_extend_to(i32_type, i16_type.const_int(instr.offset() as _, true));
-        let result = self.builder.build_int_add(base, offset, add_name);
-        self.sign_extend_to(i64_type, result)
+        let base = self.read_general_register(i64_type, instr.base());
+        let offset = self.sign_extend_to(i64_type, i16_type.const_int(instr.offset() as _, true));
+        self.builder.build_int_add(base, offset, add_name)
     }
 
     pub fn throw_exception(&self, exception: Exception, bad_vaddr: Option<IntValue<'ctx>>) {
@@ -487,7 +484,7 @@ impl<'ctx> CodeGen<'ctx> {
             .context
             .bool_type()
             .const_int(bad_vaddr.is_some() as u64, false);
-        let bad_vaddr = bad_vaddr.or_else(|| Some(i64_type.const_zero())).unwrap();
+        let bad_vaddr = bad_vaddr.unwrap_or_else(|| i64_type.const_zero());
 
         env_call!(
             self,
