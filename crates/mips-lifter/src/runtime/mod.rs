@@ -460,7 +460,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
 
         let pc_vaddr = self.registers[register::Special::Pc];
         // let pc_paddr = self.virtual_to_physical_address(pc_vaddr, AccessMode::Read);
-
+        //
         // let instr = ParsedInstruction::try_from(u32::from_be_bytes(
         //     *self.read(pc_paddr).unwrap().as_slice(),
         // ))

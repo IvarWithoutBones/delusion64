@@ -166,5 +166,4 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
     pub(crate) unsafe extern "C" fn write_physical_u64(&mut self, paddr: u32, value: u64) {
         self.write_or_panic(None, paddr, value.into())
     }
-
 }

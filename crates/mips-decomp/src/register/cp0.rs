@@ -207,6 +207,8 @@ impl Status {
     /// A mask that covers all the writable bits of the register.
     pub const WRITE_MASK: u64 = 0b1111_1111_1111_0111_1111_1111_1111_1111;
 
+    pub const FR_MASK: u64 = 1 << 26;
+
     pub const fn new(raw: u32) -> Self {
         Self(raw)
     }

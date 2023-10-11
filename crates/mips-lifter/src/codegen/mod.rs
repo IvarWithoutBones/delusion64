@@ -7,17 +7,16 @@ use inkwell::{
     execution_engine::{ExecutionEngine, JitFunction},
     intrinsics::Intrinsic,
     module::Module,
-    types::{FloatType, IntType},
-    values::{CallSiteValue, FloatValue, FunctionValue, GlobalValue, IntValue, PointerValue},
+    types::IntType,
+    values::{CallSiteValue, FunctionValue, GlobalValue, IntValue},
 };
-use mips_decomp::{
-    instruction::ParsedInstruction,
-    register::{self, Register},
-    Exception, INSTRUCTION_SIZE,
-};
+use mips_decomp::{instruction::ParsedInstruction, Exception, INSTRUCTION_SIZE};
 
 #[macro_use]
 mod comparison;
+mod register;
+
+pub(crate) use register::RESERVED_CP0_REGISTER_LATCH;
 
 #[macro_export]
 macro_rules! env_call {
@@ -30,11 +29,6 @@ macro_rules! env_call {
         codegen.builder.build_call(func, args, "env_call")
     }};
 }
-
-/// There are a few coprocessor 0 registers which are reserved, and therefore not properly implemented in hardware.
-/// Writing to any of them will fill a latch with the value, which can then be read back from any other reserved register.
-/// Because the latch is global across all reserved registers, we arbitrarily pick one to store its contents.
-pub(crate) const RESERVED_CP0_REGISTER_LATCH: register::Cp0 = register::Cp0::Reserved31;
 
 pub const FUNCTION_PREFIX: &str = "delusion64_jit_";
 
@@ -173,7 +167,7 @@ impl<'ctx> CodeGen<'ctx> {
             codegen.builder.position_at_end(block);
             {
                 let i64_type = codegen.context.i64_type();
-                let pc = codegen.read_register(i64_type, register::Special::Pc);
+                let pc = codegen.read_register(i64_type, mips_decomp::register::Special::Pc);
                 let offset = i64_type.const_int(amount * INSTRUCTION_SIZE as u64, false);
                 let new_pc = codegen.builder.build_int_add(pc, offset, "new_pc");
                 codegen.build_dynamic_jump(new_pc);
@@ -498,333 +492,6 @@ impl<'ctx> CodeGen<'ctx> {
     pub fn build_mask(&self, to_mask: IntValue<'ctx>, mask: u64, name: &str) -> IntValue<'ctx> {
         let mask = self.context.i64_type().const_int(mask, false);
         self.builder.build_and(to_mask, mask, name)
-    }
-
-    #[inline]
-    fn register_pointer<T>(&self, reg: T) -> PointerValue<'ctx>
-    where
-        T: Into<Register>,
-    {
-        let reg = reg.into();
-        let i64_type = self.context.i64_type();
-
-        let base_ptr = match reg {
-            Register::GeneralPurpose(_) => {
-                self.globals.registers.general_purpose.as_pointer_value()
-            }
-            Register::Special(_) => self.globals.registers.special.as_pointer_value(),
-            Register::Cp0(_) => self.globals.registers.cp0.as_pointer_value(),
-            Register::Fpu(_) => self.globals.registers.fpu.as_pointer_value(),
-            Register::FpuControl(_) => self.globals.registers.fpu_control.as_pointer_value(),
-        };
-
-        unsafe {
-            self.builder.build_in_bounds_gep(
-                i64_type,
-                base_ptr,
-                &[i64_type.const_int(reg.to_repr() as _, false)],
-                &format!("{}_ptr", reg.name()),
-            )
-        }
-    }
-
-    /// Read the general-purpose register (GPR) at the given index.
-    /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits returned.
-    pub fn read_general_register<T>(&self, ty: IntType<'ctx>, index: T) -> IntValue<'ctx>
-    where
-        T: Into<u64>,
-    {
-        let reg = register::GeneralPurpose::from_repr(index.into() as _).unwrap();
-        if reg == register::GeneralPurpose::Zero {
-            // Register zero is hardwired to zero.
-            ty.const_zero()
-        } else {
-            let name = format!("{}_", reg.name());
-            let reg_ptr = self.register_pointer(reg);
-            self.builder.build_load(ty, reg_ptr, &name).into_int_value()
-        }
-    }
-
-    /// Read the CP0 register at the given index.
-    /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits returned.
-    pub fn read_cp0_register<T>(&self, ty: IntType<'ctx>, index: T) -> IntValue<'ctx>
-    where
-        T: Into<u64>,
-    {
-        let mut reg = register::Cp0::from_repr(index.into() as usize).unwrap();
-        if reg.is_reserved() {
-            // Reserved registers use a global latch, redirect to the place we store it.
-            reg = RESERVED_CP0_REGISTER_LATCH;
-        }
-
-        let name = &format!("{}_", reg.name());
-        let register = self.register_pointer(reg);
-        self.builder.build_load(ty, register, name).into_int_value()
-    }
-
-    /// Read the floating-point unit (FPU) register at the given index.
-    /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits returned.
-    pub fn read_fpu_register<T>(&self, ty: IntType<'ctx>, index: T) -> IntValue<'ctx>
-    where
-        T: Into<u64>,
-    {
-        let reg = register::Fpu::from_repr(index.into() as usize).unwrap();
-        let name = format!("{}_", reg.name());
-        let reg_ptr = self.register_pointer(reg);
-        self.builder.build_load(ty, reg_ptr, &name).into_int_value()
-    }
-
-    pub fn read_fpu_register_float<T>(&self, ty: FloatType<'ctx>, index: T) -> FloatValue<'ctx>
-    where
-        T: Into<u64>,
-    {
-        let reg = register::Fpu::from_repr(index.into() as usize).unwrap();
-        let name = format!("{}_", reg.name());
-        let reg_ptr = self.register_pointer(reg);
-        self.builder
-            .build_load(ty, reg_ptr, &name)
-            .into_float_value()
-    }
-
-    /// Read the floating-point unit (FPU) control register at the given index.
-    /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits returned.
-    pub fn read_fpu_control_register<T>(&self, ty: IntType<'ctx>, index: T) -> IntValue<'ctx>
-    where
-        T: Into<u64>,
-    {
-        let reg = register::FpuControl::from_repr(index.into() as usize).unwrap();
-        let name = format!("{}_", reg.name());
-        let reg_ptr = self.register_pointer(reg);
-        self.builder.build_load(ty, reg_ptr, &name).into_int_value()
-    }
-
-    /// Read the specified miscellaneous "special" register.
-    /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits returned.
-    pub fn read_special_register(
-        &self,
-        ty: IntType<'ctx>,
-        reg: register::Special,
-    ) -> IntValue<'ctx> {
-        let name = &format!("{}_", reg.name());
-        let register = self.register_pointer(reg);
-        self.builder.build_load(ty, register, name).into_int_value()
-    }
-
-    /// Read the specified register.
-    /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits returned.
-    pub fn read_register<T>(&self, ty: IntType<'ctx>, reg: T) -> IntValue<'ctx>
-    where
-        T: Into<Register>,
-    {
-        match reg.into() {
-            Register::GeneralPurpose(reg) => self.read_general_register(ty, reg),
-            Register::Special(reg) => self.read_special_register(ty, reg),
-            Register::Cp0(reg) => self.read_cp0_register(ty, reg),
-            Register::Fpu(reg) => self.read_fpu_register(ty, reg),
-            Register::FpuControl(reg) => self.read_fpu_control_register(ty, reg),
-        }
-    }
-
-    pub fn write_general_register<T>(&self, index: T, value: IntValue<'ctx>)
-    where
-        T: Into<u64>,
-    {
-        let reg = register::GeneralPurpose::from_repr(index.into() as _).unwrap();
-        if reg != register::GeneralPurpose::Zero {
-            // Register zero is hardwired to zero.
-            let register = self.register_pointer(reg);
-            self.builder.build_store(register, value);
-        }
-    }
-
-    pub fn write_cp0_register<T>(&self, index: T, mut value: IntValue<'ctx>)
-    where
-        T: Into<u64>,
-    {
-        let mut reg = register::Cp0::from_repr(index.into() as usize).unwrap();
-        match reg {
-            register::Cp0::BadVAddr | register::Cp0::PRId | register::Cp0::CacheErr => {
-                // Read-only
-                return;
-            }
-
-            register::Cp0::Config => {
-                // All writable get set zero prior to writing.
-                let mask = value
-                    .get_type()
-                    .const_int(register::cp0::Config::WRITE_MASK, false);
-                let masked_value = self
-                    .builder
-                    .build_and(value, mask, "cop0_config_value_mask");
-                let masked_config = {
-                    let config = self.read_register(value.get_type(), register::Cp0::Config);
-                    self.builder
-                        .build_and(config, mask.const_not(), "cop0_config_reg_mask")
-                };
-
-                value = self
-                    .builder
-                    .build_or(masked_config, masked_value, "cop0_config_value");
-            }
-
-            register::Cp0::Status => {
-                // Bit 19 of the Status register is writable, and neither are the upper 32 bits. Mask them out.
-                let mask = value
-                    .get_type()
-                    .const_int(register::cp0::Status::WRITE_MASK, false);
-                value = self.builder.build_and(value, mask, "cop0_status_masked");
-            }
-
-            register::Cp0::PErr => {
-                // Only the lower 8 bits are writable.
-                let mask = value
-                    .get_type()
-                    .const_int(register::cp0::PErr::WRITE_MASK, false);
-                value = self.builder.build_and(value, mask, "cop0_perr_masked");
-            }
-
-            register::Cp0::LLAddr => {
-                // 32-bit register, mask out the upper bits.
-                let mask = value
-                    .get_type()
-                    .const_int(register::cp0::LLAddr::WRITE_MASK, false);
-                value = self.builder.build_and(value, mask, "cop0_lladdr_masked");
-            }
-
-            register::Cp0::Index => {
-                // Not all bits of the Index register are writable, mask them out.
-                let mask = value
-                    .get_type()
-                    .const_int(register::cp0::Index::WRITE_MASK, false);
-                value = self.builder.build_and(value, mask, "cop0_index_masked");
-            }
-
-            register::Cp0::Wired => {
-                // Not all bits of the Wired register are writable, mask them out.
-                let mask = value
-                    .get_type()
-                    .const_int(register::cp0::Wired::WRITE_MASK, false);
-                value = self.builder.build_and(value, mask, "cop0_index_masked");
-            }
-
-            register::Cp0::Context => {
-                // Combine the existent BadVPN2, together with PTEBase from the value.
-                let i64_type = self.context.i64_type();
-                let masked_value = {
-                    let mask = i64_type
-                        .const_int(register::cp0::Context::PAGE_TABLE_ENTRY_BASE_MASK, false);
-                    self.builder.build_and(
-                        self.sign_extend_to(i64_type, value),
-                        mask,
-                        "cop0_context_value_mask",
-                    )
-                };
-
-                let masked_context = {
-                    let context = self.read_register(i64_type, register::Cp0::Context);
-                    let mask = i64_type.const_int(register::cp0::Context::READ_ONLY_MASK, false);
-                    self.builder
-                        .build_and(context, mask, "cop0_context_reg_mask")
-                };
-
-                value = self
-                    .builder
-                    .build_or(masked_context, masked_value, "cp0_context_value");
-            }
-
-            register::Cp0::XContext => {
-                // Combine the existent BadVPN2 and ASID, together with PTEBase from the value.
-                let i64_type = self.context.i64_type();
-                let masked_value = {
-                    let mask = i64_type
-                        .const_int(register::cp0::XContext::PAGE_TABLE_ENTRY_BASE_MASK, false);
-                    self.builder.build_and(
-                        self.sign_extend_to(i64_type, value),
-                        mask,
-                        "cop0_xcontext_value_mask",
-                    )
-                };
-
-                let masked_context = {
-                    let context = self.read_register(i64_type, register::Cp0::XContext);
-                    let mask = i64_type.const_int(register::cp0::XContext::READ_ONLY_MASK, false);
-                    self.builder
-                        .build_and(context, mask, "cop0_xcontext_reg_mask")
-                };
-
-                value = self
-                    .builder
-                    .build_or(masked_context, masked_value, "cp0_xcontext_value");
-            }
-
-            _ => {
-                if reg.is_reserved() {
-                    // Reserved registers store the value in a global latch, redirect to that.
-                    reg = RESERVED_CP0_REGISTER_LATCH;
-                }
-            }
-        }
-
-        let reg_ptr = self.register_pointer(reg);
-        self.builder.build_store(reg_ptr, value);
-
-        if reg != RESERVED_CP0_REGISTER_LATCH {
-            // Any CP0 register write sets the reserved latch as well as the target register.
-            let reserved_latch = self.register_pointer(RESERVED_CP0_REGISTER_LATCH);
-            self.builder.build_store(reserved_latch, value);
-        }
-    }
-
-    pub fn write_fpu_register<T>(&self, index: T, value: IntValue<'ctx>)
-    where
-        T: Into<u64>,
-    {
-        let reg = register::Fpu::from_repr(index.into() as _).unwrap();
-        let reg_ptr = self.register_pointer(reg);
-        self.builder.build_store(reg_ptr, value);
-    }
-
-    pub fn write_fpu_register_float<T>(&self, index: T, value: FloatValue<'ctx>)
-    where
-        T: Into<u64>,
-    {
-        let reg = register::Fpu::from_repr(index.into() as _).unwrap();
-        let reg_ptr = self.register_pointer(reg);
-        self.builder.build_store(reg_ptr, value);
-    }
-
-    pub fn write_fpu_control_register<T>(&self, index: T, mut value: IntValue<'ctx>)
-    where
-        T: Into<u64>,
-    {
-        let reg = register::FpuControl::from_repr(index.into() as usize).unwrap();
-        if reg == register::FpuControl::ControlStatus {
-            let mask = value
-                .get_type()
-                .const_int(register::fpu::ControlStatus::WRITE_MASK, false);
-            value = self.builder.build_and(value, mask, "fpu_control_masked");
-
-            let reg_ptr = self.register_pointer(reg);
-            self.builder.build_store(reg_ptr, value);
-        }
-    }
-
-    pub fn write_special_register(&self, reg: register::Special, value: IntValue<'ctx>) {
-        let register = self.register_pointer(reg);
-        self.builder.build_store(register, value);
-    }
-
-    pub fn write_register<T>(&self, reg: T, value: IntValue<'ctx>)
-    where
-        T: Into<Register>,
-    {
-        match reg.into() {
-            Register::GeneralPurpose(reg) => self.write_general_register(reg, value),
-            Register::Cp0(reg) => self.write_cp0_register(reg, value),
-            Register::Fpu(reg) => self.write_fpu_register(reg, value),
-            Register::FpuControl(reg) => self.write_fpu_control_register(reg, value),
-            Register::Special(reg) => self.write_special_register(reg, value),
-        }
     }
 
     pub fn read_memory(&self, ty: IntType<'ctx>, address: IntValue<'ctx>) -> IntValue<'ctx> {
