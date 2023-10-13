@@ -19,6 +19,11 @@ fn jump_address(delay_slot_pc: u64, target: u32) -> u64 {
     shifted_target | masked_delay_slot
 }
 
+enum JumpTarget<'ctx> {
+    Constant(u64),
+    Dynamic(IntValue<'ctx>),
+}
+
 pub fn compile_instruction_with_delay_slot(
     codegen: &CodeGen,
     pc: u64,
@@ -39,7 +44,7 @@ pub fn compile_instruction_with_delay_slot(
 
     if instr.mnemonic().is_branch() {
         // Evaluate the branch condition prior to running the delay slot instruction,
-        // as the delay slot instruction can influence the branch condition. TODO: Is this correct?
+        // as the delay slot instruction can influence the branch condition.
         let name = &format!("{}_cmp", instr.mnemonic().name());
         let comparison = {
             let (pred, lhs, rhs) = evaluate_conditional_branch(codegen, instr, delay_slot_pc);
@@ -64,20 +69,38 @@ pub fn compile_instruction_with_delay_slot(
             codegen.build_constant_jump(target_pc)
         });
     } else {
-        // Recompile the delay slot instruction first, then the unconditional branch
+        // Evaluate the jump target, and set the link register if needed, prior to executing the delay slot instruction.
+        let target = evaluate_unconditional_branch(codegen, instr, delay_slot_pc);
+
+        // Compile the delay slot, writes to the jump target register will be ignored.
         compile_delay_slot_instr();
+
+        // Execute the jump.
         on_instruction(pc);
-        compile_unconditional_branch(codegen, instr, delay_slot_pc);
+        match target {
+            JumpTarget::Constant(vaddr) => codegen.build_constant_jump(vaddr),
+            JumpTarget::Dynamic(vaddr) => codegen.build_dynamic_jump(vaddr),
+        }
     }
 }
 
-fn compile_unconditional_branch(codegen: &CodeGen, instr: &ParsedInstruction, delay_slot_pc: u64) {
+fn evaluate_unconditional_branch<'ctx>(
+    codegen: &CodeGen<'ctx>,
+    instr: &ParsedInstruction,
+    delay_slot_pc: u64,
+) -> JumpTarget<'ctx> {
     let i64_type = codegen.context.i64_type();
+    let return_address = i64_type.const_int(delay_slot_pc + INSTRUCTION_SIZE as u64, false);
     match instr.mnemonic() {
         Mnenomic::J => {
             // Jump to target address
-            let addr = jump_address(delay_slot_pc, instr.immediate());
-            codegen.build_constant_jump(addr);
+            JumpTarget::Constant(jump_address(delay_slot_pc, instr.immediate()))
+        }
+
+        Mnenomic::Jal => {
+            // Jump to target address, stores return address in r31 (ra)
+            codegen.write_register(register::GeneralPurpose::Ra, return_address);
+            JumpTarget::Constant(jump_address(delay_slot_pc, instr.immediate()))
         }
 
         Mnenomic::Jr => {
@@ -96,24 +119,15 @@ fn compile_unconditional_branch(codegen: &CodeGen, instr: &ParsedInstruction, de
                     codegen.throw_exception(Exception::AddressLoad, None, Some(source))
                 },
             );
-
-            codegen.build_dynamic_jump(source);
-        }
-
-        Mnenomic::Jal => {
-            // Jump to target address, stores return address in r31 (ra)
-            let return_address = i64_type.const_int(delay_slot_pc + INSTRUCTION_SIZE as u64, false);
-            codegen.write_register(register::GeneralPurpose::Ra, return_address);
-            let addr = jump_address(delay_slot_pc, instr.immediate());
-            codegen.build_constant_jump(addr);
+            JumpTarget::Dynamic(source)
         }
 
         Mnenomic::Jalr => {
             // Jump to address stored in rs, stores return address in rd
-            let return_address = i64_type.const_int(delay_slot_pc + INSTRUCTION_SIZE as u64, false);
             codegen.write_general_register(instr.rd(), return_address);
-            let source = codegen.read_general_register(i64_type, instr.rs());
-            codegen.build_dynamic_jump(source);
+            JumpTarget::Dynamic(
+                codegen.read_general_register(codegen.context.i64_type(), instr.rs()),
+            )
         }
 
         _ => unreachable!(),
@@ -222,6 +236,16 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
         Mnenomic::Cache => {
             // Flush instruction or data cache at address (base + offset) to RAM
             // There is no need to emulate the instruction/data cache, so we'll ignore it for now.
+        }
+
+        Mnenomic::Break => {
+            // A breakpoint exception occurs after execution of this instruction, transferring control to the exception handler.
+            codegen.throw_exception(Exception::Breakpoint, Some(0), None);
+        }
+
+        Mnenomic::Syscall => {
+            // A system call exception occurs after this instruction is executed, transferring control to the exception handler.
+            codegen.throw_exception(Exception::SystemCall, Some(0), None);
         }
 
         Mnenomic::Eret => {

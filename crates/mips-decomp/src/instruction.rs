@@ -297,7 +297,11 @@ impl Mnenomic {
     }
 
     pub const fn has_delay_slot(&self) -> bool {
-        self.ends_block() && !matches!(self, Mnenomic::Break | Mnenomic::Eret)
+        self.ends_block() && !matches!(self, Mnenomic::Break | Mnenomic::Eret | Mnenomic::Syscall)
+    }
+
+    pub const fn sets_return_address(&self) -> bool {
+        matches!(self, Mnenomic::Jal | Mnenomic::Jalr)
     }
 
     pub const fn name(&self) -> &'static str {
