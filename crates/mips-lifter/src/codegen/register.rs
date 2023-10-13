@@ -8,7 +8,11 @@ use mips_decomp::register::{self, Register};
 /// There are a few coprocessor 0 registers which are reserved, and therefore not properly implemented in hardware.
 /// Writing to any of them will fill a latch with the value, which can then be read back from any other reserved register.
 /// Because the latch is global across all reserved registers, we arbitrarily pick one to store its contents.
-pub(crate) const RESERVED_CP0_REGISTER_LATCH: register::Cp0 = register::Cp0::Reserved31;
+pub(crate) const RESERVED_CP0_REGISTER_LATCH: register::Cp0 = register::Cp0::Reserved7;
+
+/// Coprocessor 2 registers are not implemented, the value is instead stored into one global latch.
+/// Since we only ever write to one of the reserved CP0 registers, we can reuse one to store the CP2 register value.
+pub(crate) const CP2_REGISTER_LATCH: register::Cp0 = register::Cp0::Reserved21;
 
 impl<'ctx> CodeGen<'ctx> {
     fn fpu_general_register_pointer<T>(&self, ty: IntType<'ctx>, index: T) -> PointerValue<'ctx>
@@ -198,6 +202,15 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.build_load(ty, register, name).into_int_value()
     }
 
+    /// Read the coprocessor 2 (CP2) register latch.
+    /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits returned.
+    pub fn read_cp2_register(&self, ty: IntType<'ctx>) -> IntValue<'ctx> {
+        let register = self.register_pointer(CP2_REGISTER_LATCH);
+        self.builder
+            .build_load(ty, register, "cp2_register_latch_")
+            .into_int_value()
+    }
+
     /// Read the specified register.
     /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits returned.
     pub fn read_register<T>(&self, ty: IntType<'ctx>, reg: T) -> IntValue<'ctx>
@@ -385,19 +398,33 @@ impl<'ctx> CodeGen<'ctx> {
         T: Into<u64>,
     {
         let reg = register::FpuControl::from_repr(index.into() as usize).unwrap();
-        if reg == register::FpuControl::ControlStatus {
-            let mask = value
-                .get_type()
-                .const_int(register::fpu::ControlStatus::WRITE_MASK, false);
-            value = self.builder.build_and(value, mask, "fpu_control_masked");
+        match reg {
+            register::FpuControl::ControlStatus => {
+                value = self.build_mask(
+                    value,
+                    register::fpu::ControlStatus::WRITE_MASK,
+                    "fpu_control_masked",
+                );
+                self.builder.build_store(self.register_pointer(reg), value);
+            }
 
-            let reg_ptr = self.register_pointer(reg);
-            self.builder.build_store(reg_ptr, value);
+            // Read-only
+            register::FpuControl::ImplementationRevision => {}
+
+            // These are all reserved, should handle this properly at some point.
+            _ => todo!("write_fpu_control_register: {reg:?}"),
         }
     }
 
     pub fn write_special_register(&self, reg: register::Special, value: IntValue<'ctx>) {
         let register = self.register_pointer(reg);
+        self.builder.build_store(register, value);
+    }
+
+    /// Write the coprocessor 2 (CP2) register latch.
+    /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits returned.
+    pub fn write_cp2_register(&self, value: IntValue<'ctx>) {
+        let register = self.register_pointer(CP2_REGISTER_LATCH);
         self.builder.build_store(register, value);
     }
 

@@ -255,7 +255,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         }
     }
 
-    pub(crate) fn handle_exception(&mut self, exception: Exception) {
+    pub(crate) fn handle_exception(&mut self, exception: Exception, coprocessor: Option<u8>) {
         if self
             .registers
             .status()
@@ -265,8 +265,10 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
             todo!("bootstrap exception vectors");
         }
 
-        // TODO: handle coprocessor field
         let mut cause = self.registers.cause().with_exception_code(exception.into());
+        if let Some(cop) = coprocessor {
+            cause.set_coprocessor_error(cop);
+        }
 
         if !self.registers.status().exception_level() {
             let new_status: u32 = self.registers.status().with_exception_level(true).into();
@@ -307,6 +309,8 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
     unsafe extern "C" fn handle_exception_jit(
         &mut self,
         code: u64,
+        has_coprocessor: bool,
+        coprocessor: u8,
         has_bad_vaddr: bool,
         bad_vaddr: u64,
     ) {
@@ -332,7 +336,8 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
             self.registers[register::Cp0::XContext] = xcontext.into();
         }
 
-        self.handle_exception(exception);
+        let cop = has_coprocessor.then_some(coprocessor);
+        self.handle_exception(exception, cop);
     }
 
     unsafe extern "C" fn get_physical_address(&mut self, vaddr: u64) -> u32 {
@@ -455,7 +460,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
     unsafe extern "C" fn on_instruction(&mut self) {
         if self.interrupt_pending {
             self.interrupt_pending = false;
-            self.handle_exception(Exception::Interrupt);
+            self.handle_exception(Exception::Interrupt, None);
         }
 
         let pc_vaddr = self.registers[register::Special::Pc];

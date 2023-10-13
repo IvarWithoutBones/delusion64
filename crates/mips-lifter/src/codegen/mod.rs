@@ -470,9 +470,26 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.build_int_add(base, offset, add_name)
     }
 
-    pub fn throw_exception(&self, exception: Exception, bad_vaddr: Option<IntValue<'ctx>>) {
+    pub fn throw_exception(
+        &self,
+        exception: Exception,
+        coprocessor: Option<u8>,
+        bad_vaddr: Option<IntValue<'ctx>>,
+    ) {
         let i64_type = self.context.i64_type();
+        let i8_type = self.context.i8_type();
         let exception = i64_type.const_int(exception as u64, false);
+
+        let has_coprocessor = self
+            .context
+            .bool_type()
+            .const_int(coprocessor.is_some() as u64, false);
+        let coprocessor = coprocessor
+            .map(|cop| {
+                assert!(cop <= 3, "invalid coprocessor in throw_exception: {cop}");
+                i8_type.const_int(cop as u64, false)
+            })
+            .unwrap_or_else(|| i8_type.const_zero());
 
         let has_bad_vaddr = self
             .context
@@ -483,7 +500,13 @@ impl<'ctx> CodeGen<'ctx> {
         env_call!(
             self,
             RuntimeFunction::HandleException,
-            [exception, has_bad_vaddr, bad_vaddr]
+            [
+                exception,
+                has_coprocessor,
+                coprocessor,
+                has_bad_vaddr,
+                bad_vaddr
+            ]
         );
 
         self.builder.build_unreachable();

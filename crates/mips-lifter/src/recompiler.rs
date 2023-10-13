@@ -93,7 +93,7 @@ fn compile_unconditional_branch(codegen: &CodeGen, instr: &ParsedInstruction, de
                     // The exception occurs during the instruction fetch stage after finishing this instruction.
                     // Setting PC here makes the runtime set EPC correctly, since that's how it works for other instructions.
                     codegen.write_register(register::Special::Pc, source);
-                    codegen.throw_exception(Exception::AddressLoad, Some(source))
+                    codegen.throw_exception(Exception::AddressLoad, None, Some(source))
                 },
             );
 
@@ -324,6 +324,27 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             // Copy contents of CP1 register fs, to GPR rt
             let source = codegen.read_fpu_register(i32_type, instr.fs());
             codegen.write_general_register(instr.rt(), codegen.sign_extend_to(i64_type, source));
+        }
+
+        Mnenomic::Mfc2 => {
+            // Copy contents of CP2 register rt, to GPR rt
+            let cop2_enabled = codegen.build_mask(
+                codegen.read_register(i32_type, register::Cp0::Status),
+                register::cp0::Status::COPROCESSOR_2_ENABLED_MASK,
+                "cop2_enabled",
+            );
+
+            codegen.build_if_else(
+                "mfc2_cop2_enabled",
+                cmp!(codegen, cop2_enabled != 0),
+                || {
+                    let target = codegen.read_cp2_register(i32_type);
+                    codegen.write_general_register(instr.rt(), target);
+                },
+                || {
+                    codegen.throw_exception(Exception::CoprocessorUnusable, Some(2), None);
+                },
+            );
         }
 
         Mnenomic::Dmtc0 => {
@@ -1278,7 +1299,7 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
 
                     codegen.builder.build_or(align, upper, "sw_addr_invalid")
                 },
-                || codegen.throw_exception(Exception::AddressStore, Some(address)),
+                || codegen.throw_exception(Exception::AddressStore, None, Some(address)),
             );
 
             let target = codegen.read_general_register(i32_type, instr.rt());
@@ -1346,7 +1367,7 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
 
                     codegen.builder.build_or(align, upper, "lw_addr_invalid")
                 },
-                || codegen.throw_exception(Exception::AddressLoad, Some(address)),
+                || codegen.throw_exception(Exception::AddressLoad, None, Some(address)),
             );
 
             let value = codegen.sign_extend_to(i64_type, codegen.read_memory(i32_type, address));

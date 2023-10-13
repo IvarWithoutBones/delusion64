@@ -209,6 +209,11 @@ impl Status {
 
     pub const FR_MASK: u64 = 1 << 26;
 
+    pub const COPROCESSOR_0_ENABLED_MASK: u64 = 1 << 28;
+    pub const COPROCESSOR_1_ENABLED_MASK: u64 = 1 << 29;
+    pub const COPROCESSOR_2_ENABLED_MASK: u64 = 1 << 30;
+    pub const COPROCESSOR_3_ENABLED_MASK: u64 = 1 << 31;
+
     pub const fn new(raw: u32) -> Self {
         Self(raw)
     }

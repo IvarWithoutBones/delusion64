@@ -70,12 +70,19 @@ impl RuntimeFunction {
             Self::Panic => sig!(void_type, [string_ptr: ptr_type, len: i64_type]),
             // `Environment::on_instruction(&mut self)`
             Self::OnInstruction => sig!(void_type, []),
-            // `Environment::get_function_ptr(&mut self, vaddr: u64) -> u64
+            // `Environment::get_function_ptr(&mut self, vaddr: u64) -> u64`
             Self::GetFunctionPtr => sig!(i64_type, [vaddr: i64_type]),
 
-            // `Environment::handle_exception_jit(&mut self, exception_code: u64, has_bad_vaddr: bool, bad_vaddr: u64)`
+            // `Environment::handle_exception_jit(
+            //     &mut self,
+            //     code: u64,
+            //     has_coprocessor: bool,
+            //     coprocessor: u8,
+            //     has_bad_vaddr: bool,
+            //     bad_vaddr: u64,
+            // )`
             Self::HandleException => {
-                sig!(void_type, [exception_code: i64_type, has_bad_vaddr: bool_type, bad_vaddr: i64_type])
+                sig!(void_type, [exception_code: i64_type, has_coprocessor: bool_type, coprocessor: i8_type, has_bad_vaddr: bool_type, bad_vaddr: i64_type])
             }
             // `Environment::get_physical_address(&mut self, vaddr: u64) -> u32`
             Self::GetPhysicalAddress => sig!(i32_type, [vaddr: i64_type]),
