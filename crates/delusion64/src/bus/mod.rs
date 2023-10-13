@@ -247,9 +247,32 @@ impl BusInterface for Bus {
         let range = address.offset..address.offset + SIZE;
         match address.section {
             BusSection::RdramMemory => self.rdram[range].copy_from_slice(value.as_slice()),
-            BusSection::RspDMemory => self.rsp_dmem[range].copy_from_slice(value.as_slice()),
-            BusSection::RspIMemory => self.rsp_imem[range].copy_from_slice(value.as_slice()),
-            BusSection::PifRam => self.pif_ram[range].copy_from_slice(value.as_slice()),
+
+            BusSection::RspDMemory | BusSection::RspIMemory => {
+                let (range, slice) = if SIZE > 4 {
+                    // 64-bit values are truncated to 32 bits.
+                    (address.offset..address.offset + 4, &value.as_slice()[..4])
+                } else {
+                    (range, &value.as_slice()[..])
+                };
+
+                match address.section {
+                    BusSection::RspDMemory => self.rsp_dmem[range].copy_from_slice(slice),
+                    BusSection::RspIMemory => self.rsp_imem[range].copy_from_slice(slice),
+                    _ => unreachable!(),
+                }
+            }
+
+            BusSection::PifRam => {
+                self.pif_ram[range.clone()].copy_from_slice(value.as_slice());
+                if SIZE < 4 {
+                    // Still writes 32 bits, filling everything that does not come from the value with zeros.
+                    let end = range.end;
+                    if let Some(remainder) = self.pif_ram.get_mut(end..end + (32 - SIZE)) {
+                        remainder.fill(0);
+                    }
+                }
+            }
 
             BusSection::MipsInterface => self
                 .mi
