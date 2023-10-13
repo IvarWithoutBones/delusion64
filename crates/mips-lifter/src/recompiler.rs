@@ -280,6 +280,7 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
         Mnenomic::Ctc1 => {
             // Copy contents of GPR rt, to CP1's control register fcr. When writing to FCR31,
             // the cause bit of FCR31 and the corresponding enable bit are set, a floating-point exception occurs.
+            codegen.assert_coprocessor_usable(1);
             let target = codegen.read_general_register(i64_type, instr.rt());
             codegen.write_fpu_control_register(instr.fcr(), target);
 
@@ -344,9 +345,24 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             }
         }
 
+        Mnenomic::Ctc2 => {
+            // Copy contents of GPR rt, to CP2 register rd.
+            codegen.assert_coprocessor_usable(2);
+            let target = codegen.read_general_register(i64_type, instr.rt());
+            codegen.write_cp2_register(target);
+        }
+
         Mnenomic::Cfc1 => {
             // Copy contents of CP1's control register frc, to GPR rt
+            codegen.assert_coprocessor_usable(1);
             let source = codegen.read_fpu_control_register(i64_type, instr.fcr());
+            codegen.write_general_register(instr.rt(), source);
+        }
+
+        Mnenomic::Cfc2 => {
+            // Copy contents of CP2's control register rd, to GPR rt.
+            codegen.assert_coprocessor_usable(2);
+            let source = codegen.read_cp2_register(i64_type);
             codegen.write_general_register(instr.rt(), source);
         }
 
@@ -370,8 +386,21 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
 
         Mnenomic::Mtc1 => {
             // Copy contents of GPR rt, to CP1 register fs
+            codegen.assert_coprocessor_usable(1);
             let target = codegen.read_general_register(i32_type, instr.rt());
             codegen.write_fpu_register(instr.fs(), target);
+        }
+
+        Mnenomic::Mtc2 => {
+            // Copy contents of GPR rt, to CP2 register rd
+            codegen.assert_coprocessor_usable(2);
+            let target = codegen.read_general_register(i32_type, instr.rt());
+            codegen.write_cp2_register(target);
+        }
+
+        Mnenomic::Mtc3 => {
+            // Copy contents of GPR rt, to CP3 register rd
+            codegen.throw_exception(Exception::ReservedInstruction, Some(0), None);
         }
 
         Mnenomic::Mfc0 => {
@@ -383,29 +412,21 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
 
         Mnenomic::Mfc1 => {
             // Copy contents of CP1 register fs, to GPR rt
+            codegen.assert_coprocessor_usable(1);
             let source = codegen.read_fpu_register(i32_type, instr.fs());
             codegen.write_general_register(instr.rt(), codegen.sign_extend_to(i64_type, source));
         }
 
         Mnenomic::Mfc2 => {
             // Copy contents of CP2 register rt, to GPR rt
-            let cop2_enabled = codegen.build_mask(
-                codegen.read_register(i32_type, register::Cp0::Status),
-                register::cp0::Status::COPROCESSOR_2_ENABLED_MASK,
-                "cop2_enabled",
-            );
+            codegen.assert_coprocessor_usable(2);
+            let target = codegen.read_cp2_register(i32_type);
+            codegen.write_general_register(instr.rt(), target);
+        }
 
-            codegen.build_if_else(
-                "mfc2_cop2_enabled",
-                cmp!(codegen, cop2_enabled != 0),
-                || {
-                    let target = codegen.read_cp2_register(i32_type);
-                    codegen.write_general_register(instr.rt(), target);
-                },
-                || {
-                    codegen.throw_exception(Exception::CoprocessorUnusable, Some(2), None);
-                },
-            );
+        Mnenomic::Mfc3 => {
+            // Copy contents of CP3 register rt, to GPR rt
+            codegen.throw_exception(Exception::ReservedInstruction, Some(0), None);
         }
 
         Mnenomic::Dmtc0 => {
@@ -416,8 +437,16 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
 
         Mnenomic::Dmtc1 => {
             // Copy doubleword contents of GPR rt, to CP1 register fs
+            codegen.assert_coprocessor_usable(1);
             let target = codegen.read_general_register(i64_type, instr.rt());
             codegen.write_fpu_register(instr.fs(), target);
+        }
+
+        Mnenomic::Dmtc2 => {
+            // Copy doubleword contents of GPR rt, to CP2 register rs
+            codegen.assert_coprocessor_usable(2);
+            let target = codegen.read_general_register(i64_type, instr.rt());
+            codegen.write_cp2_register(target);
         }
 
         Mnenomic::Dmfc0 => {
@@ -428,7 +457,15 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
 
         Mnenomic::Dmfc1 => {
             // Copy doubleword contents of CP1 register fs, to GPR rt
+            codegen.assert_coprocessor_usable(1);
             let source = codegen.read_fpu_register(i64_type, instr.fs());
+            codegen.write_general_register(instr.rt(), source);
+        }
+
+        Mnenomic::Dmfc2 => {
+            // Copy doubleword contents of CP2 register rs, to GPR rt
+            codegen.assert_coprocessor_usable(2);
+            let source = codegen.read_cp2_register(i64_type);
             codegen.write_general_register(instr.rt(), source);
         }
 
@@ -1625,13 +1662,15 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
 
         Mnenomic::Ldc1 => {
             // Copies double-word stored at memory address (base + offset), to CP1 register ft.
-            let addr = codegen.base_plus_offset(instr, "lwc1_addr");
+            codegen.assert_coprocessor_usable(1);
+            let addr = codegen.base_plus_offset(instr, "ldc1_addr");
             let value = codegen.read_memory(i64_type, addr);
             codegen.write_fpu_register(instr.ft(), value);
         }
 
         Mnenomic::Lwc1 => {
             // Copies word stored at memory address (base + offset), to CP1 register ft.
+            codegen.assert_coprocessor_usable(1);
             let addr = codegen.base_plus_offset(instr, "lwc1_addr");
             let value = codegen.read_memory(i32_type, addr);
             // TODO: This should go in the upper/lower 32 bits depending on the FR field in CP0 Status
@@ -1640,6 +1679,7 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
 
         Mnenomic::Swc1 => {
             // Stores word at CP1 register ft, to memory address (base + offset)
+            codegen.assert_coprocessor_usable(1);
             let value = codegen.read_fpu_register(i32_type, instr.ft());
             let addr = codegen.base_plus_offset(instr, "swc1_addr");
             codegen.write_memory(addr, value);
@@ -1647,6 +1687,7 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
 
         Mnenomic::Sdc1 => {
             // Stores double-word at CP1 register ft, to memory address (base + offset)
+            codegen.assert_coprocessor_usable(1);
             let value = codegen.read_fpu_register(i64_type, instr.ft());
             let addr = codegen.base_plus_offset(instr, "sdc1_addr");
             codegen.write_memory(addr, value);

@@ -586,4 +586,34 @@ impl<'ctx> CodeGen<'ctx> {
             .unwrap()
             .into_int_value()
     }
+
+    pub fn assert_coprocessor_usable(&self, coprocessor: u8) {
+        use mips_decomp::register::{cp0::Status, Cp0};
+        assert!(
+            coprocessor <= 3,
+            "invalid coprocessor in assert_coprocessor_usable: {coprocessor}"
+        );
+
+        let mask = match coprocessor {
+            0 => Status::COPROCESSOR_0_ENABLED_MASK,
+            1 => Status::COPROCESSOR_1_ENABLED_MASK,
+            2 => Status::COPROCESSOR_2_ENABLED_MASK,
+            3 => Status::COPROCESSOR_3_ENABLED_MASK,
+            _ => unreachable!(),
+        };
+
+        let enabled = self.build_mask(
+            self.read_register(self.context.i32_type(), Cp0::Status),
+            mask,
+            &format!("cop{coprocessor}_usable"),
+        );
+
+        self.build_if(
+            &format!("cop{coprocessor}_unusable"),
+            cmp!(self, enabled == 0),
+            || {
+                self.throw_exception(Exception::CoprocessorUnusable, Some(coprocessor), None);
+            },
+        );
+    }
 }
