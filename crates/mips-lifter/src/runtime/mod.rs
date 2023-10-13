@@ -110,6 +110,10 @@ impl Registers {
         self[register::Cp0::Cause] = raw as u64;
     }
 
+    pub fn fpu_control_status(&self) -> register::fpu::ControlStatus {
+        register::fpu::ControlStatus::new(self[register::FpuControl::ControlStatus] as u32)
+    }
+
     pub fn page_mask(&self) -> register::cp0::PageMask {
         register::cp0::PageMask::new(self[register::Cp0::PageMask] as u32)
     }

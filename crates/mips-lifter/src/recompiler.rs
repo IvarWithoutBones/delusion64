@@ -278,9 +278,70 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
         }
 
         Mnenomic::Ctc1 => {
-            // Copy contents of GPR rt, to CP1's control register fcr
+            // Copy contents of GPR rt, to CP1's control register fcr. When writing to FCR31,
+            // the cause bit of FCR31 and the corresponding enable bit are set, a floating-point exception occurs.
             let target = codegen.read_general_register(i64_type, instr.rt());
             codegen.write_fpu_control_register(instr.fcr(), target);
+
+            if instr.fcr() == 31 {
+                let throw_exception = {
+                    let enable = {
+                        let value = {
+                            let shift = i64_type
+                                .const_int(register::fpu::ControlStatus::ENABLE_SHIFT, false);
+                            let value = codegen.build_mask(
+                                target,
+                                register::fpu::ControlStatus::ENABLE_MASK,
+                                "ctc1_control_status_enable_",
+                            );
+                            codegen.builder.build_right_shift(
+                                value,
+                                shift,
+                                false,
+                                "ctc1_control_status_enable_normalised_",
+                            )
+                        };
+
+                        // Unimplemented operation is always enabled, there is no control bit.
+                        let unimplemented = i64_type.const_int(
+                            1 << register::fpu::ControlStatus::UNIMPLEMENTED_OPERATION_OFFSET,
+                            false,
+                        );
+                        codegen.builder.build_or(
+                            value,
+                            unimplemented,
+                            "ctc1_control_status_enable_or_unimplemented_operation_",
+                        )
+                    };
+
+                    let cause = {
+                        let shift =
+                            i64_type.const_int(register::fpu::ControlStatus::CAUSE_SHIFT, false);
+                        let value = codegen.build_mask(
+                            target,
+                            register::fpu::ControlStatus::CAUSE_MASK,
+                            "ctc1_control_status_cause_",
+                        );
+                        codegen.builder.build_right_shift(
+                            value,
+                            shift,
+                            false,
+                            "ctc1_control_status_cause_normalised_",
+                        )
+                    };
+                    codegen
+                        .builder
+                        .build_and(enable, cause, "ctc1_control_status_throw_exception_")
+                };
+
+                codegen.build_if(
+                    "ctc1_fpu_exception",
+                    cmp!(codegen, throw_exception != 0),
+                    || {
+                        codegen.throw_exception(Exception::FloatingPoint, Some(0), None);
+                    },
+                );
+            }
         }
 
         Mnenomic::Cfc1 => {

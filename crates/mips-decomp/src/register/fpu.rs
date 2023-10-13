@@ -112,6 +112,14 @@ impl ControlStatus {
     /// A mask that covers all the writable bits of the register.
     pub const WRITE_MASK: u64 = 0b1_1000_0011_1111_1111_1111_1111;
 
+    pub const ENABLE_SHIFT: u64 = 7;
+    pub const ENABLE_MASK: u64 = 0b1_1111 << Self::ENABLE_SHIFT;
+
+    pub const CAUSE_SHIFT: u64 = 12;
+    pub const CAUSE_MASK: u64 = 0b11_1111 << Self::CAUSE_SHIFT;
+
+    pub const UNIMPLEMENTED_OPERATION_OFFSET: u64 = 5;
+
     /// The offset of the condition bit in the register.
     pub const CONDITION_BIT: u64 = 23;
 

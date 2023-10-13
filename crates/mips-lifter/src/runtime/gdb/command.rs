@@ -111,10 +111,21 @@ impl<Bus: bus::Bus> Environment<'_, Bus> {
             MonitorCommand {
                 name: "help",
                 description: "print this help message",
-                handler: Box::new(|env, out, _args| {
-                    for cmd in env.debugger.as_ref().unwrap().monitor_commands.values() {
-                        let name = format!("{}:", cmd.name());
-                        writeln!(out, "{name: <12} {}", cmd.description())?;
+                handler: Box::new(|env, out, args| {
+                    if let Some(arg) = args.next() {
+                        let cmd = env
+                            .debugger
+                            .as_ref()
+                            .unwrap()
+                            .monitor_commands
+                            .get(arg)
+                            .ok_or_else(|| format!("unrecognized command: '{arg}'"))?;
+                        writeln!(out, "{}", cmd.description())?;
+                    } else {
+                        for cmd in env.debugger.as_ref().unwrap().monitor_commands.values() {
+                            let name = format!("{}:", cmd.name());
+                            writeln!(out, "{name: <12} {}", cmd.description())?;
+                        }
                     }
                     Ok(())
                 }),
@@ -129,9 +140,25 @@ impl<Bus: bus::Bus> Environment<'_, Bus> {
             },
             MonitorCommand {
                 name: "status",
-                description: "print the CPU status register",
+                description: "print the coprocessor 0 status register",
                 handler: Box::new(|env, out, _args| {
                     writeln!(out, "{:#?}", env.registers.status())?;
+                    Ok(())
+                }),
+            },
+            MonitorCommand {
+                name: "cause",
+                description: "print the coprocessor 0 cause register",
+                handler: Box::new(|env, out, _args| {
+                    writeln!(out, "{:#?}", env.registers.cause())?;
+                    Ok(())
+                }),
+            },
+            MonitorCommand {
+                name: "fpu-status",
+                description: "print the FPU control and status register",
+                handler: Box::new(|env, out, _args| {
+                    writeln!(out, "{:#?}", env.registers.fpu_control_status())?;
                     Ok(())
                 }),
             },
@@ -155,7 +182,7 @@ impl<Bus: bus::Bus> Environment<'_, Bus> {
             MonitorCommand {
                 name: "paddr",
                 description:
-                    "translate a virtual address to a physical address. usage: paddr <vaddr>",
+                    "translate a virtual address to a physical address",
                 handler: Box::new(|env, out, args| {
                     let vaddr = str_to_u64(args.next().ok_or("expected virtual address")?)
                         .map_err(|err| format!("invalid virtual address: {err}"))?;
