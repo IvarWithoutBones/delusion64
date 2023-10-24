@@ -280,20 +280,36 @@ impl Mnenomic {
         ) || self.is_likely_branch()
     }
 
-    pub const fn ends_block(&self) -> bool {
-        self.is_branch()
-            || matches!(self, |Mnenomic::Break| Mnenomic::Eret
-                | Mnenomic::J
-                | Mnenomic::Jal
-                | Mnenomic::Jalr
-                | Mnenomic::Jr
-                | Mnenomic::Syscall
-                | Mnenomic::Teq
+    pub const fn is_jump(&self) -> bool {
+        matches!(
+            self,
+            Mnenomic::J | Mnenomic::Jal | Mnenomic::Jalr | Mnenomic::Jr
+        )
+    }
+
+    pub const fn is_trap(&self) -> bool {
+        matches!(
+            self,
+            Mnenomic::Teq
                 | Mnenomic::Teqi
                 | Mnenomic::Tge
                 | Mnenomic::Tgei
                 | Mnenomic::Tgeiu
-                | Mnenomic::Tgeu)
+                | Mnenomic::Tgeu
+                | Mnenomic::Tlt
+                | Mnenomic::Tlti
+                | Mnenomic::Tltiu
+                | Mnenomic::Tltu
+                | Mnenomic::Tne
+                | Mnenomic::Tnei
+        )
+    }
+
+    pub const fn ends_block(&self) -> bool {
+        self.is_branch()
+            || self.is_jump()
+            || self.is_trap()
+            || matches!(self, |Mnenomic::Break| Mnenomic::Eret | Mnenomic::Syscall)
     }
 
     pub const fn has_delay_slot(&self) -> bool {

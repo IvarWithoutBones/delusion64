@@ -42,12 +42,19 @@ pub fn compile_instruction_with_delay_slot(
         codegen.set_inside_delay_slot(false);
     };
 
-    if instr.mnemonic().is_branch() {
+    // TODO: im assuming traps are the same as branches, need to validate
+    if instr.mnemonic().is_branch() || instr.mnemonic().is_trap() {
         // Evaluate the branch condition prior to running the delay slot instruction,
         // as the delay slot instruction can influence the branch condition.
         let name = &format!("{}_cmp", instr.mnemonic().name());
         let comparison = {
-            let (pred, lhs, rhs) = evaluate_conditional_branch(codegen, instr, delay_slot_pc);
+            let (pred, lhs, rhs) = if instr.mnemonic().is_branch() {
+                evaluate_branch(codegen, instr, delay_slot_pc)
+            } else if instr.mnemonic().is_trap() {
+                evaluate_trap(codegen, instr)
+            } else {
+                unreachable!()
+            };
             codegen.builder.build_int_compare(pred, lhs, rhs, name)
         };
 
@@ -63,14 +70,19 @@ pub fn compile_instruction_with_delay_slot(
                 compile_delay_slot_instr();
             }
 
-            let target_pc = instr
-                .try_resolve_constant_jump(pc)
-                .expect("target address for branch instruction could not be resolved");
-            codegen.build_constant_jump(target_pc)
+            if instr.mnemonic().is_branch() {
+                let target_pc = instr
+                    .try_resolve_constant_jump(pc)
+                    .expect("target address for branch instruction could not be resolved");
+                codegen.build_constant_jump(target_pc)
+            } else {
+                // This must be a trap instruction, checked above.
+                codegen.throw_exception(Exception::Trap, Some(0), None);
+            }
         });
     } else {
         // Evaluate the jump target, and set the link register if needed, prior to executing the delay slot instruction.
-        let target = evaluate_unconditional_branch(codegen, instr, delay_slot_pc);
+        let target = evaluate_jump(codegen, instr, delay_slot_pc);
 
         // Compile the delay slot, writes to the jump target register will be ignored.
         compile_delay_slot_instr();
@@ -84,7 +96,7 @@ pub fn compile_instruction_with_delay_slot(
     }
 }
 
-fn evaluate_unconditional_branch<'ctx>(
+fn evaluate_jump<'ctx>(
     codegen: &CodeGen<'ctx>,
     instr: &ParsedInstruction,
     delay_slot_pc: u64,
@@ -130,11 +142,124 @@ fn evaluate_unconditional_branch<'ctx>(
             )
         }
 
+        _ => unreachable!("evaluate_jump: {}", instr.mnemonic().name()),
+    }
+}
+
+fn evaluate_trap<'ctx>(
+    codegen: &CodeGen<'ctx>,
+    instr: &ParsedInstruction,
+) -> (IntPredicate, IntValue<'ctx>, IntValue<'ctx>) {
+    let i64_type = codegen.context.i64_type();
+    let i16_type = codegen.context.i16_type();
+    match instr.mnemonic() {
+        Mnenomic::Teq => {
+            // If rs equals rt, cause a trap exception
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            let target = codegen.read_general_register(i64_type, instr.rt());
+            (IntPredicate::EQ, source, target)
+        }
+
+        Mnenomic::Teqi => {
+            // If rs equals sign-extended immediate, cause a trap exception
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            let immediate = codegen.sign_extend_to(
+                i64_type,
+                i16_type.const_int(instr.immediate() as u64, false),
+            );
+            (IntPredicate::EQ, source, immediate)
+        }
+
+        Mnenomic::Tge => {
+            // If signed rs is greater than or equal to signed rt, cause a trap exception
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            let target = codegen.read_general_register(i64_type, instr.rt());
+            (IntPredicate::SGE, source, target)
+        }
+
+        Mnenomic::Tgei => {
+            // If signed rs is greater than or equal to sign-extended immediate, cause a trap exception
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            let immediate = codegen.sign_extend_to(
+                i64_type,
+                i16_type.const_int(instr.immediate() as u64, false),
+            );
+            (IntPredicate::SGE, source, immediate)
+        }
+
+        Mnenomic::Tgeiu => {
+            // If unsigned rs is greater than or equal to sign-extended immediate, cause a trap exception
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            let immediate = codegen.sign_extend_to(
+                i64_type,
+                i16_type.const_int(instr.immediate() as u64, false),
+            );
+            (IntPredicate::UGE, source, immediate)
+        }
+
+        Mnenomic::Tgeu => {
+            // If unsigned rs is greater than or equals to unsigned rt, cause a trap exception
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            let target = codegen.read_general_register(i64_type, instr.rt());
+            (IntPredicate::UGE, source, target)
+        }
+
+        Mnenomic::Tlt => {
+            // If signed rs is less than signed rt, cause a trap exception
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            let target = codegen.read_general_register(i64_type, instr.rt());
+            (IntPredicate::SLT, source, target)
+        }
+
+        Mnenomic::Tlti => {
+            // If signed rs is less than sign-extended immediate, cause a trap exception
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            let immediate = codegen.sign_extend_to(
+                i64_type,
+                i16_type.const_int(instr.immediate() as u64, false),
+            );
+            (IntPredicate::SLT, source, immediate)
+        }
+
+        Mnenomic::Tltiu => {
+            // If unsigned rs is less than sign-extended immediate, cause a trap exception
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            let immediate = codegen.sign_extend_to(
+                i64_type,
+                i16_type.const_int(instr.immediate() as u64, false),
+            );
+            (IntPredicate::ULT, source, immediate)
+        }
+
+        Mnenomic::Tltu => {
+            // If unsigned rs is less than unsigned rt, cause a trap exception
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            let target = codegen.read_general_register(i64_type, instr.rt());
+            (IntPredicate::ULT, source, target)
+        }
+
+        Mnenomic::Tne => {
+            // If rs does not equal rt, cause a trap exception
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            let target = codegen.read_general_register(i64_type, instr.rt());
+            (IntPredicate::NE, source, target)
+        }
+
+        Mnenomic::Tnei => {
+            // If rs does not equal sign-extended immediate, cause a trap exception
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            let immediate = codegen.sign_extend_to(
+                i64_type,
+                i16_type.const_int(instr.immediate() as u64, false),
+            );
+            (IntPredicate::NE, source, immediate)
+        }
+
         _ => unreachable!(),
     }
 }
 
-fn evaluate_conditional_branch<'ctx>(
+fn evaluate_branch<'ctx>(
     codegen: &CodeGen<'ctx>,
     instr: &ParsedInstruction,
     delay_slot_pc: u64,
@@ -213,7 +338,7 @@ fn evaluate_conditional_branch<'ctx>(
             (IntPredicate::EQ, masked, i64_type.const_zero())
         }
 
-        _ => todo!("evaluate_conditional_branch: {}", instr.mnemonic().name()),
+        _ => todo!("evaluate_branch: {}", instr.mnemonic().name()),
     }
 }
 
