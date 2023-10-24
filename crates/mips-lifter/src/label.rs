@@ -58,7 +58,6 @@ impl<'ctx> LabelWithContext<'ctx> {
         codegen.builder.position_at_end(basic_block);
 
         let len = self.label.instructions.len();
-        let second_last = len.saturating_sub(2);
         let mut i = 0;
         while i < len {
             let instr = &self.label.instructions[i];
@@ -76,11 +75,21 @@ impl<'ctx> LabelWithContext<'ctx> {
                     self.fallthrough_instr
                         .as_ref()
                         .expect("missing fallthrough instruction")
-                } else if i == second_last {
-                    // if the two instructions are inside of the same block, we can just swap them
-                    &self.label.instructions[i + 1]
                 } else {
-                    panic!("unable to resolve delay slot for {instr:#?}");
+                    // If the current instruction and the delay slot instruction are in the same block, we can swap them.
+                    // In some cases we may see two delay slots in a row, so we count the number of delay slots to skip.
+                    let mut offset = 1;
+                    while let Some(next) = self.label.instructions.get(i + offset) {
+                        if next.has_delay_slot() {
+                            offset += 1;
+                            if offset == 3 {
+                                panic!("three delay slots in a row!")
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                    &self.label.instructions[i + offset]
                 };
 
                 let addr = self.index_to_virtual_address(i);
@@ -150,7 +159,10 @@ pub fn generate_label_functions<'ctx>(
                     label = next_label;
                     instr = Some(label.instructions[0].clone());
                 } else {
-                    panic!("delay slot into non-existent label");
+                    eprintln!(
+                        "WARNING: label {:#x} has a delay slot but no next label!",
+                        label.start()
+                    );
                 }
             }
 

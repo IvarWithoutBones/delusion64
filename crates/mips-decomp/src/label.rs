@@ -40,7 +40,20 @@ fn generate_targets(instrs: &[MaybeInstruction]) -> Vec<JumpTarget> {
         }
 
         if instr.ends_block() {
-            let end_pos = if instr.has_delay_slot() { pos + 1 } else { pos };
+            let end_pos = if instr.has_delay_slot() {
+                let mut end_pos = pos + 1;
+                while let Some(next) = instrs.get(end_pos) {
+                    if next.has_delay_slot() {
+                        end_pos += 1;
+                    } else {
+                        break;
+                    }
+                }
+                end_pos
+            } else {
+                pos
+            };
+
             push(&mut targets, end_pos + 1, end_pos);
         }
 
