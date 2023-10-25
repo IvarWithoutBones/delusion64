@@ -141,12 +141,6 @@ pub enum InterruptType {
     RdpSync = 5,
 }
 
-impl InterruptType {
-    pub const fn mask(self) -> u8 {
-        1 << (self as u8)
-    }
-}
-
 #[derive(Debug)]
 pub enum MiError {
     RegisterNotFound(usize),
@@ -162,6 +156,9 @@ pub struct MipsInterface {
 }
 
 impl MipsInterface {
+    /// A mask that covers the interrupt bits in the IP field of the CP0 Cause register.
+    pub const INTERRUPT_PENDING_MASK: u8 = 0b100;
+
     pub fn new() -> Self {
         Self {
             mode: Mode::default(),
@@ -266,22 +263,13 @@ impl MipsInterface {
         Ok(value)
     }
 
-    pub fn should_interrupt(&self) -> Option<InterruptType> {
-        if self.interrupt.sp() && self.mask.sp_mask() {
-            Some(InterruptType::RspBreak)
-        } else if self.interrupt.si() && self.mask.si_mask() {
-            Some(InterruptType::SerialInterface)
-        } else if self.interrupt.ai() && self.mask.ai_mask() {
-            Some(InterruptType::AudioInterface)
-        } else if self.interrupt.vi() && self.mask.vi_mask() {
-            Some(InterruptType::VideoInterface)
-        } else if self.interrupt.pi() && self.mask.pi_mask() {
-            Some(InterruptType::PeripheralInterface)
-        } else if self.interrupt.dp() && self.mask.dp_mask() {
-            Some(InterruptType::RdpSync)
-        } else {
-            None
-        }
+    pub fn should_interrupt(&self) -> bool {
+        (self.interrupt.sp() && self.mask.sp_mask())
+            || (self.interrupt.si() && self.mask.si_mask())
+            || (self.interrupt.ai() && self.mask.ai_mask())
+            || (self.interrupt.vi() && self.mask.vi_mask())
+            || (self.interrupt.pi() && self.mask.pi_mask())
+            || (self.interrupt.dp() && self.mask.dp_mask())
     }
 
     /// Sets the interrupt bit for the given interrupt type, returning whether to raise an interrupt or not by masking.
@@ -294,7 +282,7 @@ impl MipsInterface {
             InterruptType::PeripheralInterface => self.interrupt.set_pi(value),
             InterruptType::RdpSync => self.interrupt.set_dp(value),
         }
-        self.should_interrupt().is_some()
+        self.should_interrupt()
     }
 
     pub fn raise_interrupt(&mut self, interrupt: InterruptType) -> bool {

@@ -153,9 +153,8 @@ impl BusInterface for Bus {
         self.vi.tick();
         if self.pi.tick() == DmaStatus::Finished {
             println!("delusion64: pi dma finished");
-            let ty = InterruptType::PeripheralInterface;
-            if self.mi.raise_interrupt(ty) {
-                result.interrupt = Some(ty.mask());
+            if self.mi.raise_interrupt(InterruptType::PeripheralInterface) {
+                result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
             }
         }
 
