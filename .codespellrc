@@ -1,0 +1,5 @@
+# Configuration file for https://github.com/codespell-project/codespell.
+# vim: ft=toml
+
+[codespell]
+ignore-words-list = crate, fpr, tne, olt
