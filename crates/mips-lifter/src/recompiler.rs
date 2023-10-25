@@ -1847,6 +1847,7 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             codegen.write_memory(addr, value);
         }
 
+        // TODO: all fpu instructions below are most likely broken.
         Mnenomic::AddFmt => {
             // CP1 registers fs and ft are added together. The result is stored to CP1 register fd.
             let source: FloatValue = codegen.read_fpu_register(f32_size, instr.fs());
@@ -1865,6 +1866,16 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             codegen.write_fpu_register(f32_size, instr.fd(), result);
         }
 
+        Mnenomic::MulFmt => {
+            // CP1 registers fs and ft are multiplied, the result is stored to CP1 register fd.
+            let source: FloatValue = codegen.read_fpu_register(f32_size, instr.fs());
+            let target: FloatValue = codegen.read_fpu_register(f32_size, instr.ft());
+            let result = codegen
+                .builder
+                .build_float_mul(source, target, "mul_fmt_res");
+            codegen.write_fpu_register(f32_size, instr.fd(), result);
+        }
+
         Mnenomic::CvtDFmt => {
             // FPU register fs is converted into a double-precision floating-point format. The result is stored to FPU register fd.
             let source: FloatValue = codegen.read_fpu_register(f32_size, instr.fs());
@@ -1880,6 +1891,15 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             let result = codegen
                 .builder
                 .build_float_cast(source, f32_type, "cvt_d_res");
+            codegen.write_fpu_register(f32_size, instr.fd(), result);
+        }
+
+        Mnenomic::CvtWFmt => {
+            // CP1 register fs is converted into a 32-bit fixed-point single format. The result is stored to CP1 register fd.
+            let source: FloatValue = codegen.read_fpu_register(f32_size, instr.fs());
+            let result = codegen
+                .builder
+                .build_float_cast(source, f32_type, "cvt_w_res");
             codegen.write_fpu_register(f32_size, instr.fd(), result);
         }
 
