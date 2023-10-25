@@ -1,7 +1,8 @@
 use super::CodeGen;
 use inkwell::{
-    types::{FloatType, IntType},
-    values::{FloatValue, IntValue, PointerValue},
+    context::Context,
+    types::{BasicType, FloatType, IntType, PointerType},
+    values::{BasicValue, BasicValueEnum, FloatValue, IntValue, PointerValue},
 };
 use mips_decomp::register::{self, Register};
 
@@ -14,12 +15,65 @@ pub(crate) const RESERVED_CP0_REGISTER_LATCH: register::Cp0 = register::Cp0::Res
 /// Since we only ever write to one of the reserved CP0 registers, we can reuse one to store the CP2 register value.
 pub(crate) const CP2_REGISTER_LATCH: register::Cp0 = register::Cp0::Reserved21;
 
+pub trait BitWidth: std::fmt::Display {
+    fn bit_width(&self) -> usize;
+}
+
+impl BitWidth for IntType<'_> {
+    fn bit_width(&self) -> usize {
+        self.get_bit_width() as usize
+    }
+}
+
+impl BitWidth for usize {
+    fn bit_width(&self) -> usize {
+        *self
+    }
+}
+
+pub trait NumericValue<'ctx>: BasicValue<'ctx> + TryFrom<BasicValueEnum<'ctx>> {
+    type Tag: BasicType<'ctx>;
+
+    fn tag(context: &'ctx Context, bit_width: &impl BitWidth) -> Self::Tag;
+}
+
+impl<'ctx> NumericValue<'ctx> for IntValue<'ctx> {
+    type Tag = IntType<'ctx>;
+
+    fn tag(context: &'ctx Context, bit_width: &impl BitWidth) -> Self::Tag {
+        match bit_width.bit_width() {
+            1 => context.bool_type(),
+            8 => context.i8_type(),
+            16 => context.i16_type(),
+            32 => context.i32_type(),
+            64 => context.i64_type(),
+            128 => context.i128_type(),
+            _ => unimplemented!("<IntValue as NumericValue>::tag(): bit_width={bit_width}"),
+        }
+    }
+}
+
+impl<'ctx> NumericValue<'ctx> for FloatValue<'ctx> {
+    type Tag = FloatType<'ctx>;
+
+    fn tag(context: &'ctx Context, bit_width: &impl BitWidth) -> Self::Tag {
+        match bit_width.bit_width() {
+            16 => context.f16_type(),
+            32 => context.f32_type(),
+            64 => context.f64_type(),
+            128 => context.f128_type(),
+            _ => unimplemented!("<FloatValue as NumericValue>::tag(): bit_width={bit_width}"),
+        }
+    }
+}
+
 impl<'ctx> CodeGen<'ctx> {
-    fn fpu_general_register_pointer<T>(&self, ty: IntType<'ctx>, index: T) -> PointerValue<'ctx>
-    where
-        T: Into<u64>,
-    {
-        let index = index.into() as usize;
+    fn fpu_general_register_pointer(
+        &self,
+        bit_width: &impl BitWidth,
+        ptr_ty: PointerType<'ctx>,
+        index: usize,
+    ) -> PointerValue<'ctx> {
         let i32_type = self.context.i32_type();
         let i64_type = self.context.i64_type();
         let name = |index: usize| -> String {
@@ -55,7 +109,7 @@ impl<'ctx> CodeGen<'ctx> {
                 then_ptr = Some(pointer_at_index(index));
             },
             || {
-                else_ptr = Some(match ty.get_bit_width() {
+                else_ptr = Some(match bit_width.bit_width() {
                     32 => {
                         let alignment = index & 1;
                         let base_register = index & !alignment;
@@ -83,9 +137,7 @@ impl<'ctx> CodeGen<'ctx> {
             },
         );
 
-        let result = self
-            .builder
-            .build_phi(ty.ptr_type(Default::default()), "fpr_ptr");
+        let result = self.builder.build_phi(ptr_ty, "fpr_ptr");
         result.add_incoming(&[(&then_ptr.unwrap(), then_bb), (&else_ptr.unwrap(), else_bb)]);
         result.as_basic_value().into_pointer_value()
     }
@@ -103,7 +155,9 @@ impl<'ctx> CodeGen<'ctx> {
             }
             Register::Special(_) => self.globals.registers.special.as_pointer_value(),
             Register::Cp0(_) => self.globals.registers.cp0.as_pointer_value(),
-            Register::Fpu(_) => todo!("use fpu_general_register_pointer in register_pointer"),
+            Register::Fpu(_) => {
+                unimplemented!("use fpu_general_register_pointer instead of register_pointer")
+            }
             Register::FpuControl(_) => self.globals.registers.fpu_control.as_pointer_value(),
         };
 
@@ -152,30 +206,19 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     /// Read the floating-point unit (FPU) register at the given index.
-    /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits returned.
-    pub fn read_fpu_register<T>(&self, ty: IntType<'ctx>, index: T) -> IntValue<'ctx>
+    /// If the `bit_width` is less than 64 bits the value will be truncated, and the lower bits returned.
+    pub fn read_fpu_register<Index, Value>(&self, bit_width: impl BitWidth, index: Index) -> Value
     where
-        T: Into<u64>,
+        Index: Into<u64>,
+        Value: NumericValue<'ctx>,
     {
-        let index = index.into();
-        let name = register::Fpu::from_repr(index as usize).unwrap().name();
-        let ptr = self.fpu_general_register_pointer(ty, index);
-
-        self.builder
-            .build_load(ty, ptr, &format!("{name}_"))
-            .into_int_value()
-    }
-
-    pub fn read_fpu_register_float<T>(&self, ty: FloatType<'ctx>, index: T) -> FloatValue<'ctx>
-    where
-        T: Into<u64>,
-    {
-        let reg = register::Fpu::from_repr(index.into() as usize).unwrap();
-        let name = format!("{}_", reg.name());
-        let reg_ptr = self.register_pointer(reg);
-        self.builder
-            .build_load(ty, reg_ptr, &name)
-            .into_float_value()
+        let index = index.into() as usize;
+        let name = format!("fpr_{index}_f{bit_width}_");
+        let tag = Value::tag(self.context, &bit_width);
+        let ptr_type = tag.ptr_type(Default::default());
+        let ptr = self.fpu_general_register_pointer(&bit_width, ptr_type, index);
+        let value = Value::try_from(self.builder.build_load(tag, ptr, &name));
+        unsafe { value.unwrap_unchecked() } // SAFETY: We loaded the value with the correct type.
     }
 
     /// Read the floating-point unit (FPU) control register at the given index.
@@ -376,21 +419,18 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
-    pub fn write_fpu_register<T>(&self, index: T, value: IntValue<'ctx>)
-    where
-        T: Into<u64>,
+    pub fn write_fpu_register<Index, Value>(
+        &self,
+        bit_width: impl BitWidth,
+        index: Index,
+        value: Value,
+    ) where
+        Index: Into<u64>,
+        Value: NumericValue<'ctx>,
     {
-        let ptr = self.fpu_general_register_pointer(value.get_type(), index);
-        self.builder.build_store(ptr, value);
-    }
-
-    pub fn write_fpu_register_float<T>(&self, index: T, value: FloatValue<'ctx>)
-    where
-        T: Into<u64>,
-    {
-        let reg = register::Fpu::from_repr(index.into() as _).unwrap();
-        let reg_ptr = self.register_pointer(reg);
-        self.builder.build_store(reg_ptr, value);
+        let ptr_type = Value::tag(self.context, &bit_width).ptr_type(Default::default());
+        let ptr = self.fpu_general_register_pointer(&bit_width, ptr_type, index.into() as usize);
+        self.builder.build_store(ptr, value.as_basic_value_enum());
     }
 
     pub fn write_fpu_control_register<T>(&self, index: T, mut value: IntValue<'ctx>)
@@ -435,7 +475,7 @@ impl<'ctx> CodeGen<'ctx> {
         match reg.into() {
             Register::GeneralPurpose(reg) => self.write_general_register(reg, value),
             Register::Cp0(reg) => self.write_cp0_register(reg, value),
-            Register::Fpu(reg) => self.write_fpu_register(reg, value),
+            Register::Fpu(reg) => self.write_fpu_register(value.get_type(), reg, value),
             Register::FpuControl(reg) => self.write_fpu_control_register(reg, value),
             Register::Special(reg) => self.write_special_register(reg, value),
         }
