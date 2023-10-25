@@ -125,6 +125,11 @@ impl Registers {
     pub fn xcontext(&self) -> register::cp0::XContext {
         register::cp0::XContext::new(self[register::Cp0::XContext])
     }
+
+    pub fn interrupts_enabled(&self) -> bool {
+        let status = self.status();
+        status.interrupts_enabled() && !status.exception_level() && !status.error_level()
+    }
 }
 
 pub struct Environment<'ctx, Bus: bus::Bus> {
@@ -134,6 +139,7 @@ pub struct Environment<'ctx, Bus: bus::Bus> {
     tlb: TranslationLookasideBuffer,
     codegen: Cell<Option<CodeGen<'ctx>>>,
     debugger: Option<gdb::Debugger<'ctx, Bus>>,
+    even_cycle: bool,
 }
 
 impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
@@ -154,6 +160,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
             codegen: Default::default(),
             bus,
             interrupt_pending: false,
+            even_cycle: true,
         };
 
         if let Some(gdb) = gdb {
@@ -462,6 +469,21 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
     }
 
     unsafe extern "C" fn on_instruction(&mut self) {
+        if self.even_cycle {
+            let count = (self.registers[register::Cp0::Count] as u32).wrapping_add(1);
+            self.registers[register::Cp0::Count] = count.into();
+
+            if count == self.registers[register::Cp0::Compare] as u32
+                && self.registers.interrupts_enabled()
+            {
+                let cause = self.registers.cause();
+                let ip = cause.interrupt_pending().with_timer(true);
+                self.registers.set_cause(cause.with_interrupt_pending(ip));
+                self.interrupt_pending = true;
+            }
+        }
+        self.even_cycle = !self.even_cycle;
+
         if self.interrupt_pending {
             self.interrupt_pending = false;
             self.handle_exception(Exception::Interrupt, None);

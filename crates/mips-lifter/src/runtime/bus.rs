@@ -30,8 +30,7 @@ impl<T> BusValue<T> {
             env.invalidate(paddrs);
         }
         if let Some(interrupt_mask) = self.interrupt {
-            let status = env.registers.status();
-            if status.interrupts_enabled() && !status.exception_level() && !status.error_level() {
+            if env.registers.interrupts_enabled() {
                 let cause = env.registers.cause();
                 let pending = cause.interrupt_pending().raw() | interrupt_mask;
                 env.registers
