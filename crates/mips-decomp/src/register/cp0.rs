@@ -161,6 +161,25 @@ bitfield! {
 }
 
 bitfield! {
+    /// The format of the `IM` field of the CP0 register Status.
+    #[derive(Ord, PartialOrd, Hash)]
+    pub struct InterruptMask(u8) {
+        /// Mask bits for software interrupts and `IP` of the Cause register
+        [0..=1] pub software_interrupt_mask: u8,
+        /// Mask bits for external interrupts, or external write requests
+        [2..=6] pub external_interrupt_mask: u8,
+        /// Mask bit for timer interrupt
+        [7] pub timer_interrupt_mask,
+    }
+}
+
+impl InterruptMask {
+    pub const fn raw(&self) -> u8 {
+        self.0
+    }
+}
+
+bitfield! {
     /// The format of the CP0 register Status, also known as `SR`.
     #[derive(Ord, PartialOrd, Hash)]
     pub struct Status(u32) {
@@ -178,12 +197,8 @@ bitfield! {
         [6] pub supervisor_64_bits,
         /// Enables 64-bit addressing and operations in Kernel mode (`KX`).
         [7] pub kernel_64_bits,
-        /// Mask bits for software interrupts and `IP` of the Cause register (apart of `IM`).
-        [8..=9] pub software_interrupt_mask: u8,
-        /// Mask bits for external interrupts, or external write requests (apart of `IM`).
-        [10..=14] pub external_interrupt_mask: u8,
-        /// Mask bit for timer interrupt (apart of `IM`).
-        [15] pub timer_interrupt_mask,
+        // /// Mask bits for software, external and timers interrupts. Corresponds to `IP` of the Cause register (`IM`).
+        [8..=15] pub interrupt_mask: u8 as InterruptMask,
         /// The diagnostic status (`DS`).
         [16..=24] pub diagnostic_status: u16 as DiagnosticStatus,
         /// Enables reverse of system endianness in User mode (`RE`).
