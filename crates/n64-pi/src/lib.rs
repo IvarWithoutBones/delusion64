@@ -81,8 +81,11 @@ impl Region {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct Mutated {
-    pub rdram: Option<Range<u32>>,
+pub struct SideEffects {
+    /// Whether to invalidate the cached JIT blocks at the given range of physical addresses in RDRAM.
+    pub mutated_rdram: Option<Range<u32>>,
+    /// If set, the PI interrupt should be lowered using MI.
+    pub lower_interrupt: bool,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -269,9 +272,17 @@ impl PeripheralInterface {
         offset: usize,
         value: u32,
         rdram: &mut [u8],
-    ) -> PiResult<Mutated> {
-        let mut mutated = None;
-        match Register::new(offset)? {
+    ) -> PiResult<SideEffects> {
+        let register = Register::new(offset)?;
+        let mut side_effects = SideEffects::default();
+
+        // Only Status can be written while we're busy
+        if register != Register::Status && (self.status.io_busy() || self.status.dma_busy()) {
+            self.status.set_error(true);
+            return Ok(side_effects);
+        }
+
+        match register {
             Register::DramAddress => self.dram_address = DramAddress::from(value),
             Register::CartAddress => self.cart_address = CartAddress::from(value),
 
@@ -282,18 +293,19 @@ impl PeripheralInterface {
 
             Register::WriteLength => {
                 self.write_length = WriteLength::from(value);
-                mutated = Some(self.dma(rdram)?);
+                side_effects = self.dma(rdram)?;
             }
 
             Register::Status => {
                 let status = Status::from(value);
                 if status.reset_dma() {
-                    self.status.set_dma_busy(false);
+                    self.status.set_error(false);
                     self.reset_dma();
                 }
 
                 if status.clear_interrupt() {
                     self.status.set_interrupt(false);
+                    side_effects.lower_interrupt = true;
                 }
             }
 
@@ -318,7 +330,7 @@ impl PeripheralInterface {
             },
         };
 
-        Ok(mutated.unwrap_or_default())
+        Ok(side_effects)
     }
 
     pub fn tick(&mut self) -> DmaStatus {
@@ -354,7 +366,7 @@ impl PeripheralInterface {
         1 // TODO: implement this properly
     }
 
-    fn dma(&mut self, rdram: &mut [u8]) -> PiResult<Mutated> {
+    fn dma(&mut self, rdram: &mut [u8]) -> PiResult<SideEffects> {
         // TODO: use the configured `PageSize`
         self.dma_cycles_remaining = Some(self.dma_cycles());
         self.status.set_dma_busy(true);
@@ -384,8 +396,9 @@ impl PeripheralInterface {
                 println!("PI: DMA from cart {cart_offset:#x} to rdram {rdram_offset:#x} (length {len:#x})");
                 rdram_slice[..len].copy_from_slice(cart_slice);
 
-                Ok(Mutated {
-                    rdram: Some(rdram_offset as u32..(rdram_offset + len) as u32),
+                Ok(SideEffects {
+                    mutated_rdram: Some(rdram_offset as u32..(rdram_offset + len) as u32),
+                    ..Default::default()
                 })
             }
 

@@ -57,7 +57,7 @@ bitfield! {
         // For reading
         [0] pub dma_busy,
         [1] pub io_busy,
-        [2] pub dma_error,
+        [2] pub error,
         [3] pub interrupt,
         // For writing
         [0] pub reset_dma,
@@ -189,7 +189,7 @@ mod tests {
         let mut status = Status(u32::MAX);
         assert!(status.dma_busy());
         assert!(status.io_busy());
-        assert!(status.dma_error());
+        assert!(status.error());
         assert!(status.interrupt());
 
         status.set_reset_dma(false);

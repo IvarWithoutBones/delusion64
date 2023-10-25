@@ -179,7 +179,7 @@ impl MipsInterface {
     pub fn write(&mut self, offset: usize, value: u32) -> Result<(), MiError> {
         // Note that setting both clear and write bits at the same time has an unspecified result, we let the write take precedence.
         let index = Self::offset_to_index(offset);
-        println!("Write to MI register {index:#x?} = {value:#x?}");
+        // println!("Write to MI register {index:#x?} = {self:#x?}");
         match index {
             Mode::INDEX => {
                 let mode = Mode(value);
@@ -262,55 +262,47 @@ impl MipsInterface {
             Mask::INDEX => self.mask.into(),
             _ => return Err(MiError::RegisterNotFound(index)),
         };
-        println!("Read from MI register {index:#x?} = {value:#x?}");
+        // println!("Read from MI register {index:#x?} = {self:#x?}");
         Ok(value)
     }
 
-    pub fn raise_interrupt(&mut self, interrupt: InterruptType) -> bool {
-        match interrupt {
-            InterruptType::RspBreak => {
-                let mask = self.mask.sp_mask();
-                if mask {
-                    self.interrupt.set_sp(true)
-                }
-                mask
-            }
-            InterruptType::SerialInterface => {
-                let mask = self.mask.si_mask();
-                if mask {
-                    self.interrupt.set_si(true)
-                }
-                mask
-            }
-            InterruptType::AudioInterface => {
-                let mask = self.mask.ai_mask();
-                if mask {
-                    self.interrupt.set_ai(true)
-                }
-                mask
-            }
-            InterruptType::VideoInterface => {
-                let mask = self.mask.vi_mask();
-                if mask {
-                    self.interrupt.set_vi(true)
-                }
-                mask
-            }
-            InterruptType::PeripheralInterface => {
-                let mask = self.mask.pi_mask();
-                if mask {
-                    self.interrupt.set_pi(true)
-                }
-                mask
-            }
-            InterruptType::RdpSync => {
-                let mask = self.mask.dp_mask();
-                if mask {
-                    self.interrupt.set_dp(true)
-                }
-                mask
-            }
+    pub fn should_interrupt(&self) -> Option<InterruptType> {
+        if self.interrupt.sp() && self.mask.sp_mask() {
+            Some(InterruptType::RspBreak)
+        } else if self.interrupt.si() && self.mask.si_mask() {
+            Some(InterruptType::SerialInterface)
+        } else if self.interrupt.ai() && self.mask.ai_mask() {
+            Some(InterruptType::AudioInterface)
+        } else if self.interrupt.vi() && self.mask.vi_mask() {
+            Some(InterruptType::VideoInterface)
+        } else if self.interrupt.pi() && self.mask.pi_mask() {
+            Some(InterruptType::PeripheralInterface)
+        } else if self.interrupt.dp() && self.mask.dp_mask() {
+            Some(InterruptType::RdpSync)
+        } else {
+            None
         }
+    }
+
+    /// Sets the interrupt bit for the given interrupt type, returning whether to raise an interrupt or not by masking.
+    fn set_interrupt(&mut self, interrupt: InterruptType, value: bool) -> bool {
+        match interrupt {
+            InterruptType::RspBreak => self.interrupt.set_sp(value),
+            InterruptType::SerialInterface => self.interrupt.set_si(value),
+            InterruptType::AudioInterface => self.interrupt.set_ai(value),
+            InterruptType::VideoInterface => self.interrupt.set_vi(value),
+            InterruptType::PeripheralInterface => self.interrupt.set_pi(value),
+            InterruptType::RdpSync => self.interrupt.set_dp(value),
+        }
+        self.should_interrupt().is_some()
+    }
+
+    pub fn raise_interrupt(&mut self, interrupt: InterruptType) -> bool {
+        self.set_interrupt(interrupt, true)
+    }
+
+    pub fn lower_interrupt(&mut self, interrupt: InterruptType) -> bool {
+        self.set_interrupt(interrupt, false)
     }
 }
 

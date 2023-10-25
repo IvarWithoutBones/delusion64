@@ -152,9 +152,10 @@ impl BusInterface for Bus {
         // TODO: how does timing compare to the CPU?
         self.vi.tick();
         if self.pi.tick() == DmaStatus::Finished {
+            println!("delusion64: pi dma finished");
             let ty = InterruptType::PeripheralInterface;
             if self.mi.raise_interrupt(ty) {
-                result.interrupt = Some(ty.mask())
+                result.interrupt = Some(ty.mask());
             }
         }
 
@@ -285,15 +286,19 @@ impl BusInterface for Bus {
                 .ok_or(BusError::OffsetOutOfBounds(address))?,
 
             BusSection::PeripheralInterface => {
-                let mutated = self
+                let side_effects = self
                     .pi
                     .write_register(address.offset, value.try_into()?, self.rdram.as_mut_slice())
                     .map_err(BusError::PeripheralInterfaceError)?;
 
                 // Invalidate JIT blocks if RDRAM was mutated, since code may reside there.
-                if let Some(range) = mutated.rdram {
+                if let Some(range) = side_effects.mutated_rdram {
                     let rdram_base = BusSection::RdramMemory.range().start;
                     result.mutated = Some(range.start + rdram_base..range.end + rdram_base);
+                }
+
+                if side_effects.lower_interrupt {
+                    self.mi.lower_interrupt(InterruptType::PeripheralInterface);
                 }
             }
 
