@@ -1928,6 +1928,7 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             // Compares CP1 register fs and CP1 register ft using cond. The result is stored to the C bit of FCR31.
             let cond = match instr.float_condition() {
                 FloatCondition::LessThanOrEqual => FloatPredicate::ULE,
+                FloatCondition::LessThan => FloatPredicate::ULT,
                 FloatCondition::Equal => FloatPredicate::UEQ,
                 FloatCondition::Unordered => FloatPredicate::UNO,
                 _ => todo!("float condition {:?}", instr.float_condition()),

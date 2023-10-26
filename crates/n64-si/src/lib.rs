@@ -11,6 +11,40 @@ pub enum SiError {
 
 pub type SiResult<T> = Result<T, SiError>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DmaStatus {
+    Idle,
+    Completed,
+    Busy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum DmaType {
+    Read,
+    Write,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct Dma {
+    pub ty: DmaType,
+    pub length: u32,
+    pub cycles_remaining: usize,
+    pub pif_address: u32,
+    pub ram_address: u32,
+}
+
+impl Dma {
+    #[must_use]
+    pub fn tick(&mut self) -> bool {
+        if self.cycles_remaining == 0 {
+            true
+        } else {
+            self.cycles_remaining -= 1;
+            false
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct SideEffects {
     pub lower_interrupt: bool,
@@ -24,6 +58,7 @@ pub struct SerialInterface {
     pif_address_write_64: PifAddressWrite64,
     pif_address_read_4: PifAddressRead4,
     status: Status,
+    dma: Option<Dma>,
 }
 
 impl SerialInterface {
@@ -46,17 +81,30 @@ impl SerialInterface {
 
     pub fn write(&mut self, offset: usize, value: u32) -> SiResult<SideEffects> {
         let mut side_effects = SideEffects::default();
-        println!(
-            "delusion64: si register write of {:#x} to {:#x}",
-            value, offset
-        );
         match offset {
             DramAddress::OFFSET => self.dram_address = value.into(),
-            PifAddressRead64::OFFSET => self.pif_address_read_64 = value.into(),
+            PifAddressRead64::OFFSET => {
+                self.pif_address_read_64 = value.into();
+                self.status.set_dma_busy(true);
+                self.dma = Some(Dma {
+                    ty: DmaType::Read,
+                    length: 64,
+                    cycles_remaining: 1, // TODO: inaccurate
+                    pif_address: self.pif_address_read_64.pif_address() as u32,
+                    ram_address: self.dram_address.address(),
+                })
+            }
             PifAddressWrite4::OFFSET => self.pif_address_write_4 = value.into(),
             PifAddressWrite64::OFFSET => {
-                self.status.set_dma_busy(true);
                 self.pif_address_write_64 = value.into();
+                self.status.set_dma_busy(true);
+                self.dma = Some(Dma {
+                    ty: DmaType::Write,
+                    length: 64,
+                    cycles_remaining: 4065 * 3,
+                    pif_address: self.pif_address_write_64.data(),
+                    ram_address: self.dram_address.address(),
+                })
             }
             PifAddressRead4::OFFSET => self.pif_address_read_4 = value.into(),
             Status::OFFSET => {
@@ -66,7 +114,21 @@ impl SerialInterface {
             }
             _ => Err(SiError::OffsetOutOfBounds { offset })?,
         }
-        println!("{self:#x?}");
         Ok(side_effects)
+    }
+
+    pub fn tick(&mut self) -> DmaStatus {
+        if let Some(dma) = &mut self.dma {
+            if dma.tick() {
+                self.status.set_dma_busy(false);
+                self.status.set_interrupt(true);
+                self.dma = None;
+                DmaStatus::Completed
+            } else {
+                DmaStatus::Busy
+            }
+        } else {
+            DmaStatus::Idle
+        }
     }
 }

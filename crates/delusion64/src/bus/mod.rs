@@ -162,6 +162,13 @@ impl BusInterface for Bus {
             }
         }
 
+        if self.si.tick() == n64_si::DmaStatus::Completed {
+            println!("delusion64: si dma finished");
+            if self.mi.raise_interrupt(InterruptType::SerialInterface) {
+                result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
+            }
+        }
+
         Ok(result)
     }
 
