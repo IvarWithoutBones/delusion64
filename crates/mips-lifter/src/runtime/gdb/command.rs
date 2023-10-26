@@ -181,8 +181,7 @@ impl<Bus: bus::Bus> Environment<'_, Bus> {
             },
             MonitorCommand {
                 name: "paddr",
-                description:
-                    "translate a virtual address to a physical address",
+                description: "translate a virtual address to a physical address",
                 handler: Box::new(|env, out, args| {
                     let vaddr = str_to_u64(args.next().ok_or("expected virtual address")?)
                         .map_err(|err| format!("invalid virtual address: {err}"))?;

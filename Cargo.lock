@@ -176,6 +176,7 @@ dependencies = [
  "n64-cartridge",
  "n64-mi",
  "n64-pi",
+ "n64-si",
  "n64-vi",
  "strum",
 ]
@@ -386,6 +387,13 @@ dependencies = [
 
 [[package]]
 name = "n64-pi"
+version = "0.1.0"
+dependencies = [
+ "tartan-bitfield",
+]
+
+[[package]]
+name = "n64-si"
 version = "0.1.0"
 dependencies = [
  "tartan-bitfield",

@@ -94,7 +94,6 @@ impl BusSection {
             |BusSection::RdramInterface| BusSection::RdramRegisters
                 | BusSection::RdramRegistersWriteOnly
                 | BusSection::RspRegisters
-                | BusSection::SerialInterface
                 | BusSection::AudioInterface
         )
     }

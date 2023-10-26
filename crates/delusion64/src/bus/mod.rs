@@ -6,6 +6,7 @@ use mips_lifter::{
 use n64_cartridge::Cartridge;
 use n64_mi::{InterruptType, MiError, MipsInterface};
 use n64_pi::{DmaStatus, PeripheralInterface, PiError};
+use n64_si::{SerialInterface, SiError};
 use n64_vi::VideoInterface;
 
 pub mod location;
@@ -26,6 +27,7 @@ pub struct Bus {
     pi: PeripheralInterface,
     mi: MipsInterface,
     vi: VideoInterface,
+    si: SerialInterface,
     // Buffer to view the result of unit tests from n64_systemtest. See https://github.com/lemmy-64/n64-systemtest#isviewer.
     n64_systemtest_isviewer_buffer: Box<[u8; 0x200]>,
 }
@@ -53,6 +55,7 @@ impl Bus {
             pi: PeripheralInterface::new(cartridge_rom, cartridge.header.pi_bsd_domain_1_flags),
             mi: MipsInterface::new(),
             vi: VideoInterface::new(),
+            si: SerialInterface::new(),
             n64_systemtest_isviewer_buffer: boxed_array(),
         }
     }
@@ -84,6 +87,14 @@ impl Bus {
                 }),
             },
             MonitorCommand {
+                name: "si",
+                description: "print the serial interface registers",
+                handler: Box::new(|bus, out, _args| {
+                    writeln!(out, "{:#x?}", bus.si)?;
+                    Ok(())
+                }),
+            },
+            MonitorCommand {
                 name: "dump-fb",
                 description: "dump the VI framebuffer to a file. usage: dump-fb <filename>",
                 handler: Box::new(|bus, out, args| {
@@ -101,20 +112,13 @@ impl Bus {
 
 #[derive(Debug)]
 pub enum BusError {
-    /// The address is not mapped to any memory region.
-    UnmappedAddress(u32),
-    /// A read-only region was written to.
-    ReadOnlyRegionWrite(BusSection),
-    /// A write-only region was read from.
-    WriteOnlyRegionRead(BusSection),
-    /// An error occurred while accessing the mips interface.
     MipsInterfaceError(MiError),
-    /// An error occurred while accessing the peripheral interface.
     PeripheralInterfaceError(PiError),
-    /// The offset is out of bounds for the given region.
-    /// This is an internal error which can only occur if the `MemorySection` was improperly created.
+    SerialInterfaceError(SiError),
+    UnmappedAddress(u32),
+    ReadOnlyRegionWrite(BusSection),
+    WriteOnlyRegionRead(BusSection),
     OffsetOutOfBounds(Address<BusSection>),
-    /// The memory section is not yet implemented, and cannot be stubbed.
     UnimplementedSection(BusSection),
 }
 
@@ -187,6 +191,12 @@ impl BusInterface for Bus {
                 self.pi
                     .read_register(address.offset)
                     .map_err(BusError::PeripheralInterfaceError)?,
+            ),
+
+            BusSection::SerialInterface => Int::new(
+                self.si
+                    .read(address.offset)
+                    .map_err(BusError::SerialInterfaceError)?,
             ),
 
             BusSection::CartridgeRom | BusSection::CartridgeSram | BusSection::PifRom => Int::new(
@@ -283,6 +293,16 @@ impl BusInterface for Bus {
                 .vi
                 .write(address.offset, value.try_into()?)
                 .ok_or(BusError::OffsetOutOfBounds(address))?,
+
+            BusSection::SerialInterface => {
+                let side_effects = self
+                    .si
+                    .write(address.offset, value.try_into()?)
+                    .map_err(BusError::SerialInterfaceError)?;
+                if side_effects.lower_interrupt {
+                    self.mi.lower_interrupt(InterruptType::SerialInterface);
+                }
+            }
 
             BusSection::PeripheralInterface => {
                 let side_effects = self

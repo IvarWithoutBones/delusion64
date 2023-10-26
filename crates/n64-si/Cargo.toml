@@ -1,0 +1,8 @@
+[package]
+name = "n64-si"
+description = "The Serial Interface for the N64, also known as SI"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tartan-bitfield = "1.2.0"

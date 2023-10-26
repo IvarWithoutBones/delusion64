@@ -393,7 +393,7 @@ impl PeripheralInterface {
                         .ok_or(PiError::RdramAddressOutOfBounds { range, rdram_len })?
                 };
 
-                println!("PI: DMA from cart {cart_offset:#x} to rdram {rdram_offset:#x} (length {len:#x})");
+                println!("delusion64: pi DMA from cart {cart_offset:#x} to rdram {rdram_offset:#x} (length {len:#x})");
                 rdram_slice[..len].copy_from_slice(cart_slice);
 
                 Ok(SideEffects {

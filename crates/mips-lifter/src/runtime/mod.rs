@@ -470,7 +470,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
 
     unsafe extern "C" fn on_instruction(&mut self) {
         if self.even_cycle {
-            let count = (self.registers[register::Cp0::Count] as u32).wrapping_add(1);
+            let count = (self.registers[register::Cp0::Count] as u32).wrapping_add(8);
             self.registers[register::Cp0::Count] = count.into();
 
             if count == self.registers[register::Cp0::Compare] as u32
