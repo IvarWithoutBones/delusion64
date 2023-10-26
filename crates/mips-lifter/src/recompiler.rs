@@ -1852,7 +1852,19 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             // CP1 registers fs and ft are added together. The result is stored to CP1 register fd.
             let source: FloatValue = codegen.read_fpu_register(f32_size, instr.fs());
             let target: FloatValue = codegen.read_fpu_register(f32_size, instr.ft());
-            let result = codegen.builder.build_float_add(source, target, "add.fmt");
+            let result = codegen
+                .builder
+                .build_float_add(source, target, "add.fmt_res");
+            codegen.write_fpu_register(f32_size, instr.fd(), result);
+        }
+
+        Mnenomic::SubFmt => {
+            // CP1 registers fs and ft are subtracted. The result is stored to CP1 register fd.
+            let source: FloatValue = codegen.read_fpu_register(f32_size, instr.fs());
+            let target: FloatValue = codegen.read_fpu_register(f32_size, instr.ft());
+            let result = codegen
+                .builder
+                .build_float_sub(source, target, "sub.fmt_res");
             codegen.write_fpu_register(f32_size, instr.fd(), result);
         }
 
@@ -1916,6 +1928,8 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             // Compares CP1 register fs and CP1 register ft using cond. The result is stored to the C bit of FCR31.
             let cond = match instr.float_condition() {
                 FloatCondition::LessThanOrEqual => FloatPredicate::ULE,
+                FloatCondition::Equal => FloatPredicate::UEQ,
+                FloatCondition::Unordered => FloatPredicate::UNO,
                 _ => todo!("float condition {:?}", instr.float_condition()),
             };
 
