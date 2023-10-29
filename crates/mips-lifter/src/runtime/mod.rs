@@ -484,12 +484,14 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         }
         self.even_cycle = !self.even_cycle;
 
+        let pc_vaddr = self.registers[register::Special::Pc];
+
         if self.interrupt_pending {
             self.interrupt_pending = false;
+            println!("handling interrupt from {pc_vaddr:#x}");
             self.handle_exception(Exception::Interrupt, None);
         }
 
-        let pc_vaddr = self.registers[register::Special::Pc];
         // let pc_paddr = self.virtual_to_physical_address(pc_vaddr, AccessMode::Read);
         //
         // let instr = ParsedInstruction::try_from(u32::from_be_bytes(

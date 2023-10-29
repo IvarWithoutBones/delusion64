@@ -21,6 +21,13 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         &mut self,
         paddr: u32,
     ) -> Result<Int<SIZE>, BusError<Bus::Error>> {
+        // TODO: remove these round-trip vaddr->paddr->vaddr conversions
+        let vaddr = self.tlb.translate_paddr(paddr).unwrap_or_else(|e| {
+            let msg = &format!("failed to convert paddr to vaddr: {e:#x?}");
+            self.panic_update_debugger(msg);
+        });
+        self.debugger_signal_write(vaddr, SIZE);
+
         self.find_section(paddr).and_then(|section| {
             let addr = Address::new(section, paddr);
             self.bus.read_memory(addr).map(|result| result.handle(self))
@@ -32,6 +39,13 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         paddr: u32,
         value: Int<SIZE>,
     ) -> Result<(), BusError<Bus::Error>> {
+        // TODO: remove these round-trip vaddr->paddr->vaddr conversions
+        let vaddr = self.tlb.translate_paddr(paddr).unwrap_or_else(|e| {
+            let msg = &format!("failed to convert paddr to vaddr: {e:#x?}");
+            self.panic_update_debugger(msg);
+        });
+        self.debugger_signal_write(vaddr, SIZE);
+
         self.find_section(paddr).and_then(|section| {
             let addr = Address::new(section, paddr);
             self.bus.write_memory(addr, value).map(|result| {

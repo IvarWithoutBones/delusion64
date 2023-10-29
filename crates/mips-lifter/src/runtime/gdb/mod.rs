@@ -7,13 +7,13 @@ use gdbstub::{
         self,
         ext::{
             base::singlethread::{SingleThreadBase, SingleThreadResume, SingleThreadSingleStep},
-            breakpoints::{Breakpoints, SwBreakpoint},
+            breakpoints::{Breakpoints, HwWatchpoint, SwBreakpoint, WatchKind},
         },
         Target, TargetResult,
     },
 };
 use mips_decomp::register;
-use std::{collections::HashSet, net::TcpStream};
+use std::{collections::HashSet, net::TcpStream, ops::Range};
 
 pub(crate) mod command;
 
@@ -73,6 +73,12 @@ impl<Bus: bus::Bus> Connection<Bus> {
     }
 }
 
+#[derive(Debug)]
+pub struct Watchpoint {
+    addresses: Range<u64>,
+    kind: WatchKind,
+}
+
 #[derive(Default)]
 enum State {
     Running,
@@ -82,11 +88,12 @@ enum State {
 }
 
 pub struct Debugger<'ctx, Bus: bus::Bus> {
-    state: State,
-    breakpoints: HashSet<u64>,
     state_machine: Option<GdbStubStateMachine<'ctx, Environment<'ctx, Bus>, TcpStream>>,
     stop_reason: Option<SingleThreadStopReason<u32>>,
+    state: State,
     monitor_commands: MonitorCommandMap<'ctx, Bus>,
+    breakpoints: HashSet<u64>,
+    watchpoints: Vec<Watchpoint>,
 }
 
 impl<'ctx, Bus: bus::Bus> Debugger<'ctx, Bus> {
@@ -98,6 +105,7 @@ impl<'ctx, Bus: bus::Bus> Debugger<'ctx, Bus> {
         Self {
             state: State::default(),
             breakpoints: HashSet::new(),
+            watchpoints: Vec::new(),
             stop_reason: None,
             state_machine: Some(state_machine),
             monitor_commands,
@@ -133,6 +141,32 @@ impl<'ctx, Bus: bus::Bus> Debugger<'ctx, Bus> {
 }
 
 impl<Bus: bus::Bus> Environment<'_, Bus> {
+    fn debugger_signal_memory_access(&mut self, address: u64, len: usize, kind: WatchKind) {
+        let Some(debugger) = self.debugger.as_mut() else {
+            return;
+        };
+
+        if let Some(watch) = debugger.watchpoints.iter().find(|w| {
+            (w.kind == kind || w.kind == WatchKind::ReadWrite)
+                && ((w.addresses.start >= address) && (w.addresses.end <= address + len as u64))
+        }) {
+            debugger.state = State::Paused;
+            debugger.stop_reason = Some(SingleThreadStopReason::Watch {
+                tid: (),
+                kind: watch.kind,
+                addr: address as u32,
+            });
+        }
+    }
+
+    pub fn debugger_signal_read(&mut self, address: u64, len: usize) {
+        self.debugger_signal_memory_access(address, len, WatchKind::Read);
+    }
+
+    pub fn debugger_signal_write(&mut self, address: u64, len: usize) {
+        self.debugger_signal_memory_access(address, len, WatchKind::Write);
+    }
+
     // This would be much nicer to implement on the `Debugger` struct, but the borrow checker is throwing a fit :/
     pub fn update_debugger(&mut self) {
         self.debugger.as_mut().unwrap().state_machine = match self
@@ -218,6 +252,13 @@ impl<Bus: bus::Bus> Breakpoints for Environment<'_, Bus> {
     ) -> Option<target::ext::breakpoints::SwBreakpointOps<'_, Self>> {
         Some(self)
     }
+
+    #[inline(always)]
+    fn support_hw_watchpoint(
+        &mut self,
+    ) -> Option<target::ext::breakpoints::HwWatchpointOps<'_, Self>> {
+        Some(self)
+    }
 }
 
 impl<Bus: bus::Bus> SwBreakpoint for Environment<'_, Bus> {
@@ -245,6 +286,41 @@ impl<Bus: bus::Bus> SwBreakpoint for Environment<'_, Bus> {
             .unwrap()
             .breakpoints
             .remove(&(vaddr as _)))
+    }
+}
+
+impl<Bus: bus::Bus> HwWatchpoint for Environment<'_, Bus> {
+    fn add_hw_watchpoint(
+        &mut self,
+        addr: <Self::Arch as gdbstub::arch::Arch>::Usize,
+        len: <Self::Arch as gdbstub::arch::Arch>::Usize,
+        kind: WatchKind,
+    ) -> TargetResult<bool, Self> {
+        let addresses = addr as u64..addr as u64 + len as u64;
+        self.debugger
+            .as_mut()
+            .unwrap()
+            .watchpoints
+            .push(Watchpoint { addresses, kind });
+        Ok(true)
+    }
+
+    fn remove_hw_watchpoint(
+        &mut self,
+        addr: <Self::Arch as gdbstub::arch::Arch>::Usize,
+        len: <Self::Arch as gdbstub::arch::Arch>::Usize,
+        kind: WatchKind,
+    ) -> TargetResult<bool, Self> {
+        let addresses = addr as u64..addr as u64 + len as u64;
+        let watchpoints = &mut self.debugger.as_mut().unwrap().watchpoints;
+        let Some(index) = watchpoints
+            .iter()
+            .position(|w| w.addresses == addresses && w.kind == kind)
+        else {
+            return Ok(false);
+        };
+        watchpoints.remove(index);
+        Ok(true)
     }
 }
 
