@@ -16,7 +16,9 @@ use mips_decomp::{instruction::ParsedInstruction, Exception, INSTRUCTION_SIZE};
 mod comparison;
 mod register;
 
-pub(crate) use register::RESERVED_CP0_REGISTER_LATCH;
+pub(crate) use register::{
+    HOST_STACK_FRAME_STORAGE, INSIDE_DELAY_SLOT_STORAGE, RESERVED_CP0_REGISTER_LATCH,
+};
 
 #[macro_export]
 macro_rules! env_call {
@@ -57,10 +59,8 @@ pub struct RegisterGlobals<'ctx> {
 pub struct Globals<'ctx> {
     pub env_ptr: GlobalValue<'ctx>,
     pub registers: RegisterGlobals<'ctx>,
-
     // NOTE: The backing memory must be externally managed, so that the pointer remains valid across module reloads.
-    pub inside_delay_slot: (GlobalValue<'ctx>, *mut bool),
-    pub stack_frame: (GlobalValue<'ctx>, *mut u64),
+    pub stack_frame: *mut u64,
 }
 
 #[derive(Debug)]
@@ -189,15 +189,9 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     pub fn set_inside_delay_slot(&self, inside: bool) {
-        let (value, _storage) = self.globals.inside_delay_slot;
-        let new_value = self.context.bool_type().const_int(inside as u64, false);
-        self.builder
-            .build_store(value.as_pointer_value(), new_value);
-    }
-
-    pub fn is_inside_delay_slot(&self) -> bool {
-        let (_value, storage) = self.globals.inside_delay_slot;
-        unsafe { *storage }
+        let new = self.context.i64_type().const_int(inside as u64, false);
+        let ptr = self.register_pointer(register::INSIDE_DELAY_SLOT_STORAGE);
+        self.builder.build_store(ptr, new);
     }
 
     /// Saves the host stack frame to a global pointer, so that it can be restored later.
@@ -214,8 +208,8 @@ impl<'ctx> CodeGen<'ctx> {
             .left()
             .unwrap();
 
-        self.builder
-            .build_store(self.globals.stack_frame.0.as_pointer_value(), stack_ptr);
+        let storage_ptr = self.register_pointer(HOST_STACK_FRAME_STORAGE);
+        self.builder.build_store(storage_ptr, stack_ptr);
     }
 
     /// Restores the host stack frame from a global pointer.
@@ -227,12 +221,8 @@ impl<'ctx> CodeGen<'ctx> {
         };
 
         let ptr_type = self.context.i64_type().ptr_type(Default::default());
-        let stack_ptr = self.builder.build_load(
-            ptr_type,
-            self.globals.stack_frame.0.as_pointer_value(),
-            "stack_ptr",
-        );
-
+        let storage_ptr = self.register_pointer(HOST_STACK_FRAME_STORAGE);
+        let stack_ptr = self.builder.build_load(ptr_type, storage_ptr, "stack_ptr");
         self.builder
             .build_call(stack_restore_fn, &[stack_ptr.into()], "stack_restore");
     }

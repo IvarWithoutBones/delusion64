@@ -176,26 +176,14 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         execution_engine: &ExecutionEngine<'ctx>,
     ) -> codegen::Globals<'ctx> {
         let context = module.get_context();
-        let bool_ptr_type = context.bool_type().ptr_type(Default::default());
         let i64_ptr_type = context.i64_type().ptr_type(Default::default());
 
         // Map a pointer to the environment struct
         let env_ptr = module.add_global(i64_ptr_type, Default::default(), "env");
         execution_engine.add_global_mapping(&env_ptr, self as *const Environment<_> as usize);
 
-        // Map the host stack frame pointer.
-        let stack_frame = module.add_global(i64_ptr_type, Default::default(), "host_stack_frame");
-        let stack_frame_storage = Box::into_raw(Box::new(0u64));
-        execution_engine.add_global_mapping(&stack_frame, stack_frame_storage as usize);
-
         // Map the registers into the modules globals
         let registers = self.registers.map_into(&context, module, execution_engine);
-
-        // Map delay slot metadata
-        let inside_delay_slot =
-            module.add_global(bool_ptr_type, Default::default(), "inside_delay_slo");
-        let inside_delay_slot_storage = Box::into_raw(Box::new(false));
-        execution_engine.add_global_mapping(&inside_delay_slot, inside_delay_slot_storage as usize);
 
         // Map the runtime functions
         for func in RuntimeFunction::iter() {
@@ -234,8 +222,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         }
 
         codegen::Globals {
-            stack_frame: (stack_frame, stack_frame_storage),
-            inside_delay_slot: (inside_delay_slot, inside_delay_slot_storage),
+            stack_frame: Box::into_raw(Box::new(0_u64)),
             env_ptr,
             registers,
         }
@@ -289,13 +276,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
             // so that we dont skip over the branch when we return from the exception. Notify the CPU of this by setting the BD bit.
             self.registers[register::Cp0::EPC] = {
                 let mut pc = self.registers[register::Special::Pc];
-                if self
-                    .codegen
-                    .get_mut()
-                    .as_ref()
-                    .unwrap()
-                    .is_inside_delay_slot()
-                {
+                if self.registers[crate::codegen::INSIDE_DELAY_SLOT_STORAGE] != 0 {
                     pc -= INSTRUCTION_SIZE as u64;
                     cause.set_branch_delay(true);
                 } else {
