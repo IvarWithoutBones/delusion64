@@ -4,7 +4,7 @@ use inkwell::{
     FloatPredicate, IntPredicate,
 };
 use mips_decomp::{
-    instruction::{FloatCondition, Mnenomic, ParsedInstruction},
+    instruction::{FloatCondition, FloatFormat, Mnenomic, ParsedInstruction},
     register, Exception, INSTRUCTION_SIZE,
 };
 
@@ -357,6 +357,12 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
     let f64_type = codegen.context.f64_type();
     let f32_size = 32;
     let f64_size = 64;
+
+    // TODO: assert this instruction supports the given format
+    let float_format_size = || match instr.float_format() {
+        FloatFormat::Single | FloatFormat::Word => f32_size,
+        FloatFormat::Double | FloatFormat::Long => f64_size,
+    };
 
     match mnemonic {
         Mnenomic::Sync => {
@@ -1850,56 +1856,62 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
         // TODO: all fpu instructions below are most likely broken.
         Mnenomic::AddFmt => {
             // CP1 registers fs and ft are added together. The result is stored to CP1 register fd.
-            let source: FloatValue = codegen.read_fpu_register(f32_size, instr.fs());
-            let target: FloatValue = codegen.read_fpu_register(f32_size, instr.ft());
+            let size = float_format_size();
+            let source: FloatValue = codegen.read_fpu_register(size, instr.fs());
+            let target: FloatValue = codegen.read_fpu_register(size, instr.ft());
             let result = codegen
                 .builder
                 .build_float_add(source, target, "add.fmt_res");
-            codegen.write_fpu_register(f32_size, instr.fd(), result);
+            codegen.write_fpu_register(size, instr.fd(), result);
         }
 
         Mnenomic::SubFmt => {
             // CP1 registers fs and ft are subtracted. The result is stored to CP1 register fd.
-            let source: FloatValue = codegen.read_fpu_register(f32_size, instr.fs());
-            let target: FloatValue = codegen.read_fpu_register(f32_size, instr.ft());
+            let size = float_format_size();
+            let source: FloatValue = codegen.read_fpu_register(size, instr.fs());
+            let target: FloatValue = codegen.read_fpu_register(size, instr.ft());
             let result = codegen
                 .builder
                 .build_float_sub(source, target, "sub.fmt_res");
-            codegen.write_fpu_register(f32_size, instr.fd(), result);
+            codegen.write_fpu_register(size, instr.fd(), result);
         }
 
         Mnenomic::DivFmt => {
             // CP1 register fs is divided by CP1 register ft. The result is stored to CP1 register rd.
-            let source: FloatValue = codegen.read_fpu_register(f32_size, instr.fs());
-            let target: FloatValue = codegen.read_fpu_register(f32_size, instr.ft());
+            let size = float_format_size();
+            let source: FloatValue = codegen.read_fpu_register(size, instr.fs());
+            let target: FloatValue = codegen.read_fpu_register(size, instr.ft());
             let result = codegen
                 .builder
                 .build_float_div(source, target, "div_fmt_res");
-            codegen.write_fpu_register(f32_size, instr.fd(), result);
+            codegen.write_fpu_register(size, instr.fd(), result);
         }
 
         Mnenomic::MulFmt => {
             // CP1 registers fs and ft are multiplied, the result is stored to CP1 register fd.
-            let source: FloatValue = codegen.read_fpu_register(f32_size, instr.fs());
-            let target: FloatValue = codegen.read_fpu_register(f32_size, instr.ft());
+            let size = float_format_size();
+            let source: FloatValue = codegen.read_fpu_register(size, instr.fs());
+            let target: FloatValue = codegen.read_fpu_register(size, instr.ft());
             let result = codegen
                 .builder
                 .build_float_mul(source, target, "mul_fmt_res");
-            codegen.write_fpu_register(f32_size, instr.fd(), result);
+            codegen.write_fpu_register(size, instr.fd(), result);
         }
 
         Mnenomic::CvtDFmt => {
             // FPU register fs is converted into a double-precision floating-point format. The result is stored to FPU register fd.
-            let source: FloatValue = codegen.read_fpu_register(f32_size, instr.fs());
+            let size = float_format_size();
+            let source: FloatValue = codegen.read_fpu_register(size, instr.fs());
             let result = codegen
                 .builder
                 .build_float_cast(source, f64_type, "cvt_d_res");
-            codegen.write_fpu_register(f32_size, instr.fd(), result);
+            codegen.write_fpu_register(f64_size, instr.fd(), result);
         }
 
         Mnenomic::CvtSFmt => {
             // CP1 register fs is converted into a single-precision floating-point format. The result is stored to CP1 register fd.
-            let source: FloatValue = codegen.read_fpu_register(f32_size, instr.fs());
+            let size = float_format_size();
+            let source: FloatValue = codegen.read_fpu_register(size, instr.fs());
             let result = codegen
                 .builder
                 .build_float_cast(source, f32_type, "cvt_d_res");
@@ -1926,8 +1938,9 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
 
         Mnenomic::MovFmt => {
             // The contents of floating-point register fs are stored to floating-point register fd.
-            let source: FloatValue = codegen.read_fpu_register(f32_size, instr.fs());
-            codegen.write_fpu_register(f32_size, instr.fd(), source);
+            let size = float_format_size();
+            let source: FloatValue = codegen.read_fpu_register(size, instr.fs());
+            codegen.write_fpu_register(size, instr.fd(), source);
         }
 
         Mnenomic::CCondFmt => {
@@ -1937,6 +1950,8 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
                 FloatCondition::LessThan => FloatPredicate::ULT,
                 FloatCondition::Equal => FloatPredicate::UEQ,
                 FloatCondition::Unordered => FloatPredicate::UNO,
+                FloatCondition::OrderedLessThan => FloatPredicate::OLT,
+                FloatCondition::UnorderedLessThan => FloatPredicate::ULT,
                 _ => todo!("float condition {:?}", instr.float_condition()),
             };
 
