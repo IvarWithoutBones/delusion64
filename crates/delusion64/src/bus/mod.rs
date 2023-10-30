@@ -79,6 +79,14 @@ impl Bus {
                 }),
             },
             MonitorCommand {
+                name: "si",
+                description: "print the serial interface registers",
+                handler: Box::new(|bus, out, _args| {
+                    writeln!(out, "{:#x?}", bus.si)?;
+                    Ok(())
+                }),
+            },
+            MonitorCommand {
                 name: "vi",
                 description: "print the video interface registers",
                 handler: Box::new(|bus, out, _args| {
@@ -87,10 +95,15 @@ impl Bus {
                 }),
             },
             MonitorCommand {
-                name: "si",
-                description: "print the serial interface registers",
+                name: "vi-info",
+                description: "print information about the current framebuffer",
                 handler: Box::new(|bus, out, _args| {
-                    writeln!(out, "{:#x?}", bus.si)?;
+                    let width = bus.vi.width();
+                    let height = bus.vi.height();
+                    let rdram = bus.vi.framebuffer_range();
+                    writeln!(out, "width:  {}", width)?;
+                    writeln!(out, "height: {}", height)?;
+                    writeln!(out, "rdram:  {:#x}..{:#x}", rdram.start(), rdram.end())?;
                     Ok(())
                 }),
             },
@@ -154,7 +167,15 @@ impl BusInterface for Bus {
         let mut result = BusValue::default();
 
         // TODO: how does timing compare to the CPU?
-        self.vi.tick();
+
+        let vi_side_effects = self.vi.tick();
+        if vi_side_effects.raise_interrupt {
+            // println!("delusion64: vi halfline interrupt");
+            if self.mi.raise_interrupt(InterruptType::VideoInterface) {
+                result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
+            }
+        }
+
         if self.pi.tick() == DmaStatus::Finished {
             println!("delusion64: pi dma finished");
             if self.mi.raise_interrupt(InterruptType::PeripheralInterface) {
@@ -181,6 +202,9 @@ impl BusInterface for Bus {
             BusSection::RspDMemory => Int::from_slice(&self.rsp_dmem[address.offset..]),
             BusSection::RspIMemory => Int::from_slice(&self.rsp_imem[address.offset..]),
             BusSection::PifRam => Int::from_slice(&self.pif_ram[address.offset..]),
+
+            // TODO: dont stub this so naively
+            BusSection::AudioInterface => Int::from_slice(&u32::MAX.to_be_bytes()),
 
             BusSection::MipsInterface => Int::new(
                 self.mi
@@ -296,10 +320,15 @@ impl BusInterface for Bus {
                 .write(address.offset, value.try_into()?)
                 .map_err(BusError::MipsInterfaceError)?,
 
-            BusSection::VideoInterface => self
-                .vi
-                .write(address.offset, value.try_into()?)
-                .ok_or(BusError::OffsetOutOfBounds(address))?,
+            BusSection::VideoInterface => {
+                let side_effects = self
+                    .vi
+                    .write(address.offset, value.try_into()?)
+                    .ok_or(BusError::OffsetOutOfBounds(address))?;
+                if side_effects.lower_interrupt {
+                    self.mi.lower_interrupt(InterruptType::VideoInterface);
+                }
+            }
 
             BusSection::SerialInterface => {
                 let side_effects = self

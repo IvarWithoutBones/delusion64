@@ -1924,6 +1924,12 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             codegen.write_fpu_register(f32_size, instr.fd(), result);
         }
 
+        Mnenomic::MovFmt => {
+            // The contents of floating-point register fs are stored to floating-point register fd.
+            let source: FloatValue = codegen.read_fpu_register(f32_size, instr.fs());
+            codegen.write_fpu_register(f32_size, instr.fd(), source);
+        }
+
         Mnenomic::CCondFmt => {
             // Compares CP1 register fs and CP1 register ft using cond. The result is stored to the C bit of FCR31.
             let cond = match instr.float_condition() {
