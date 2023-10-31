@@ -2,15 +2,26 @@
 
 use self::register::{
     Burst, Control, Current, HorizontalSync, HorizontalSyncLeap, HorizontalVideo, Interrupt,
-    Origin, StagedData, TestAddress, VerticalBurst, VerticalSync, VerticalVideo, Width, XScale,
-    YScale,
+    Origin, PixelType, StagedData, TestAddress, VerticalBurst, VerticalSync, VerticalVideo, Width,
+    XScale, YScale,
 };
-use std::ops::RangeInclusive;
 
 mod register;
 
 const COUNTER_START: u32 = ((62500000.0 / 60.0) + 1.0) as u32;
 const BLANKING_DONE: u32 = (COUNTER_START as f32 - (COUNTER_START as f32 / (525.0 * 39.0))) as u32;
+
+const fn rgba5551_to_rgba8888_color(mut color: u16) -> u8 {
+    color &= 0b1_1111;
+    (color | (color << 3)) as u8
+}
+
+#[derive(Debug)]
+pub struct FrameBuffer {
+    pub width: usize,
+    pub height: usize,
+    pub pixels: Box<[u8]>,
+}
 
 #[derive(Debug, Default)]
 pub struct SideEffects {
@@ -153,26 +164,80 @@ impl VideoInterface {
         }
     }
 
-    pub fn width(&self) -> usize {
-        let scale = (self.xscale.scale_factor() / 1024) as usize;
-        let length = (self.horizontal_video.end() - self.horizontal_video.start()) as usize;
-        length * scale
-    }
+    /// Returns the guest framebuffer as RGBA8888 pixels.
+    pub fn framebuffer(&self, rdram: &[u8]) -> Option<FrameBuffer> {
+        const SCREEN_WIDTH: usize = 640;
+        const SCREEN_HEIGHT: usize = 480;
 
-    pub fn height(&self) -> usize {
-        let scale = (self.yscale.scale_factor() / 1024) as usize;
-        let length = ((self.vertical_video.end() - self.vertical_video.start()) >> 1) as usize;
-        let result = length * scale;
-        match result {
-            474 => 480, // TODO: this is obviously wrong, maybe because we're not parsing the 2.10 format?
-            _ => result,
+        let (src_x_offset, dst_x_offset, dst_width) = {
+            const HSCAN_MIN: usize = 108;
+            const HSCAN_MAX: usize = HSCAN_MIN + SCREEN_WIDTH;
+            let hstart = self.horizontal_video.start() as usize;
+            let hend = self.horizontal_video.end() as usize;
+            let x0 = hstart.max(HSCAN_MIN);
+            let x1 = hend.min(HSCAN_MAX);
+            (x0 - hstart, x0 - HSCAN_MIN, x1 - x0)
+        };
+
+        let (src_y_offset, dst_y_offset, dst_height) = {
+            const VSCAN_MIN: usize = 34;
+            const VSCAN_MAX: usize = VSCAN_MIN + SCREEN_HEIGHT;
+            let vstart = self.vertical_video.start() as usize;
+            let vend = self.vertical_video.end() as usize;
+            let y0 = vstart.max(VSCAN_MIN);
+            let y1 = if vend < vstart {
+                VSCAN_MAX
+            } else {
+                vend.min(VSCAN_MAX)
+            };
+            (y0 - vstart, y0 - VSCAN_MIN, y1 - y0)
+        };
+
+        let xscale = self.xscale.scale() as usize;
+        let yscale = self.yscale.scale() as usize;
+
+        let pixel_type = self.control.pixel_type();
+        let bytes_per_pixel = pixel_type.bytes_per_pixel()?; // For the guest, host always uses RGBA8888
+        let mut pixels = vec![0_u8; (SCREEN_WIDTH * SCREEN_HEIGHT) * 4].into_boxed_slice();
+
+        let mut src_y = (src_y_offset * yscale) + self.yscale.subpixel() as usize;
+        for y in 0..dst_height {
+            let is_odd = ((dst_y_offset + y) & 1) != 0;
+            if !self.control.serrate() || self.field != is_odd {
+                let dst_offset = (y * SCREEN_WIDTH) + dst_x_offset;
+                let src_offset = {
+                    let rdram_offset = self.origin.origin() as usize;
+                    let pitch = self.width.width() as usize * bytes_per_pixel;
+                    rdram_offset + ((src_y >> 11) * pitch)
+                };
+
+                let mut src_x = (src_x_offset * xscale) + self.xscale.subpixel() as usize;
+                for pixel_chunk in pixels.chunks_exact_mut(4).skip(dst_offset).take(dst_width) {
+                    let addr = src_offset + ((src_x >> 10) * bytes_per_pixel);
+                    let range = addr..addr + bytes_per_pixel;
+                    match pixel_type {
+                        PixelType::RGBA8888 => pixel_chunk.copy_from_slice(&rdram[range]),
+                        PixelType::RGBA5551 => {
+                            let pixel = u16::from_be_bytes(rdram[range].try_into().unwrap());
+                            let r = rgba5551_to_rgba8888_color(pixel >> 11);
+                            let g = rgba5551_to_rgba8888_color(pixel >> 6);
+                            let b = rgba5551_to_rgba8888_color(pixel >> 1);
+                            let a = (pixel as u8 & 1) * u8::MAX; // 0 or 255, effectively a bool
+                            pixel_chunk.copy_from_slice(&[r, g, b, a]);
+                        }
+                        PixelType::Reserved | PixelType::Blank => return None,
+                    }
+                    src_x += xscale;
+                }
+                src_y += yscale;
+            }
         }
-    }
 
-    pub fn framebuffer_range(&self) -> RangeInclusive<usize> {
-        let origin = self.origin.origin() as usize;
-        let pixel_size = 4; // TODO: dont assume 32-bit RGBA
-        origin..=(origin + (self.width() * self.height()) * pixel_size)
+        Some(FrameBuffer {
+            width: dst_width,
+            height: dst_height,
+            pixels,
+        })
     }
 }
 

@@ -7,20 +7,30 @@ const fn offset(index: usize) -> usize {
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum PixelType {
     /// 32-bit RGBA
-    R8G8B8A8,
+    RGBA8888,
     /// 18-bit RGBA
-    R5G5B5A3,
+    RGBA5551,
     /// Should not be used
     Reserved,
     /// No data and no sync
     Blank,
 }
 
+impl PixelType {
+    pub fn bytes_per_pixel(self) -> Option<usize> {
+        match self {
+            PixelType::RGBA8888 => Some(4),
+            PixelType::RGBA5551 => Some(2),
+            PixelType::Reserved | PixelType::Blank => None,
+        }
+    }
+}
+
 impl From<u8> for PixelType {
     fn from(value: u8) -> Self {
         match value {
-            0b11 => Self::R8G8B8A8,
-            0b10 => Self::R5G5B5A3,
+            0b11 => Self::RGBA8888,
+            0b10 => Self::RGBA5551,
             0b01 => Self::Reserved,
             0b00 => Self::Blank,
             _ => unreachable!(),
@@ -31,8 +41,8 @@ impl From<u8> for PixelType {
 impl From<PixelType> for u8 {
     fn from(value: PixelType) -> Self {
         match value {
-            PixelType::R8G8B8A8 => PixelType::R8G8B8A8.into(),
-            PixelType::R5G5B5A3 => PixelType::R5G5B5A3.into(),
+            PixelType::RGBA8888 => PixelType::RGBA8888.into(),
+            PixelType::RGBA5551 => PixelType::RGBA5551.into(),
             PixelType::Reserved => PixelType::Reserved.into(),
             PixelType::Blank => PixelType::Blank.into(),
         }
@@ -242,8 +252,8 @@ bitfield! {
     /// See [n64brew](https://n64brew.dev/wiki/Video_Interface#0x0440_0030_-_VI_X_SCALE).
     pub struct XScale(u32) {
         // TODO: parse 2.10 format
-        [0..=11] pub scale_factor: u16,
-        [16..=27] pub subpixel_offset: u16,
+        [0..=11] pub scale: u16,
+        [16..=27] pub subpixel: u16,
     }
 }
 
@@ -255,8 +265,8 @@ bitfield! {
     /// See [n64brew](https://n64brew.dev/wiki/Video_Interface#0x0440_0034_-_VI_Y_SCALE).
     pub struct YScale(u32) {
         // TODO: parse 2.10 format
-        [0..=11] pub scale_factor: u16,
-        [16..=27] pub subpixel_offset: u16,
+        [0..=11] pub scale: u16,
+        [16..=27] pub subpixel: u16,
     }
 }
 

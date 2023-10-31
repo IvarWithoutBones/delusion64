@@ -95,25 +95,15 @@ impl Bus {
                 }),
             },
             MonitorCommand {
-                name: "vi-info",
-                description: "print information about the current framebuffer",
-                handler: Box::new(|bus, out, _args| {
-                    let width = bus.vi.width();
-                    let height = bus.vi.height();
-                    let rdram = bus.vi.framebuffer_range();
-                    writeln!(out, "width:  {}", width)?;
-                    writeln!(out, "height: {}", height)?;
-                    writeln!(out, "rdram:  {:#x}..{:#x}", rdram.start(), rdram.end())?;
-                    Ok(())
-                }),
-            },
-            MonitorCommand {
                 name: "dump-fb",
                 description: "dump the VI framebuffer to a file. usage: dump-fb <filename>",
                 handler: Box::new(|bus, out, args| {
                     let path = std::path::Path::new(args.next().ok_or("expected filename")?);
-                    let fb = &bus.rdram[bus.vi.framebuffer_range()];
-                    std::fs::write(path, fb)
+                    let fb = bus
+                        .vi
+                        .framebuffer(bus.rdram.as_slice())
+                        .ok_or("failed to generate framebuffer")?;
+                    std::fs::write(path, fb.pixels)
                         .map_err(|err| format!("failed to write file: {err}"))?;
                     writeln!(out, "wrote raw framebuffer to {path:?}")?;
                     Ok(())
