@@ -84,6 +84,13 @@ impl<const SIZE: usize> IntoInt<SIZE> for [u8; SIZE] {
     }
 }
 
+impl<'a, const SIZE: usize> IntoInt<SIZE> for &'a [u8; SIZE] {
+    #[inline]
+    fn into_int(self) -> Int<SIZE> {
+        Int(*self)
+    }
+}
+
 /// A wrapper around a byte array that represents an integer. Note that the bytes are always interpreted as the systems endianness.
 ///
 /// Used instead of an enum with a variant for each size for a few reasons:

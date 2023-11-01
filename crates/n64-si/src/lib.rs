@@ -1,12 +1,22 @@
+use std::ops::Range;
+
 use self::register::{
     DramAddress, PifAddressRead4, PifAddressRead64, PifAddressWrite4, PifAddressWrite64, Status,
 };
+use n64_pif::{Pif, PifError};
 
 mod register;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SiError {
     OffsetOutOfBounds { offset: usize },
+    PifError(PifError),
+}
+
+impl From<PifError> for SiError {
+    fn from(error: PifError) -> Self {
+        Self::PifError(error)
+    }
 }
 
 pub type SiResult<T> = Result<T, SiError>;
@@ -58,7 +68,9 @@ pub struct SerialInterface {
     pif_address_write_64: PifAddressWrite64,
     pif_address_read_4: PifAddressRead4,
     status: Status,
+
     dma: Option<Dma>,
+    pif: Pif,
 }
 
 impl SerialInterface {
@@ -66,10 +78,26 @@ impl SerialInterface {
         Self::default()
     }
 
+    pub fn read_pif_rom<const SIZE: usize>(&self, offset: usize) -> SiResult<&[u8; SIZE]> {
+        Ok(self.pif.read(n64_pif::Region::Rom, offset)?)
+    }
+
+    pub fn read_pif_ram<const SIZE: usize>(&self, offset: usize) -> SiResult<&[u8; SIZE]> {
+        Ok(self.pif.read(n64_pif::Region::Ram, offset)?)
+    }
+
+    pub fn write_pif_ram<const SIZE: usize>(
+        &mut self,
+        offset: usize,
+        value: &[u8; SIZE],
+    ) -> SiResult<()> {
+        Ok(self.pif.write_ram(offset, value)?)
+    }
+
     pub fn read(&mut self, offset: usize) -> SiResult<u32> {
         let result = match offset {
             DramAddress::OFFSET => self.dram_address.address(),
-            PifAddressRead64::OFFSET => self.pif_address_read_64.pif_address().into(),
+            PifAddressRead64::OFFSET => self.pif_address_read_64.offset(),
             PifAddressWrite4::OFFSET => self.pif_address_write_4.into(),
             PifAddressWrite64::OFFSET => self.pif_address_write_64.data(),
             PifAddressRead4::OFFSET => self.pif_address_read_4.into(),
@@ -79,7 +107,7 @@ impl SerialInterface {
         Ok(result)
     }
 
-    pub fn write(&mut self, offset: usize, value: u32) -> SiResult<SideEffects> {
+    pub fn write(&mut self, offset: usize, value: u32, rdram: &mut [u8]) -> SiResult<SideEffects> {
         let mut side_effects = SideEffects::default();
         match offset {
             DramAddress::OFFSET => self.dram_address = value.into(),
@@ -90,9 +118,14 @@ impl SerialInterface {
                     ty: DmaType::Read,
                     length: 64,
                     cycles_remaining: 1, // TODO: inaccurate
-                    pif_address: self.pif_address_read_64.pif_address() as u32,
+                    pif_address: self.pif_address_read_64.offset(),
                     ram_address: self.dram_address.address(),
-                })
+                });
+
+                self.pif.read_dma(
+                    self.pif_address_read_64.offset(),
+                    &mut rdram[self.rdram_range()],
+                )?;
             }
             PifAddressWrite4::OFFSET => self.pif_address_write_4 = value.into(),
             PifAddressWrite64::OFFSET => {
@@ -104,7 +137,10 @@ impl SerialInterface {
                     cycles_remaining: 4065 * 3,
                     pif_address: self.pif_address_write_64.data(),
                     ram_address: self.dram_address.address(),
-                })
+                });
+
+                self.pif
+                    .write_dma(self.pif_address_write_64.data(), &rdram[self.rdram_range()])?;
             }
             PifAddressRead4::OFFSET => self.pif_address_read_4 = value.into(),
             Status::OFFSET => {
@@ -130,5 +166,10 @@ impl SerialInterface {
         } else {
             DmaStatus::Idle
         }
+    }
+
+    fn rdram_range(&self) -> Range<usize> {
+        let rdram_addr = self.dram_address.address() as usize;
+        rdram_addr..rdram_addr + n64_pif::Region::Ram.len()
     }
 }

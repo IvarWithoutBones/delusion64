@@ -37,7 +37,7 @@ bitfield_without_debug! {
     /// See [n64brew](https://n64brew.dev/wiki/Serial_Interface#0x0480_0004_-_SI_PIF_AD_RD64B) for more information.
     pub struct PifAddressRead64(u32) {
         /// Offset in PIF_RAM/PIF_ROM to fetch data from, without the least significant bit which must be zero.
-        [1..=10] writable_pif_address: u16,
+        [1..=10] writable_offset: u16,
     }
 }
 
@@ -45,8 +45,8 @@ impl PifAddressRead64 {
     pub const OFFSET: usize = 0x4;
 
     /// Offset in PIF-RAM/PIF-ROM to fetch data from.
-    pub fn pif_address(&self) -> u16 {
-        self.writable_pif_address() << 1
+    pub fn offset(&self) -> u32 {
+        (self.writable_offset() as u32) << 1
     }
 }
 
@@ -54,7 +54,7 @@ impl fmt::Debug for PifAddressRead64 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PifAddressRead64")
             .field("<value>", &self.0)
-            .field("pif_address", &self.pif_address())
+            .field("offset", &self.offset())
             .finish()
     }
 }

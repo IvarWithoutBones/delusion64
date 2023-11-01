@@ -92,7 +92,6 @@ pub struct SideEffects {
 pub enum BusDevice {
     CartridgeRom,
     CartridgeSram,
-    PifRom,
 }
 
 impl BusDevice {
@@ -100,7 +99,6 @@ impl BusDevice {
         // TODO: implement this properly, these values are just guesses
         match self {
             BusDevice::CartridgeRom | BusDevice::CartridgeSram => 150,
-            BusDevice::PifRom => 1,
         }
     }
 }
@@ -184,7 +182,7 @@ impl PeripheralInterface {
         };
 
         match device {
-            BusDevice::PifRom | BusDevice::CartridgeSram => todo!("PI: read PIF ROM"),
+            BusDevice::CartridgeSram => todo!("PI: read cartridge SRAM"),
 
             BusDevice::CartridgeRom => self
                 .cartridge

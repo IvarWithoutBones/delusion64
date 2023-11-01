@@ -105,7 +105,6 @@ impl<'a> From<&'a BusSection> for n64_pi::BusDevice {
         match section {
             BusSection::CartridgeRom => n64_pi::BusDevice::CartridgeRom,
             BusSection::CartridgeSram => n64_pi::BusDevice::CartridgeSram,
-            BusSection::PifRom => n64_pi::BusDevice::PifRom,
             _ => unimplemented!(),
         }
     }

@@ -1,0 +1,8 @@
+[package]
+name = "n64-pif"
+description = "The PIF of the Nintendo 64, primarily used for communication with external devices"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tartan-bitfield = "1.2.0"

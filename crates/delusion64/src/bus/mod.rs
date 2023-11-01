@@ -23,7 +23,6 @@ pub struct Bus {
     rdram: Box<[u8; BusSection::RdramMemory.len()]>,
     rsp_dmem: Box<[u8; BusSection::RspDMemory.len()]>,
     rsp_imem: Box<[u8; BusSection::RspIMemory.len()]>,
-    pif_ram: Box<[u8; BusSection::PifRam.len()]>,
     pi: PeripheralInterface,
     mi: MipsInterface,
     vi: VideoInterface,
@@ -50,7 +49,6 @@ impl Bus {
         Self {
             rdram: boxed_array(),
             rsp_imem: boxed_array(),
-            pif_ram: boxed_array(),
             rsp_dmem,
             pi: PeripheralInterface::new(cartridge_rom, cartridge.header.pi_bsd_domain_1_flags),
             mi: MipsInterface::new(),
@@ -191,9 +189,8 @@ impl BusInterface for Bus {
             BusSection::RdramMemory => Int::from_slice(&self.rdram[address.offset..]),
             BusSection::RspDMemory => Int::from_slice(&self.rsp_dmem[address.offset..]),
             BusSection::RspIMemory => Int::from_slice(&self.rsp_imem[address.offset..]),
-            BusSection::PifRam => Int::from_slice(&self.pif_ram[address.offset..]),
 
-            // TODO: dont stub this so naively
+            // TODO: dont stub this so naively, only here so namco museum assumes its initialized.
             BusSection::AudioInterface => Int::from_slice(&u32::MAX.to_be_bytes()),
 
             BusSection::MipsInterface => Int::new(
@@ -220,7 +217,19 @@ impl BusInterface for Bus {
                     .map_err(BusError::SerialInterfaceError)?,
             ),
 
-            BusSection::CartridgeRom | BusSection::CartridgeSram | BusSection::PifRom => Int::new(
+            BusSection::PifRam => Int::new(
+                self.si
+                    .read_pif_ram::<SIZE>(address.offset)
+                    .map_err(BusError::SerialInterfaceError)?,
+            ),
+
+            BusSection::PifRom => Int::new(
+                self.si
+                    .read_pif_rom::<SIZE>(address.offset)
+                    .map_err(BusError::SerialInterfaceError)?,
+            ),
+
+            BusSection::CartridgeRom | BusSection::CartridgeSram => Int::new(
                 self.pi
                     .read_bus::<SIZE>(address.section.into(), address.offset)
                     .map_err(BusError::PeripheralInterfaceError)?,
@@ -294,16 +303,10 @@ impl BusInterface for Bus {
                 }
             }
 
-            BusSection::PifRam => {
-                self.pif_ram[range.clone()].copy_from_slice(value.as_slice());
-                if SIZE < 4 {
-                    // Still writes 32 bits, filling everything that does not come from the value with zeros.
-                    let end = range.end;
-                    if let Some(remainder) = self.pif_ram.get_mut(end..end + (32 - SIZE)) {
-                        remainder.fill(0);
-                    }
-                }
-            }
+            BusSection::PifRam => self
+                .si
+                .write_pif_ram(address.offset, value.as_slice())
+                .map_err(BusError::SerialInterfaceError)?,
 
             BusSection::MipsInterface => self
                 .mi
@@ -323,7 +326,7 @@ impl BusInterface for Bus {
             BusSection::SerialInterface => {
                 let side_effects = self
                     .si
-                    .write(address.offset, value.try_into()?)
+                    .write(address.offset, value.try_into()?, self.rdram.as_mut_slice())
                     .map_err(BusError::SerialInterfaceError)?;
                 if side_effects.lower_interrupt {
                     self.mi.lower_interrupt(InterruptType::SerialInterface);

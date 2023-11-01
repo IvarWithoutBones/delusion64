@@ -393,9 +393,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "n64-pif"
+version = "0.1.0"
+dependencies = [
+ "tartan-bitfield",
+]
+
+[[package]]
 name = "n64-si"
 version = "0.1.0"
 dependencies = [
+ "n64-pif",
  "tartan-bitfield",
 ]
 
