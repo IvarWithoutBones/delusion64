@@ -140,6 +140,8 @@ pub struct Environment<'ctx, Bus: bus::Bus> {
     codegen: Cell<Option<CodeGen<'ctx>>>,
     debugger: Option<gdb::Debugger<'ctx, Bus>>,
     even_cycle: bool,
+    // TODO: replace this with a proper logging library
+    trace: bool,
 }
 
 impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
@@ -161,6 +163,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
             bus,
             interrupt_pending: false,
             even_cycle: true,
+            trace: false,
         };
 
         if let Some(gdb) = gdb {
@@ -484,13 +487,15 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
             self.handle_exception(Exception::Interrupt, None);
         }
 
-        // let pc_paddr = self.virtual_to_physical_address(pc_vaddr, AccessMode::Read);
-        //
-        // let instr = ParsedInstruction::try_from(u32::from_be_bytes(
-        //     *self.read(pc_paddr).unwrap().as_slice(),
-        // ))
-        // .unwrap();
-        // println!("{pc_vaddr:06x}: {instr}");
+        if self.trace {
+            let pc_paddr = self.virtual_to_physical_address(pc_vaddr, AccessMode::Read);
+
+            let instr = ParsedInstruction::try_from(u32::from_be_bytes(
+                *self.read(pc_paddr).unwrap().as_slice(),
+            ))
+            .unwrap();
+            println!("{pc_vaddr:06x}: {instr}");
+        }
 
         self.bus
             .tick()

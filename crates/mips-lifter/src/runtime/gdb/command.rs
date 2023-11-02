@@ -171,11 +171,21 @@ impl<Bus: bus::Bus> Environment<'_, Bus> {
                 }),
             },
             MonitorCommand {
-                name: "irq",
-                description: "",
-                handler: Box::new(|env, out, _args| {
-                    writeln!(out, "handling IRQ")?;
-                    env.interrupt_pending = true;
+                name: "trace",
+                description: "enable or disable instruction tracing to standard output. usage: trace [on|off]",
+                handler: Box::new(|env, out, args| {
+                    match args.next() {
+                        Some("on") => {
+                            env.trace = true;
+                            writeln!(out, "tracing is now on")?;
+                        },
+                        Some("off") => {
+                            env.trace = false;
+                            writeln!(out, "tracing is now off")?;
+                        },
+                        None => writeln!(out, "trace is {}", if env.trace { "on" } else { "off" })?,
+                        Some(arg) => Err(format!("invalid argument: {arg}. usage: trace [on|off]"))?,
+                    }
                     Ok(())
                 }),
             },
