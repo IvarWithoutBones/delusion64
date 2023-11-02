@@ -411,7 +411,18 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
                         // See the comment in `label.rs` for more context.
                         if fallthrough.label.instructions.len() == 1 {
                             lab.fallthrough_instr = Some(fallthrough.label.instructions[0].clone());
-                            lab.fallthrough_fn = fallthrough.fallthrough_fn;
+                            if fallthrough
+                                .fallthrough_fn
+                                .as_ref()
+                                .map(|f| f == &codegen.fallthrough_function(FallthroughAmount::One))
+                                .unwrap_or(false)
+                            {
+                                // Falling through one instruction here will re-execute the fallthrough_instr.
+                                lab.fallthrough_fn =
+                                    Some(codegen.fallthrough_function(FallthroughAmount::Two));
+                            } else {
+                                lab.fallthrough_fn = fallthrough.fallthrough_fn;
+                            }
                         } else {
                             lab.fallthrough_fn = Some(fallthrough.function);
                         }
