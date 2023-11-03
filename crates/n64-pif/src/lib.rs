@@ -1,12 +1,8 @@
+use self::joybus::Channels;
 use std::fmt;
+use tartan_bitfield::bitfield;
 
-use command::Command;
-use device::Devices;
-
-use crate::device::DEVICES_LEN;
-
-mod command;
-mod device;
+mod joybus;
 
 // TODO: deduplicate, this is stolen from delusion64::bus.
 /// Allocates a fixed-sized boxed array of a given length.
@@ -33,31 +29,44 @@ impl Region {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum PifError {
-    OffsetOutOfBounds { region: Region, offset: usize },
-    CommandParseError(command::ParseError),
-}
-
-impl From<command::ParseError> for PifError {
-    fn from(error: command::ParseError) -> Self {
-        Self::CommandParseError(error)
-    }
-}
-
-pub type PifResult<T> = Result<T, PifError>;
-
 #[derive(Debug)]
 enum Direction {
     Read,
     Write,
 }
 
-// #[derive(Debug)] // TODO: better impl, this dumps too much
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PifError {
+    OffsetOutOfBounds { region: Region, offset: usize },
+    JoybusParseError(joybus::ParseError),
+}
+
+impl From<joybus::ParseError> for PifError {
+    fn from(error: joybus::ParseError) -> Self {
+        Self::JoybusParseError(error)
+    }
+}
+
+pub type PifResult<T> = Result<T, PifError>;
+
+bitfield! {
+    /// See [n64brew](https://n64brew.dev/wiki/PIF-NUS#RAM-based_communication_protocol)
+    pub struct Command(u8) {
+        [0] pub initialise_joybus,
+        [1] pub challenge_checksum,
+        [3] pub terminate_boot,
+        [4] pub rom_lockout,
+        [5] pub acquire_checksum,
+        [6] pub run_checksum,
+        [7] pub acknowledge,
+    }
+}
+
+/// See [n64brew](https://n64brew.dev/wiki/PIF-NUS)
 pub struct Pif {
     ram: Box<[u8; Region::Ram.len()]>,
     rom: Box<[u8; Region::Rom.len()]>,
-    devices: Devices,
+    channels: Channels,
 }
 
 impl Pif {
@@ -67,7 +76,7 @@ impl Pif {
         Self {
             ram: boxed_array(),
             rom: boxed_array(),
-            devices: Default::default(),
+            channels: Channels::new(),
         }
     }
 
@@ -102,121 +111,51 @@ impl Pif {
     }
 
     fn process_command(&mut self, direction: Direction) -> PifResult<()> {
+        let mut cmd = self.read_command();
+        println!("delusion64: si {direction:?} dma");
         match direction {
             Direction::Read => {
-                // Skip the last device, which is the cartridge port
-                for device in self
-                    .devices
-                    .iter()
-                    .take(DEVICES_LEN - 1)
-                    .filter(|device| !device.skip)
-                {
-                    let mut offset = device.address as usize;
+                if cmd.challenge_checksum() {
+                    todo!("PIF-NUS challenge checksum");
+                }
 
-                    let mut send = self.ram[offset];
-                    offset += 1;
-
-                    println!("send: {send:#04x}");
-
-                    let recv_offset = offset;
-                    let mut recv = self.ram[offset];
-                    println!("recv: {recv:#04x}");
-                    offset += 1;
-
-                    send &= 0x3F;
-                    recv &= 0x3F;
-
-                    let mut input = [0_u8; 64];
-                    for input_byte in input.iter_mut().take(send as usize) {
-                        *input_byte = self.ram[offset];
-                        offset += 1;
-                    }
-
-                    {
-                        for (i, input_byte) in input.iter().enumerate() {
-                            if i % 8 == 0 {
-                                println!()
-                            }
-                            print!("{input_byte:02x} ");
+                // TODO: handle cartridge
+                for device in self.channels.controllers() {
+                    let msg = joybus::Message::new(device.address, self.ram.as_mut_slice())?;
+                    match msg.request {
+                        joybus::Request::Info | joybus::Request::ResetInfo => {
+                            msg.reply(joybus::response::Info::Controller {
+                                pak_installed: false,
+                                checksum_error: false,
+                            });
                         }
-                        println!();
-                    }
 
-                    let mut valid = false;
-
-                    let mut output = [0_u8; 64];
-                    if input[0] == 0 || input[0] == 0xff {
-                        output[0] = 0x05; //0x05 = gamepad; 0x02 = mouse
-                        output[1] = 0x00;
-                        output[2] = 0x02; //0x02 = nothing present in controller slot
-                        valid = true;
-                    }
-
-                    if valid {
-                        for out in output.iter().take(recv as usize) {
-                            self.ram[offset] = *out;
-                            offset += 1;
+                        joybus::Request::WriteControllerAccessory => {
+                            // Namco Museum for some reason requests this, even though we never report `pak_installed`.
+                            println!("stub: joybus::Command::WriteControllerAccessory");
                         }
-                    } else {
-                        self.ram[recv_offset] = recv | 0x80;
+
+                        req => todo!("PIF-NUS joybus request {req:#?}"),
                     }
                 }
             }
+
             Direction::Write => {
-                // Initialise the devices
-                assert!(self.read_command()? == Command::ControllerState);
-                for device in &mut self.devices {
-                    device.skip = true;
-                    device.reset = false;
+                if !cmd.initialise_joybus() {
+                    return Ok(());
+                } else {
+                    // TODO: keep track of the current state. Read DMA should not work without this.
+                    self.write_command(cmd.with_initialise_joybus(false));
                 }
 
-                // Parse the devices
-                let mut offset = 0;
-                let mut channel = 0;
-                while channel < 5 && offset < 64 {
-                    let mut send = self.ram[offset];
-                    offset += 1;
-
-                    match send {
-                        0xFE => break,    // End of packet
-                        0xFF => continue, // Padding
-                        0x00 => {
-                            // Channel skip
-                            channel += 1;
-                            continue;
-                        }
-                        0xFD => {
-                            // Channel reset
-                            self.devices[channel].reset = true;
-                            channel += 1;
-                            continue;
-                        }
-                        _ => {}
-                    }
-
-                    let send_offset = offset - 1;
-                    let mut recv = self.ram[offset];
-                    offset += 1;
-
-                    send &= 0x3F;
-                    recv &= 0x3F;
-                    offset += send as usize + recv as usize;
-
-                    if offset < 64 {
-                        self.devices[channel].address = send_offset as u8;
-                        self.devices[channel].skip = false;
-                        channel += 1;
-                    }
-                }
+                // Reset the channels, then initialise them with the contents of RAM.
+                self.channels = Channels::new_initialised(self.ram.as_slice());
             }
         }
-
         Ok(())
     }
 
     pub fn read_dma(&mut self, _pif_address: u32, rdram: &mut [u8]) -> Result<(), PifError> {
-        let cmd = self.read_command()?;
-        println!("delusion64: PIF read DMA with command {cmd:#?}");
         self.process_command(Direction::Read)?;
         rdram.copy_from_slice(self.ram.as_slice());
         Ok(())
@@ -224,13 +163,15 @@ impl Pif {
 
     pub fn write_dma(&mut self, _data: u32, rdram: &[u8]) -> Result<(), PifError> {
         self.ram.copy_from_slice(rdram);
-        let cmd = self.read_command()?;
-        println!("delusion64: PIF write DMA submitted command {cmd:#?}");
         self.process_command(Direction::Write)
     }
 
-    fn read_command(&self) -> Result<Command, PifError> {
-        Ok(self.ram[Self::COMMAND_OFFSET].try_into()?)
+    fn read_command(&self) -> Command {
+        self.ram[Self::COMMAND_OFFSET].into()
+    }
+
+    fn write_command(&mut self, command: Command) {
+        self.ram[Self::COMMAND_OFFSET] = command.into();
     }
 }
 
@@ -243,18 +184,9 @@ impl Default for Pif {
 impl fmt::Debug for Pif {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Pif")
-            .field("devices", &self.devices)
+            .field("channels", &self.channels)
             .field("rom", &"<omitted>")
-            .field("ram", &{
-                let mut output = String::new();
-                for (i, byte) in self.ram.iter().enumerate().take(0x40) {
-                    if i % 8 == 0 {
-                        output.push('\n');
-                    }
-                    output.push_str(&format!("{byte:02x} "));
-                }
-                output
-            })
+            .field("ram", &"<omitted>")
             .finish()
     }
 }

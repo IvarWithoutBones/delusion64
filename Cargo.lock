@@ -396,6 +396,7 @@ dependencies = [
 name = "n64-pif"
 version = "0.1.0"
 dependencies = [
+ "strum",
  "tartan-bitfield",
 ]
 
