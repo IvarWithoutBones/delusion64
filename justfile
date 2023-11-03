@@ -3,10 +3,6 @@ alias bin := compile-ll
 alias dis := disassemble
 alias swap := endian-swap
 
-# Ensures the terminal is in a sane state upon exit (it might not be when GDB crashes).
-gdb:
-    gdb || stty -sane
-
 # Show a disassembly of a MIPS ELF file.
 disassemble elf *args:
     mips64-unknown-linux-gnuabi64-objdump "{{elf}}" \
