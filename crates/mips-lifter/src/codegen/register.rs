@@ -17,11 +17,11 @@ pub(crate) const CP2_REGISTER_LATCH: register::Cp0 = register::Cp0::Reserved21;
 
 /// Whether or not the current instruction is inside of a delay slot.
 /// Since we only ever write to one of the reserved CP0 registers, we can reuse one to store this information.
-pub(crate) const INSIDE_DELAY_SLOT_STORAGE: register::Cp0 = register::Cp0::Reserved21;
+pub(crate) const INSIDE_DELAY_SLOT_STORAGE: register::Cp0 = register::Cp0::Reserved22;
 
 /// The current host stack frame.
 /// Since we only ever write to one of the reserved CP0 registers, we can reuse one to store this information.
-pub(crate) const HOST_STACK_FRAME_STORAGE: register::Cp0 = register::Cp0::Reserved22;
+pub(crate) const HOST_STACK_FRAME_STORAGE: register::Cp0 = register::Cp0::Reserved31;
 
 pub trait BitWidth: std::fmt::Display {
     fn bit_width(&self) -> usize;

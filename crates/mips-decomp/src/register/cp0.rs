@@ -161,21 +161,31 @@ bitfield! {
 }
 
 bitfield! {
-    /// The format of the `IM` field of the CP0 register Status.
+    /// The `IP` (Interrupt Pending) field of the register Cause, and the `IM` (Interrupt Mask) field of the register Status.
     #[derive(Ord, PartialOrd, Hash)]
-    pub struct InterruptMask(u8) {
-        /// Mask bits for software interrupts and `IP` of the Cause register
-        [0..=1] pub software_interrupt_mask: u8,
-        /// Mask bits for external interrupts, or external write requests
-        [2..=6] pub external_interrupt_mask: u8,
-        /// Mask bit for timer interrupt
-        [7] pub timer_interrupt_mask,
+    pub struct InterruptStatus(u8) {
+        [0] pub software_1,
+        [1] pub software_2,
+        [2] pub external_1,
+        [3] pub external_2,
+        [4] pub external_3,
+        [5] pub external_4,
+        [6] pub external_5,
+        [7] pub timer,
     }
 }
 
-impl InterruptMask {
+impl InterruptStatus {
+    pub const fn new(raw: u8) -> Self {
+        Self(raw)
+    }
+
     pub const fn raw(&self) -> u8 {
         self.0
+    }
+
+    pub const fn check_mask(&self, mask: Self) -> bool {
+        (self.0 & mask.0) != 0
     }
 }
 
@@ -198,7 +208,7 @@ bitfield! {
         /// Enables 64-bit addressing and operations in Kernel mode (`KX`).
         [7] pub kernel_64_bits,
         // /// Mask bits for software, external and timers interrupts. Corresponds to `IP` of the Cause register (`IM`).
-        [8..=15] pub interrupt_mask: u8 as InterruptMask,
+        [8..=15] pub interrupt_mask: u8 as InterruptStatus,
         /// The diagnostic status (`DS`).
         [16..=24] pub diagnostic_status: u16 as DiagnosticStatus,
         /// Enables reverse of system endianness in User mode (`RE`).
@@ -245,36 +255,11 @@ impl Status {
 }
 
 bitfield! {
-    /// The `IP` field of the CP0 register Cause.
-    #[derive(Ord, PartialOrd, Hash)]
-    pub struct InterruptPending(u8) {
-        [0] pub software_1,
-        [1] pub software_2,
-        [2] pub external_1,
-        [3] pub external_2,
-        [4] pub external_3,
-        [5] pub external_4,
-        [6] pub external_5,
-        [7] pub timer,
-    }
-}
-
-impl InterruptPending {
-    pub const fn new(raw: u8) -> Self {
-        Self(raw)
-    }
-
-    pub const fn raw(&self) -> u8 {
-        self.0
-    }
-}
-
-bitfield! {
     /// The format of the CP0 register Cause, also known as `CR`.
     #[derive(Ord, PartialOrd, Hash)]
     pub struct Cause(u32) {
         [2..=6] pub exception_code: u8,
-        [8..=15] pub interrupt_pending: u8 as InterruptPending,
+        [8..=15] pub interrupt_pending: u8 as InterruptStatus,
         [28..=29] pub coprocessor_error: u8,
         [31] pub branch_delay,
     }

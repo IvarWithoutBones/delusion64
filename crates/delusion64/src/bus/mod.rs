@@ -289,16 +289,15 @@ impl BusInterface for Bus {
             BusSection::RdramMemory => self.rdram[range].copy_from_slice(value.as_slice()),
 
             BusSection::RspDMemory | BusSection::RspIMemory => {
-                let (range, slice) = if SIZE > 4 {
-                    // 64-bit values are truncated to 32 bits.
-                    (address.offset..address.offset + 4, &value.as_slice()[..4])
-                } else {
-                    (range, &value.as_slice()[..])
-                };
+                // 64-bit values are truncated to 32 bits, while 8-bit and 16-bit values are zero-extended.
+                let range = address.offset..address.offset + 4;
+                let mut slice = [0_u8; 4];
+                let len = slice.len().min(SIZE);
+                slice[..len].copy_from_slice(&value.as_slice()[..len]);
 
                 match address.section {
-                    BusSection::RspDMemory => self.rsp_dmem[range].copy_from_slice(slice),
-                    BusSection::RspIMemory => self.rsp_imem[range].copy_from_slice(slice),
+                    BusSection::RspDMemory => self.rsp_dmem[range].copy_from_slice(&slice),
+                    BusSection::RspIMemory => self.rsp_imem[range].copy_from_slice(&slice),
                     _ => unreachable!(),
                 }
             }

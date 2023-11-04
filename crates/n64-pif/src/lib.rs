@@ -96,10 +96,10 @@ impl Pif {
         value: &[u8; SIZE],
     ) -> PifResult<()> {
         // Writing less than 4 bytes still writes 4 bytes, by zero-extending the value.
-        self.rom
+        self.ram
             .get_mut(offset..offset + SIZE.max(4))
             .map(|bytes| {
-                bytes.copy_from_slice(value);
+                bytes[..SIZE].copy_from_slice(value);
                 if SIZE < 4 {
                     bytes[SIZE..].fill(0);
                 }

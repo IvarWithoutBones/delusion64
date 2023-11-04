@@ -1,10 +1,11 @@
-use crate::codegen::RegisterGlobals;
+use crate::codegen::{RegisterGlobals, INSIDE_DELAY_SLOT_STORAGE, RESERVED_CP0_REGISTER_LATCH};
 use inkwell::{
     context::ContextRef, execution_engine::ExecutionEngine, module::Module, values::GlobalValue,
 };
 use mips_decomp::register::{self, Register};
-use std::cell::UnsafeCell;
+use std::{cell::UnsafeCell, fmt};
 
+#[repr(C)]
 pub(crate) struct Registers {
     pub general_purpose: UnsafeCell<[u64; register::GeneralPurpose::count()]>,
     pub cp0: UnsafeCell<[u64; register::Cp0::count()]>,
@@ -104,9 +105,15 @@ impl Registers {
         register::cp0::XContext::new(self[register::Cp0::XContext])
     }
 
-    pub fn interrupts_enabled(&self) -> bool {
+    pub fn trigger_interrupt(&self) -> bool {
         let status = self.status();
-        status.interrupts_enabled() && !status.exception_level() && !status.error_level()
+        let cause = self.cause();
+        status.interrupts_enabled()
+            && !status.exception_level()
+            && !status.error_level()
+            && cause
+                .interrupt_pending()
+                .check_mask(status.interrupt_mask())
     }
 }
 
@@ -162,5 +169,63 @@ impl std::ops::IndexMut<Register> for Registers {
             Register::Fpu(r) => &mut self[r],
             Register::FpuControl(r) => &mut self[r],
         }
+    }
+}
+
+impl Default for Registers {
+    fn default() -> Self {
+        Self {
+            general_purpose: UnsafeCell::new([0; register::GeneralPurpose::count()]),
+            cp0: UnsafeCell::new([0; register::Cp0::count()]),
+            fpu: UnsafeCell::new([0; register::Fpu::count()]),
+            special: UnsafeCell::new([0; register::Special::count()]),
+            fpu_control: UnsafeCell::new([0; register::FpuControl::count()]),
+        }
+    }
+}
+
+impl fmt::Debug for Registers {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let write_reg = |f: &mut fmt::Formatter<'_>, name: &str, reg: u64| -> fmt::Result {
+            writeln!(f, "{name: <10} = {reg:#x}")
+        };
+
+        writeln!(f, "\ngeneral purpose registers:")?;
+        for (i, reg) in self.general_purpose().enumerate() {
+            let name = register::GeneralPurpose::name_from_index(i);
+            write_reg(f, name, reg)?;
+        }
+
+        writeln!(f, "\ncoprocessor 0 registers:")?;
+        for (i, reg) in self.cp0().enumerate() {
+            let register = register::Cp0::from_repr(i).unwrap();
+            if !register.is_reserved() {
+                write_reg(f, register.name(), reg)?;
+            }
+        }
+        write_reg(f, "Reserved", self[RESERVED_CP0_REGISTER_LATCH])?;
+
+        writeln!(f, "\nfpu general purpose registers:")?;
+        for (i, reg) in self.fpu().enumerate() {
+            let name = register::Fpu::name_from_index(i);
+            write_reg(f, name, reg)?;
+        }
+
+        writeln!(f, "\nfpu control registers:")?;
+        for (i, reg) in self.fpu_control().enumerate() {
+            let register = register::FpuControl::from_repr(i).unwrap();
+            if !register.is_reserved() {
+                write_reg(f, register.name(), reg)?;
+            }
+        }
+
+        writeln!(f, "\nspecial registers:")?;
+        for (i, reg) in self.special().enumerate() {
+            let name = register::Special::name_from_index(i);
+            write_reg(f, name, reg)?;
+        }
+        write_reg(f, "delay_slot", self[INSIDE_DELAY_SLOT_STORAGE])?;
+
+        Ok(())
     }
 }

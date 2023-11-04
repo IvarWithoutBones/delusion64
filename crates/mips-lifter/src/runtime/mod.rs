@@ -5,16 +5,12 @@ use self::{
     registers::Registers,
 };
 use crate::{
-    codegen::{self, CodeGen, FallthroughAmount, RESERVED_CP0_REGISTER_LATCH},
+    codegen::{self, CodeGen, FallthroughAmount},
     InitialRegisters,
 };
 use inkwell::{execution_engine::ExecutionEngine, module::Module};
 use mips_decomp::{instruction::ParsedInstruction, register, Exception, INSTRUCTION_SIZE};
-use std::{
-    cell::{Cell, UnsafeCell},
-    fmt,
-    pin::Pin,
-};
+use std::{cell::Cell, pin::Pin};
 use strum::IntoEnumIterator;
 
 pub(crate) use self::function::RuntimeFunction;
@@ -32,7 +28,6 @@ pub struct Environment<'ctx, Bus: bus::Bus> {
     tlb: TranslationLookasideBuffer,
     codegen: Cell<Option<CodeGen<'ctx>>>,
     debugger: Option<gdb::Debugger<'ctx, Bus>>,
-    even_cycle: bool,
     // TODO: replace this with a proper logging library
     trace: bool,
 }
@@ -55,7 +50,6 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
             codegen: Default::default(),
             bus,
             interrupt_pending: false,
-            even_cycle: true,
             trace: false,
         };
 
@@ -336,14 +330,12 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
                     }
 
                     lab.compile(codegen);
-
                     lab
                 })
                 .unwrap_or_else(|err| panic!("{err}"));
 
             let name = lab.function.get_name().to_str().unwrap().to_string();
             codegen.labels.push(lab);
-            codegen.module.print_to_file("test/a.ll").unwrap();
             (codegen, name)
         }();
 
@@ -356,37 +348,35 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
     }
 
     unsafe extern "C" fn on_instruction(&mut self) {
-        if self.even_cycle {
-            let count = (self.registers[register::Cp0::Count] as u32).wrapping_add(8);
-            self.registers[register::Cp0::Count] = count.into();
-
-            if count == self.registers[register::Cp0::Compare] as u32
-                && self.registers.interrupts_enabled()
-            {
-                let cause = self.registers.cause();
-                let ip = cause.interrupt_pending().with_timer(true);
-                self.registers.set_cause(cause.with_interrupt_pending(ip));
+        let count = self.registers[register::Cp0::Count] as u32;
+        let compare = self.registers[register::Cp0::Compare] as u32;
+        self.registers[register::Cp0::Count] = count.wrapping_add(8) as u64;
+        if count == compare {
+            let cause = self.registers.cause();
+            let ip = cause.interrupt_pending().with_timer(true);
+            self.registers.set_cause(cause.with_interrupt_pending(ip));
+            if self.registers.trigger_interrupt() {
                 self.interrupt_pending = true;
             }
         }
-        self.even_cycle = !self.even_cycle;
 
         let pc_vaddr = self.registers[register::Special::Pc];
-
-        if self.interrupt_pending {
-            self.interrupt_pending = false;
-            println!("handling interrupt from {pc_vaddr:#x}");
-            self.handle_exception(Exception::Interrupt, None);
-        }
-
         if self.trace {
             let pc_paddr = self.virtual_to_physical_address(pc_vaddr, AccessMode::Read);
-
             let instr = ParsedInstruction::try_from(u32::from_be_bytes(
                 *self.read(pc_paddr).unwrap().as_slice(),
             ))
             .unwrap();
             println!("{pc_vaddr:06x}: {instr}");
+        }
+
+        if self.debugger.is_some() {
+            self.update_debugger();
+            self.debugger.as_mut().unwrap().on_instruction(pc_vaddr);
+            while self.debugger.as_ref().unwrap().is_paused() {
+                // Block until the debugger tells us to continue
+                self.update_debugger();
+            }
         }
 
         self.bus
@@ -397,13 +387,10 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
             })
             .handle(self);
 
-        if self.debugger.is_some() {
-            self.update_debugger();
-            self.debugger.as_mut().unwrap().on_instruction(pc_vaddr);
-            while self.debugger.as_ref().unwrap().is_paused() {
-                // Block until the debugger tells us to continue
-                self.update_debugger();
-            }
+        if self.interrupt_pending {
+            self.interrupt_pending = false;
+            println!("handling interrupt from {pc_vaddr:#x}");
+            self.handle_exception(Exception::Interrupt, None);
         }
     }
 
@@ -435,60 +422,5 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
                 let msg = format!("failed to set tlb entry at {index:#x}");
                 self.panic_update_debugger(&msg)
             });
-    }
-}
-
-impl Default for Registers {
-    fn default() -> Self {
-        Self {
-            general_purpose: UnsafeCell::new([0; register::GeneralPurpose::count()]),
-            cp0: UnsafeCell::new([0; register::Cp0::count()]),
-            fpu: UnsafeCell::new([0; register::Fpu::count()]),
-            special: UnsafeCell::new([0; register::Special::count()]),
-            fpu_control: UnsafeCell::new([0; register::FpuControl::count()]),
-        }
-    }
-}
-
-impl fmt::Debug for Registers {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "\ngeneral registers:")?;
-        for (i, r) in self.general_purpose().enumerate() {
-            let name = register::GeneralPurpose::name_from_index(i);
-            writeln!(f, "{name: <9} = {r:#x}")?;
-        }
-
-        writeln!(f, "\ncoprocessor 0 registers:")?;
-        for (i, r) in self.cp0().enumerate() {
-            let reg = register::Cp0::from_repr(i).unwrap();
-            if !reg.is_reserved() || reg == RESERVED_CP0_REGISTER_LATCH {
-                // Skip all but one of the reserved registers, they're latched together.
-                let name = reg.name();
-                writeln!(f, "{name: <9} = {r:#x}")?;
-            }
-        }
-
-        writeln!(f, "\nspecial registers:")?;
-        for (i, r) in self.special().enumerate() {
-            let name = register::Special::name_from_index(i);
-            writeln!(f, "{name: <9} = {r:#x}")?;
-        }
-
-        writeln!(f, "\nfpu general registers:")?;
-        for (i, r) in self.fpu().enumerate() {
-            let name = register::Fpu::name_from_index(i);
-            writeln!(f, "{name: <9} = {r:#x}")?;
-        }
-
-        writeln!(f, "\nfpu control registers:")?;
-        for (i, r) in self.fpu_control().enumerate() {
-            let reg = register::FpuControl::from_repr(i).unwrap();
-            if !reg.is_reserved() {
-                let name = reg.name();
-                writeln!(f, "{name: <22} = {r:#x}")?;
-            }
-        }
-
-        Ok(())
     }
 }
