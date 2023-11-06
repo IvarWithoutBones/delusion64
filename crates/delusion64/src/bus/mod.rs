@@ -142,7 +142,7 @@ impl BusInterface for Bus {
         BusSection::RspIMemory,
         BusSection::RspMemoryMirrors,
         BusSection::RspRegisters,
-        BusSection::RspCommandRegisters,
+        BusSection::RdpCommandRegisters,
         BusSection::RspSpanRegisters,
         BusSection::MipsInterface,
         BusSection::VideoInterface,
@@ -307,6 +307,14 @@ impl BusInterface for Bus {
                     BusSection::RspDMemory => self.rsp_dmem[range].copy_from_slice(&slice),
                     BusSection::RspIMemory => self.rsp_imem[range].copy_from_slice(&slice),
                     _ => unreachable!(),
+                }
+            }
+
+            BusSection::RdpCommandRegisters => {
+                // TODO: Properly implement the RDP. This is a hack to get past rdp_detach from libdragon.
+                if address.offset == 4 {
+                    self.mi.raise_interrupt(InterruptType::RdpSync);
+                    result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
                 }
             }
 

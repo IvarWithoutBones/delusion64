@@ -15,7 +15,7 @@ pub enum BusSection {
     RspIMemory,
     RspMemoryMirrors,
     RspRegisters,
-    RspCommandRegisters,
+    RdpCommandRegisters,
     RspSpanRegisters,
 
     MipsInterface,
@@ -65,7 +65,7 @@ impl BusSection {
             BusSection::RspIMemory => 0x04001000..0x04002000,
             BusSection::RspMemoryMirrors => 0x04002000..0x04040000,
             BusSection::RspRegisters => 0x04040000..0x040C0000,
-            BusSection::RspCommandRegisters => 0x04100000..0x041FFFFF,
+            BusSection::RdpCommandRegisters => 0x04100000..0x041FFFFF,
             BusSection::RspSpanRegisters => 0x04200000..0x04300000,
             BusSection::MipsInterface => 0x04300000..0x04400000,
             BusSection::VideoInterface => 0x04400000..0x04500000,
@@ -96,6 +96,7 @@ impl BusSection {
                 | BusSection::RspRegisters
                 | BusSection::DiskDriveRegisters
                 | BusSection::AudioInterface
+                | Self::RdpCommandRegisters
         )
     }
 }
