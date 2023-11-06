@@ -1,7 +1,7 @@
 use crate::bus::Bus;
 use clap::Parser;
 use mips_lifter::{gdb, register};
-use n64_cartridge::Cartridge;
+use n64_cartridge::{Cartridge, Cic};
 use std::{
     io,
     net::{TcpListener, TcpStream},
@@ -48,32 +48,36 @@ fn main() {
         std::process::exit(0);
     }
 
-    // This will copy the first 0x1000 bytes of the PIF ROM to the RSP DMEM, simulating IPL2.
-    let bus = Bus::new(cart);
-
-    // The initial state of the registers, simulating the effects of IPL 1+2.
-    let regs = &[
-        (register::GeneralPurpose::Sp.into(), 0xFFFF_FFFF_A400_1FF0),
-        (register::GeneralPurpose::T3.into(), 0xFFFF_FFFF_A400_0040),
-        (register::GeneralPurpose::S4.into(), 0x0000_0000_0000_0001),
-        (register::GeneralPurpose::S6.into(), 0x0000_0000_0000_003F),
-        (register::Cp0::Random.into(), 0x0000_001F),
-        (register::Cp0::Status.into(), 0x3400_0000),
-        (register::Cp0::PRId.into(), 0x0000_0B22),
-        (register::Cp0::Config.into(), 0x7006_E463),
-        (
-            register::FpuControl::ImplementationRevision.into(),
-            0x0000_0A00,
-        ),
-        (register::FpuControl::ControlStatus.into(), 0x0100_0800),
-        (register::Special::Pc.into(), 0x0000_0000_A400_0040),
-    ];
-
     let gdb = cli.gdb.map(|port| {
         let stream = wait_for_gdb_connection(port.unwrap_or(DEFAULT_GDB_PORT))
             .expect("failed to wait for GDB connection");
         gdb::Connection::new(stream, Some(Bus::gdb_monitor_commands())).unwrap()
     });
 
-    mips_lifter::run(bus, regs, gdb)
+    // The initial state of the registers, simulating the effects of IPL 1+2.
+    let regs = match cart.cic {
+        Cic::Cic6102 => [
+            (register::GeneralPurpose::Sp.into(), 0xFFFF_FFFF_A400_1FF0),
+            (register::GeneralPurpose::T3.into(), 0xFFFF_FFFF_A400_0040),
+            (register::GeneralPurpose::S4.into(), 0x0000_0000_0000_0001),
+            (register::GeneralPurpose::S6.into(), 0x0000_0000_0000_003F),
+            (register::Cp0::Random.into(), 0x0000_001F),
+            (register::Cp0::Status.into(), 0x3400_0000),
+            (register::Cp0::PRId.into(), 0x0000_0B22),
+            (register::Cp0::Config.into(), 0x7006_E463),
+            (
+                register::FpuControl::ImplementationRevision.into(),
+                0x0000_0A00,
+            ),
+            (register::FpuControl::ControlStatus.into(), 0x0100_0800),
+            (register::Special::Pc.into(), 0x0000_0000_A400_0040),
+        ],
+        cic => todo!("{cic:#?} HLE initial registers"),
+    };
+
+    // This will copy the first 0x1000 bytes of the PIF ROM to the RSP DMEM, simulating IPL2.
+    // It will also write the size of RDRAM.
+    let bus = Bus::new(cart);
+
+    mips_lifter::run(bus, &regs, gdb)
 }

@@ -1,5 +1,5 @@
 use self::joybus::Channels;
-use std::fmt;
+use std::{fmt, ops::Range};
 use tartan_bitfield::bitfield;
 
 mod joybus;
@@ -71,10 +71,13 @@ pub struct Pif {
 
 impl Pif {
     const COMMAND_OFFSET: usize = 0x3F;
+    const CIC_SEED_RANGE: Range<usize> = 0x24..0x28;
 
-    pub fn new() -> Self {
+    pub fn new(cic_seed: u32) -> Self {
+        let mut ram = boxed_array();
+        ram[Self::CIC_SEED_RANGE].copy_from_slice(&cic_seed.to_be_bytes());
         Self {
-            ram: boxed_array(),
+            ram,
             rom: boxed_array(),
             channels: Channels::new(),
         }
@@ -172,12 +175,6 @@ impl Pif {
 
     fn write_command(&mut self, command: Command) {
         self.ram[Self::COMMAND_OFFSET] = command.into();
-    }
-}
-
-impl Default for Pif {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

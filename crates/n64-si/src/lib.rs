@@ -60,7 +60,7 @@ pub struct SideEffects {
     pub lower_interrupt: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SerialInterface {
     dram_address: DramAddress,
     pif_address_read_64: PifAddressRead64,
@@ -74,8 +74,17 @@ pub struct SerialInterface {
 }
 
 impl SerialInterface {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(cic_seed: u32) -> Self {
+        Self {
+            dram_address: DramAddress::default(),
+            pif_address_read_64: PifAddressRead64::default(),
+            pif_address_write_4: PifAddressWrite4::default(),
+            pif_address_write_64: PifAddressWrite64::default(),
+            pif_address_read_4: PifAddressRead4::default(),
+            status: Status::default(),
+            dma: None,
+            pif: Pif::new(cic_seed),
+        }
     }
 
     pub fn read_pif_rom<const SIZE: usize>(&self, offset: usize) -> SiResult<&[u8; SIZE]> {

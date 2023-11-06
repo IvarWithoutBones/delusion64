@@ -46,14 +46,21 @@ impl Bus {
         let len = rsp_dmem.len().min(cartridge_rom.len());
         rsp_dmem[..len].copy_from_slice(&cartridge_rom[..len]);
 
+        // Write the length of RDRAM to the appropriate offset, simulating IPL.
+        let mut rdram = boxed_array();
+        if let Some(offset) = cartridge.cic.rdram_len_offset() {
+            const RDRAM_LEN: &[u8; 4] = &0x800000_u32.to_be_bytes();
+            rdram[offset..offset + 4].copy_from_slice(RDRAM_LEN);
+        }
+
         Self {
-            rdram: boxed_array(),
-            rsp_imem: boxed_array(),
+            rdram,
             rsp_dmem,
+            rsp_imem: boxed_array(),
             pi: PeripheralInterface::new(cartridge_rom, cartridge.header.pi_bsd_domain_1_flags),
             mi: MipsInterface::new(),
             vi: VideoInterface::new(),
-            si: SerialInterface::new(),
+            si: SerialInterface::new(cartridge.cic.seed()),
             n64_systemtest_isviewer_buffer: boxed_array(),
         }
     }

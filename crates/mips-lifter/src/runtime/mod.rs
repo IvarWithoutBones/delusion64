@@ -350,7 +350,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
     unsafe extern "C" fn on_instruction(&mut self) {
         let count = self.registers[register::Cp0::Count] as u32;
         let compare = self.registers[register::Cp0::Compare] as u32;
-        self.registers[register::Cp0::Count] = count.wrapping_add(8) as u64;
+        self.registers[register::Cp0::Count] = count.wrapping_add(1) as u64;
         if count == compare {
             let cause = self.registers.cause();
             let ip = cause.interrupt_pending().with_timer(true);
