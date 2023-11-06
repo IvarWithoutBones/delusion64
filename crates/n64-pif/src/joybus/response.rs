@@ -1,7 +1,11 @@
+use super::controller;
+
 pub trait Response {
     const INPUT_LEN: usize;
     const OUTPUT_LEN: usize;
 
+    // Unfortunately we cannot specify this to be [u8; Self::OUTPUT_LEN] until `generic_const_exprs` is stable.
+    // See https://github.com/rust-lang/rust/issues/60551.
     type Output: AsRef<[u8]>;
 
     fn into_bytes(self) -> Self::Output;
@@ -56,5 +60,28 @@ impl Response for Info {
             Self::EepRom4K { write_in_progress } => [0x00, 0x80, (write_in_progress as u8) << 7],
             Self::EepRom16K { write_in_progress } => [0x00, 0xC0, (write_in_progress as u8) << 7],
         }
+    }
+}
+
+/// See [n64brew](https://n64brew.dev/wiki/Joybus_Protocol#0x01_-_Controller_State).
+#[allow(dead_code)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ControllerState {
+    Standard(controller::StandardController),
+    Mouse(controller::Mouse),
+}
+
+impl Response for ControllerState {
+    const INPUT_LEN: usize = 1;
+    const OUTPUT_LEN: usize = 4;
+
+    type Output = [u8; Self::OUTPUT_LEN];
+
+    fn into_bytes(self) -> Self::Output {
+        match self {
+            ControllerState::Standard(mut controller) => controller.raw(),
+            ControllerState::Mouse(mouse) => mouse.raw(),
+        }
+        .to_be_bytes()
     }
 }

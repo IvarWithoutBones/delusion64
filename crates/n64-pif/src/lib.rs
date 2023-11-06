@@ -133,6 +133,12 @@ impl Pif {
                             });
                         }
 
+                        joybus::Request::ControllerState => {
+                            msg.reply(joybus::response::ControllerState::Standard(
+                                joybus::controller::StandardController::default(),
+                            ));
+                        }
+
                         joybus::Request::WriteControllerAccessory => {
                             // Namco Museum for some reason requests this, even though we never report `pak_installed`.
                             println!("stub: joybus::Command::WriteControllerAccessory");

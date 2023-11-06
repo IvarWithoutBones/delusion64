@@ -1,9 +1,10 @@
 use self::response::Response;
 use strum::FromRepr;
 
-pub use self::device::Channels;
+pub use self::channel::Channels;
 
-mod device;
+mod channel;
+pub mod controller;
 pub mod response;
 
 pub const fn parse_len(byte: u8) -> usize {

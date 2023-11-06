@@ -197,8 +197,9 @@ impl BusInterface for Bus {
             BusSection::RspDMemory => Int::from_slice(&self.rsp_dmem[address.offset..]),
             BusSection::RspIMemory => Int::from_slice(&self.rsp_imem[address.offset..]),
 
-            // TODO: dont stub this so naively, only here so namco museum assumes its initialized.
+            // TODO: dont stub these so naively, only here so namco museum and libdragon assume its initialized.
             BusSection::AudioInterface => Int::from_slice(&u32::MAX.to_be_bytes()),
+            BusSection::RdramInterface => Int::from_slice(&u32::MAX.to_be_bytes()),
 
             BusSection::MipsInterface => Int::new(
                 self.mi
