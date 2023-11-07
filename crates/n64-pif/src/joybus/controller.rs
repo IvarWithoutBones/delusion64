@@ -38,10 +38,12 @@ impl StandardController {
             self.set_y_axis(0);
         }
     }
+}
 
-    pub fn raw(&mut self) -> u32 {
+impl StandardController {
+    pub fn as_bytes(&mut self) -> [u8; 4] {
         self.normalise();
-        self.0
+        self.0.to_be_bytes()
     }
 }
 
@@ -57,7 +59,7 @@ bitfield! {
 }
 
 impl Mouse {
-    pub const fn raw(&self) -> u32 {
-        self.0
+    pub fn as_bytes(&self) -> [u8; 4] {
+        self.0.to_be_bytes()
     }
 }

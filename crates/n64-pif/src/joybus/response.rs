@@ -79,9 +79,20 @@ impl Response for ControllerState {
 
     fn into_bytes(self) -> Self::Output {
         match self {
-            ControllerState::Standard(mut controller) => controller.raw(),
-            ControllerState::Mouse(mouse) => mouse.raw(),
+            ControllerState::Standard(mut controller) => controller.as_bytes(),
+            ControllerState::Mouse(mouse) => mouse.as_bytes(),
         }
-        .to_be_bytes()
+    }
+}
+
+impl From<controller::StandardController> for ControllerState {
+    fn from(controller: controller::StandardController) -> Self {
+        Self::Standard(controller)
+    }
+}
+
+impl From<controller::Mouse> for ControllerState {
+    fn from(mouse: controller::Mouse) -> Self {
+        Self::Mouse(mouse)
     }
 }

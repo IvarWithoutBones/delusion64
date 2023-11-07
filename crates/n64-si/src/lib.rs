@@ -5,6 +5,8 @@ use self::register::{
 };
 use n64_pif::{Pif, PifError};
 
+pub use n64_pif::controller;
+
 mod register;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -70,7 +72,7 @@ pub struct SerialInterface {
     status: Status,
 
     dma: Option<Dma>,
-    pif: Pif,
+    pub pif: Pif,
 }
 
 impl SerialInterface {
@@ -85,6 +87,28 @@ impl SerialInterface {
             dma: None,
             pif: Pif::new(cic_seed),
         }
+    }
+
+    // TODO: move the PIF out of this crate
+
+    pub fn pif_attach_controller(
+        &mut self,
+        channel: usize,
+        controller: controller::StandardController,
+    ) -> SiResult<()> {
+        Ok(self.pif.channels.attach_controller(channel, controller)?)
+    }
+
+    pub fn pif_detach_controller(&mut self, channel: usize) -> SiResult<()> {
+        Ok(self.pif.channels.detach_controller(channel)?)
+    }
+
+    pub fn pif_update_controller(
+        &mut self,
+        channel: usize,
+        controller: controller::StandardController,
+    ) -> SiResult<()> {
+        Ok(self.pif.channels.update_controller(channel, controller)?)
     }
 
     pub fn read_pif_rom<const SIZE: usize>(&self, offset: usize) -> SiResult<&[u8; SIZE]> {

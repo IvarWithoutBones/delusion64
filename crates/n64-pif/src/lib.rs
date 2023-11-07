@@ -4,6 +4,8 @@ use tartan_bitfield::bitfield;
 
 mod joybus;
 
+pub use joybus::controller;
+
 // TODO: deduplicate, this is stolen from delusion64::bus.
 /// Allocates a fixed-sized boxed array of a given length.
 fn boxed_array<T: Default + Clone, const LEN: usize>() -> Box<[T; LEN]> {
@@ -29,16 +31,11 @@ impl Region {
     }
 }
 
-#[derive(Debug)]
-enum Direction {
-    Read,
-    Write,
-}
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PifError {
     OffsetOutOfBounds { region: Region, offset: usize },
     JoybusParseError(joybus::ParseError),
+    InvalidChannel { channel: usize },
 }
 
 impl From<joybus::ParseError> for PifError {
@@ -66,7 +63,7 @@ bitfield! {
 pub struct Pif {
     ram: Box<[u8; Region::Ram.len()]>,
     rom: Box<[u8; Region::Rom.len()]>,
-    channels: Channels,
+    pub channels: Channels,
 }
 
 impl Pif {
@@ -113,66 +110,65 @@ impl Pif {
             })
     }
 
-    fn process_command(&mut self, direction: Direction) -> PifResult<()> {
-        let mut cmd = self.read_command();
-        println!("delusion64: si {direction:?} dma");
-        match direction {
-            Direction::Read => {
-                if cmd.challenge_checksum() {
-                    todo!("PIF-NUS challenge checksum");
-                }
+    fn process_command_read(&mut self) -> PifResult<()> {
+        if self.read_command().challenge_checksum() {
+            todo!("PIF-NUS challenge checksum");
+        }
 
-                // TODO: handle cartridge
-                for device in self.channels.controllers() {
-                    let msg = joybus::Message::new(device.address, self.ram.as_mut_slice())?;
-                    match msg.request {
-                        joybus::Request::Info | joybus::Request::ResetInfo => {
-                            msg.reply(joybus::response::Info::Controller {
+        // TODO: handle cartridge
+        for (channel, state) in self.channels.controllers() {
+            let msg = joybus::Message::new(channel.address, self.ram.as_mut_slice())?;
+            match msg.request {
+                joybus::Request::Info | joybus::Request::ResetInfo => {
+                    msg.reply(match state {
+                        joybus::response::ControllerState::Standard(_) => {
+                            joybus::response::Info::Controller {
                                 pak_installed: false,
                                 checksum_error: false,
-                            });
+                            }
                         }
-
-                        joybus::Request::ControllerState => {
-                            msg.reply(joybus::response::ControllerState::Standard(
-                                joybus::controller::StandardController::default(),
-                            ));
+                        joybus::response::ControllerState::Mouse(_) => {
+                            joybus::response::Info::Mouse
                         }
-
-                        joybus::Request::WriteControllerAccessory => {
-                            // Namco Museum for some reason requests this, even though we never report `pak_installed`.
-                            println!("stub: joybus::Command::WriteControllerAccessory");
-                        }
-
-                        req => todo!("PIF-NUS joybus request {req:#?}"),
-                    }
-                }
-            }
-
-            Direction::Write => {
-                if !cmd.initialise_joybus() {
-                    return Ok(());
-                } else {
-                    // TODO: keep track of the current state. Read DMA should not work without this.
-                    self.write_command(cmd.with_initialise_joybus(false));
+                    });
                 }
 
-                // Reset the channels, then initialise them with the contents of RAM.
-                self.channels = Channels::new_initialised(self.ram.as_slice());
+                joybus::Request::ControllerState => msg.reply(*state),
+
+                joybus::Request::WriteControllerAccessory => {
+                    // Namco Museum for some reason requests this, even though we never report `pak_installed`.
+                    println!("stub: joybus::Command::WriteControllerAccessory");
+                }
+
+                req => todo!("PIF-NUS joybus request {req:#?}"),
             }
         }
         Ok(())
     }
 
+    fn process_command_write(&mut self) -> PifResult<()> {
+        let mut cmd = self.read_command();
+        if cmd.initialise_joybus() {
+            // TODO: keep track of the current state. Read DMA should not work without this.
+            self.write_command(cmd.with_initialise_joybus(false));
+        } else {
+            return Ok(());
+        }
+
+        // Reset the channels, then initialise them with the contents of RAM.
+        self.channels.parse(self.ram.as_slice());
+        Ok(())
+    }
+
     pub fn read_dma(&mut self, _pif_address: u32, rdram: &mut [u8]) -> Result<(), PifError> {
-        self.process_command(Direction::Read)?;
+        self.process_command_read()?;
         rdram.copy_from_slice(self.ram.as_slice());
         Ok(())
     }
 
     pub fn write_dma(&mut self, _data: u32, rdram: &[u8]) -> Result<(), PifError> {
         self.ram.copy_from_slice(rdram);
-        self.process_command(Direction::Write)
+        self.process_command_write()
     }
 
     fn read_command(&self) -> Command {

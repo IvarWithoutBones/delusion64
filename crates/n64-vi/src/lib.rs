@@ -222,7 +222,7 @@ impl VideoInterface {
                             let r = rgba5551_to_rgba8888_color(pixel >> 11);
                             let g = rgba5551_to_rgba8888_color(pixel >> 6);
                             let b = rgba5551_to_rgba8888_color(pixel >> 1);
-                            let a = (pixel as u8 & 1) * u8::MAX; // 0 or 255, effectively a bool
+                            let a = u8::MAX;
                             pixel_chunk.copy_from_slice(&[r, g, b, a]);
                         }
                         PixelType::Reserved | PixelType::Blank => return None,
