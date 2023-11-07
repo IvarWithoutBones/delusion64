@@ -6,6 +6,7 @@ use self::{
 };
 use crate::{
     codegen::{self, CodeGen, FallthroughAmount},
+    label::generate_label_functions,
     InitialRegisters,
 };
 use inkwell::{execution_engine::ExecutionEngine, module::Module};
@@ -170,6 +171,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
                     pc -= INSTRUCTION_SIZE as u64;
                     cause.set_branch_delay(true);
                 } else {
+                    self.registers[crate::codegen::INSIDE_DELAY_SLOT_STORAGE] = 0;
                     cause.set_branch_delay(false);
                 }
 
@@ -237,11 +239,13 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
             let mut codegen = self.codegen.take().unwrap();
 
             if let Some(existing) = codegen.labels.iter().find(|l| l.label.start() == offset) {
-                // println!("found existing block at {vaddr:#x} (offset={offset:#x})");
+                if self.trace {
+                    println!("found existing block at {vaddr:#x}");
+                }
                 let name = existing.function.get_name().to_str().unwrap().to_string();
                 return (codegen, name);
-            } else {
-                // println!("generating new block at {vaddr:#x} (offset={offset:#x})");
+            } else if self.trace {
+                println!("generating new block at {vaddr:#x}");
             }
 
             let bin = {
@@ -284,19 +288,25 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
                     // NOTE: we're never going to append to the previous module, so its fine to replace those globals.
                     codegen.globals = self.map_into(module, &codegen.execution_engine);
 
-                    let mut lab =
-                        crate::label::generate_label_functions(label_list, codegen.context, module)
-                            .pop()
-                            .unwrap();
+                    let mut lab = {
+                        let mut labels =
+                            generate_label_functions(label_list, codegen.context, module);
+                        labels.pop().unwrap_or_else(|| {
+                            let msg = format!("failed to generate label functions for {vaddr:#x}");
+                            self.panic_update_debugger(&msg)
+                        })
+                    };
                     if let Some(fallthrough) = codegen
                         .labels
                         .iter()
                         .find(|l| l.label.start() == lab.label.end())
                     {
-                        // println!(
-                        //     "  found fallthrough block at {:#x}",
-                        //     fallthrough.label.start(),
-                        // );
+                        if self.trace {
+                            println!(
+                                "found fallthrough block at {:#x}",
+                                fallthrough.label.start() * 4,
+                            );
+                        }
 
                         // See the comment in `label.rs` for more context.
                         lab.fallthrough_fn = if fallthrough.label.instructions.len() == 1 {
@@ -347,10 +357,10 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         ptr as u64
     }
 
-    unsafe extern "C" fn on_instruction(&mut self) {
+    unsafe extern "C" fn on_instruction(&mut self, poll_interrupts: bool) {
         let count = self.registers[register::Cp0::Count] as u32;
         let compare = self.registers[register::Cp0::Compare] as u32;
-        self.registers[register::Cp0::Count] = count.wrapping_add(1) as u64;
+        self.registers[register::Cp0::Count] = count.wrapping_add(8) as u64;
         if count == compare {
             let cause = self.registers.cause();
             let ip = cause.interrupt_pending().with_timer(true);
@@ -361,12 +371,14 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         }
 
         let pc_vaddr = self.registers[register::Special::Pc];
+
         if self.trace {
             let pc_paddr = self.virtual_to_physical_address(pc_vaddr, AccessMode::Read);
             let instr = ParsedInstruction::try_from(u32::from_be_bytes(
                 *self.read(pc_paddr).unwrap().as_slice(),
             ))
             .unwrap();
+
             println!("{pc_vaddr:06x}: {instr}");
         }
 
@@ -387,7 +399,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
             })
             .handle(self);
 
-        if self.interrupt_pending {
+        if poll_interrupts && self.interrupt_pending {
             self.interrupt_pending = false;
             println!("handling interrupt from {pc_vaddr:#x}");
             self.handle_exception(Exception::Interrupt, None);

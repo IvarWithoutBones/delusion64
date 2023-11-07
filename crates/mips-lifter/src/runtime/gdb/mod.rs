@@ -424,7 +424,9 @@ impl<Bus: bus::Bus> SingleThreadBase for Environment<'_, Bus> {
 
 impl<Bus: bus::Bus> SingleThreadResume for Environment<'_, Bus> {
     fn resume(&mut self, signal: Option<gdbstub::common::Signal>) -> Result<(), Self::Error> {
-        assert!(signal.is_none(), "gdb: resume with signal is not supported");
+        if let Some(signal) = signal {
+            println!("gdb: resume with signal {signal} is not supported");
+        }
         self.debugger.as_mut().unwrap().state = State::Running;
         Ok(())
     }
@@ -440,7 +442,9 @@ impl<Bus: bus::Bus> SingleThreadResume for Environment<'_, Bus> {
 
 impl<Bus: bus::Bus> SingleThreadSingleStep for Environment<'_, Bus> {
     fn step(&mut self, signal: Option<gdbstub::common::Signal>) -> Result<(), Self::Error> {
-        assert!(signal.is_none(), "gdb: step with signal is not supported");
+        if let Some(signal) = signal {
+            println!("gdb: step with signal {signal} is not supported");
+        }
         self.debugger.as_mut().unwrap().state = State::SingleStep;
         Ok(())
     }

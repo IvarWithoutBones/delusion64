@@ -93,9 +93,13 @@ impl<'ctx> LabelWithContext<'ctx> {
                 };
 
                 let addr = self.index_to_virtual_address(i);
-                compile_instruction_with_delay_slot(codegen, addr, instr, next_instr, |pc| {
-                    self.on_instruction(pc, codegen)
-                });
+                compile_instruction_with_delay_slot(
+                    codegen,
+                    addr,
+                    instr,
+                    next_instr,
+                    |pc, poll| self.on_instruction(pc, poll, codegen),
+                );
                 break;
             }
         }
@@ -116,15 +120,19 @@ impl<'ctx> LabelWithContext<'ctx> {
         instr: &ParsedInstruction,
         codegen: &CodeGen<'ctx>,
     ) -> Option<()> {
-        self.on_instruction(self.index_to_virtual_address(index), codegen);
+        self.on_instruction(self.index_to_virtual_address(index), true, codegen);
         compile_instruction(codegen, instr)
     }
 
-    fn on_instruction(&self, addr: u64, codegen: &CodeGen<'ctx>) {
+    fn on_instruction(&self, addr: u64, poll_interrupts: bool, codegen: &CodeGen<'ctx>) {
         let addr = codegen.context.i64_type().const_int(addr, false);
+        let poll_interrupts = codegen
+            .context
+            .bool_type()
+            .const_int(poll_interrupts as u64, false);
         codegen.write_special_register(register::Special::Pc, addr);
         // Call the `on_instruction` callback from the environment, used for the debugger.
-        env_call!(codegen, RuntimeFunction::OnInstruction, []);
+        env_call!(codegen, RuntimeFunction::OnInstruction, [poll_interrupts]);
     }
 
     fn index_to_virtual_address(&self, index: usize) -> u64 {

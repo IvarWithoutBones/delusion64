@@ -68,8 +68,8 @@ impl RuntimeFunction {
         match self {
             // `Environment::panic(&mut self)`
             Self::Panic => sig!(void_type, [string_ptr: ptr_type, len: i64_type]),
-            // `Environment::on_instruction(&mut self)`
-            Self::OnInstruction => sig!(void_type, []),
+            // `Environment::on_instruction(&mut self, poll_interrupts: bool)`
+            Self::OnInstruction => sig!(void_type, [poll_interrupts: bool_type]),
             // `Environment::get_function_ptr(&mut self, vaddr: u64) -> u64`
             Self::GetFunctionPtr => sig!(i64_type, [vaddr: i64_type]),
 
