@@ -293,11 +293,25 @@ impl<'ctx> CodeGen<'ctx> {
     where
         T: Into<u64>,
     {
+        let i32_type = self.context.i32_type();
         let mut reg = register::Cp0::from_repr(index.into() as usize).unwrap();
         match reg {
             register::Cp0::BadVAddr | register::Cp0::PRId | register::Cp0::CacheErr => {
                 // Read-only
                 return;
+            }
+
+            register::Cp0::Compare => {
+                let mask = value
+                    .get_type()
+                    .const_int(register::cp0::Compare::WRITE_MASK, false);
+                value = self.builder.build_and(value, mask, "cop0_compare_masked");
+                // Writes also clear the Timer bit of Interrupt Pending in the Cause register.
+                let cause = self.read_register(i32_type, register::Cp0::Cause);
+                let mask =
+                    i32_type.const_int(!register::cp0::Cause::INTERRUPT_PENDING_TIMER_MASK, false);
+                let masked_cause = self.builder.build_and(cause, mask, "cop0_cause_masked");
+                self.write_register(register::Cp0::Cause, masked_cause);
             }
 
             register::Cp0::Config => {
@@ -309,7 +323,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .builder
                     .build_and(value, mask, "cop0_config_value_mask");
                 let masked_config = {
-                    let config = self.read_register(value.get_type(), register::Cp0::Config);
+                    let config = self.read_register(i32_type, register::Cp0::Config);
                     self.builder
                         .build_and(config, mask.const_not(), "cop0_config_reg_mask")
                 };

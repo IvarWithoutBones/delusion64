@@ -56,8 +56,8 @@ fn main() {
         gdb::Connection::new(stream, Some(Bus::gdb_monitor_commands())).unwrap()
     });
 
-    cart.cic = cart.cic.or_else(|_| {
-        println!("warning: did not recognize CIC variant, assuming {FALLBACK_CIC:#?}");
+    cart.cic = cart.cic.or_else(|e| {
+        println!("warning: did not recognize CIC variant, assuming {FALLBACK_CIC:#?}: {e:#x?}");
         Ok(FALLBACK_CIC)
     });
 

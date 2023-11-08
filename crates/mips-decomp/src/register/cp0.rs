@@ -176,6 +176,8 @@ bitfield! {
 }
 
 impl InterruptStatus {
+    pub const TIMER_MASK: u64 = 1 << 7;
+
     pub const fn new(raw: u8) -> Self {
         Self(raw)
     }
@@ -266,6 +268,10 @@ bitfield! {
 }
 
 impl Cause {
+    pub const INTERRUPT_PENDING_SHIFT: u32 = 8;
+    pub const INTERRUPT_PENDING_TIMER_MASK: u64 =
+        InterruptStatus::TIMER_MASK << Self::INTERRUPT_PENDING_SHIFT;
+
     pub const fn new(raw: u32) -> Self {
         Self(raw)
     }
@@ -417,4 +423,17 @@ impl PErr {
     pub const fn new(raw: u32) -> Self {
         Self(raw)
     }
+}
+
+bitfield! {
+    /// The format of the CP0 register Compare.
+    #[derive(Ord, PartialOrd, Hash)]
+    pub struct Compare(u32) {
+        /// The value Count would need to hit to trigger a timer interrupt.
+        [0..=31] pub compare: u32,
+    }
+}
+
+impl Compare {
+    pub const WRITE_MASK: u64 = u32::MAX as u64;
 }

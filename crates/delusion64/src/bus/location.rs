@@ -96,7 +96,8 @@ impl BusSection {
                 | BusSection::RspRegisters
                 | BusSection::DiskDriveRegisters
                 | BusSection::AudioInterface
-                | Self::RdpCommandRegisters
+                | BusSection::RdpCommandRegisters
+                | BusSection::PifRom
         )
     }
 }
@@ -106,7 +107,7 @@ impl<'a> From<&'a BusSection> for n64_pi::BusDevice {
         match section {
             BusSection::CartridgeRom => n64_pi::BusDevice::CartridgeRom,
             BusSection::CartridgeSram => n64_pi::BusDevice::CartridgeSram,
-            _ => unimplemented!(),
+            e => unimplemented!("{e:?}"),
         }
     }
 }

@@ -415,7 +415,7 @@ impl BusInterface for Bus {
                 }
             }
 
-            BusSection::CartridgeRom | BusSection::CartridgeSram | BusSection::PifRom => self
+            BusSection::CartridgeRom | BusSection::CartridgeSram => self
                 .pi
                 .write_bus::<SIZE>(address.section.into(), address.offset, value.as_slice())
                 .map_err(BusError::PeripheralInterfaceError)?,
