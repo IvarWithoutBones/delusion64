@@ -85,6 +85,7 @@
           pkgs.gdb
           llvmPackages.clang
           mipsBinutils
+          pkgs.cargo-flamegraph
           # Temporary tools to convert and view the framebuffer, will be removed with actual rendering.
           pkgs.imagemagick
           pkgs.feh

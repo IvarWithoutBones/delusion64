@@ -82,14 +82,17 @@ impl Label {
         self.start_offset = start_offset;
     }
 
+    #[inline]
     pub const fn start(&self) -> usize {
         self.start_offset
     }
 
+    #[inline]
     pub fn end(&self) -> usize {
         self.start_offset + self.instructions.len()
     }
 
+    #[inline]
     pub fn len(&self) -> usize {
         self.instructions.len()
     }
@@ -99,6 +102,7 @@ impl Label {
         self.len() == 0
     }
 
+    #[inline]
     pub fn range(&self) -> Range<usize> {
         self.start()..self.end()
     }
