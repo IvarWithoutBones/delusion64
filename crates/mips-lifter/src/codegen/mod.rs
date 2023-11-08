@@ -1,4 +1,8 @@
-use crate::{label::LabelWithContext, runtime::RuntimeFunction, LLVM_CALLING_CONVENTION_FAST};
+use crate::{
+    label::{JitFunctionPointer, LabelWithContext},
+    runtime::RuntimeFunction,
+    LLVM_CALLING_CONVENTION_FAST,
+};
 use inkwell::{
     attributes::{Attribute, AttributeLoc},
     basic_block::BasicBlock,
@@ -246,15 +250,20 @@ impl<'ctx> CodeGen<'ctx> {
         })
     }
 
-    pub fn link_in_module(&self, module: Module<'ctx>) -> Result<(), String> {
+    pub fn link_in_module(
+        &self,
+        module: Module<'ctx>,
+        lab: &mut LabelWithContext,
+    ) -> Result<(), String> {
         // Map all functions from the new module into our execution engine, and add them to our main module.
         self.execution_engine.add_module(&module).unwrap();
-        for func in module.get_functions() {
-            if func.count_basic_blocks() == 0 {
-                // Only a declaration, not compiled in this module.
-                continue;
-            }
 
+        for (i, func) in module
+            .get_functions()
+            // Only a declaration, not compiled in this module.
+            .filter(|func| func.count_basic_blocks() > 0)
+            .enumerate()
+        {
             // Create a function declaration, without a body.
             let name = func.get_name().to_str().unwrap();
             let func_decl = self.module.add_function(name, func.get_type(), None);
@@ -262,6 +271,13 @@ impl<'ctx> CodeGen<'ctx> {
 
             // Map the function pointer to the declaration.
             let ptr = self.execution_engine.get_function_address(name).unwrap();
+            if i == 0 {
+                // We cache a pointer to the function in the label, but only the first.
+                lab.pointer = Some(ptr as JitFunctionPointer);
+            } else {
+                panic!("multiple function bodies found in label");
+            };
+
             self.execution_engine.add_global_mapping(&func_decl, ptr);
         }
         Ok(())
@@ -272,8 +288,8 @@ impl<'ctx> CodeGen<'ctx> {
         F: FnOnce(&mut CodeGen<'ctx>, &Module<'ctx>) -> LabelWithContext<'ctx>,
     {
         let new_module = self.context.create_module("tmp_dynamic_module");
-        let lab = f(self, &new_module);
-        self.link_in_module(new_module)?;
+        let mut lab = f(self, &new_module);
+        self.link_in_module(new_module, &mut lab)?;
         Ok(lab)
     }
 

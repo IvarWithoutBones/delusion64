@@ -229,132 +229,123 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
     }
 
     // TODO: split this up and prettify it a bit, it is rather unwieldy right now.
-    unsafe extern "C" fn get_function_ptr(&mut self, vaddr: u64) -> u64 {
+    unsafe extern "C" fn get_function_ptr(&mut self, vaddr: u64) -> usize {
         let vaddr = vaddr & u32::MAX as u64;
+        let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
+        let offset = vaddr as usize / 4;
+        let mut codegen = self.codegen.take().unwrap();
 
-        // This is a closure so we can return early if we already a matching block compiled.
-        let (codegen, name) = || -> (CodeGen<'ctx>, String) {
-            let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
-            let offset = vaddr as usize / 4;
-            let mut codegen = self.codegen.take().unwrap();
-
-            if let Some(existing) = codegen.labels.iter().find(|l| l.label.start() == offset) {
-                if self.trace {
-                    println!("found existing block at {vaddr:#x}");
-                }
-                let name = existing.function.get_name().to_str().unwrap().to_string();
-                return (codegen, name);
-            } else if self.trace {
-                println!("generating new block at {vaddr:#x}");
+        if let Some(existing) = codegen.labels.iter().find(|l| l.label.start() == offset) {
+            if self.trace {
+                println!("found existing block at {vaddr:#x}");
             }
 
-            let bin = {
-                let mut addr = paddr;
-                let mut break_after = None;
-                let mut bin: Vec<u8> = Vec::new();
-                loop {
-                    let value = u32::from_be_bytes(*self.read(addr).unwrap().as_slice());
-                    if let Ok(instr) = ParsedInstruction::try_from(value) {
-                        if instr.has_delay_slot() {
-                            break_after = Some(2);
-                        } else if instr.ends_block() {
-                            bin.extend_from_slice(&value.to_be_bytes());
-                            break;
-                        }
-                    } else {
+            let ptr = existing.pointer.unwrap();
+            self.codegen.set(Some(codegen));
+            return ptr;
+        } else if self.trace {
+            println!("generating new block at {vaddr:#x}");
+        }
+
+        let bin = {
+            let mut addr = paddr;
+            let mut break_after = None;
+            let mut bin: Vec<u8> = Vec::new();
+            loop {
+                let value = u32::from_be_bytes(*self.read(addr).unwrap().as_slice());
+                if let Ok(instr) = ParsedInstruction::try_from(value) {
+                    if instr.has_delay_slot() {
+                        break_after = Some(2);
+                    } else if instr.ends_block() {
+                        bin.extend_from_slice(&value.to_be_bytes());
                         break;
                     }
-
-                    bin.extend_from_slice(&value.to_be_bytes());
-
-                    if let Some(break_after) = break_after.as_mut() {
-                        *break_after -= 1;
-                        if *break_after == 0 {
-                            break;
-                        }
-                    }
-
-                    addr += 4;
+                } else {
+                    break;
                 }
 
-                bin.into_boxed_slice()
-            };
+                bin.extend_from_slice(&value.to_be_bytes());
 
-            let mut label_list = mips_decomp::LabelList::from(&*bin);
-            label_list.set_offset(offset);
+                if let Some(break_after) = break_after.as_mut() {
+                    *break_after -= 1;
+                    if *break_after == 0 {
+                        break;
+                    }
+                }
 
-            let lab = codegen
-                .add_dynamic_function(|codegen, module| {
-                    // NOTE: we're never going to append to the previous module, so its fine to replace those globals.
-                    codegen.globals = self.map_into(module, &codegen.execution_engine);
+                addr += 4;
+            }
 
-                    let mut lab = {
-                        let mut labels =
-                            generate_label_functions(label_list, codegen.context, module);
-                        labels.pop().unwrap_or_else(|| {
-                            let msg = format!("failed to generate label functions for {vaddr:#x}");
-                            self.panic_update_debugger(&msg)
-                        })
-                    };
-                    if let Some(fallthrough) = codegen
-                        .labels
-                        .iter()
-                        .find(|l| l.label.start() == lab.label.end())
-                    {
-                        if self.trace {
-                            println!(
-                                "found fallthrough block at {:#x}",
-                                fallthrough.label.start() * 4,
-                            );
-                        }
+            bin.into_boxed_slice()
+        };
 
-                        // See the comment in `label.rs` for more context.
-                        lab.fallthrough_fn = if fallthrough.label.instructions.len() == 1 {
-                            lab.fallthrough_instr = Some(fallthrough.label.instructions[0].clone());
-                            if fallthrough
-                                .fallthrough_fn
-                                .as_ref()
-                                .map(|f| f == &codegen.fallthrough_function(FallthroughAmount::One))
-                                .unwrap_or(false)
-                            {
-                                // Falling through one instruction here will re-execute the fallthrough_instr.
-                                Some(codegen.fallthrough_function(FallthroughAmount::Two))
-                            } else {
-                                fallthrough.fallthrough_fn
-                            }
-                        } else {
-                            Some(fallthrough.function)
-                        }
-                    } else {
-                        let amount =
-                            if let Some(second_last) = lab.label.instructions.iter().nth_back(1) {
-                                if second_last.has_delay_slot() {
-                                    FallthroughAmount::Two
-                                } else {
-                                    FallthroughAmount::One
-                                }
-                            } else {
-                                FallthroughAmount::One
-                            };
-                        lab.fallthrough_fn = Some(codegen.fallthrough_function(amount));
+        let mut label_list = mips_decomp::LabelList::from(&*bin);
+        label_list.set_offset(offset);
+
+        let lab = codegen
+            .add_dynamic_function(|codegen, module| {
+                // NOTE: we're never going to append to the previous module, so its fine to replace those globals.
+                codegen.globals = self.map_into(module, &codegen.execution_engine);
+
+                let mut lab = {
+                    let mut labels = generate_label_functions(label_list, codegen.context, module);
+                    labels.pop().unwrap_or_else(|| {
+                        let msg = format!("failed to generate label functions for {vaddr:#x}");
+                        self.panic_update_debugger(&msg)
+                    })
+                };
+                if let Some(fallthrough) = codegen
+                    .labels
+                    .iter()
+                    .find(|l| l.label.start() == lab.label.end())
+                {
+                    if self.trace {
+                        println!(
+                            "found fallthrough block at {:#x}",
+                            fallthrough.label.start() * 4,
+                        );
                     }
 
-                    lab.compile(codegen);
-                    lab
-                })
-                .unwrap_or_else(|err| panic!("{err}"));
+                    // See the comment in `label.rs` for more context.
+                    lab.fallthrough_fn = if fallthrough.label.instructions.len() == 1 {
+                        lab.fallthrough_instr = Some(fallthrough.label.instructions[0].clone());
+                        if fallthrough
+                            .fallthrough_fn
+                            .as_ref()
+                            .map(|f| f == &codegen.fallthrough_function(FallthroughAmount::One))
+                            .unwrap_or(false)
+                        {
+                            // Falling through one instruction here will re-execute the fallthrough_instr.
+                            Some(codegen.fallthrough_function(FallthroughAmount::Two))
+                        } else {
+                            fallthrough.fallthrough_fn
+                        }
+                    } else {
+                        Some(fallthrough.function)
+                    }
+                } else {
+                    let amount =
+                        if let Some(second_last) = lab.label.instructions.iter().nth_back(1) {
+                            if second_last.has_delay_slot() {
+                                FallthroughAmount::Two
+                            } else {
+                                FallthroughAmount::One
+                            }
+                        } else {
+                            FallthroughAmount::One
+                        };
+                    lab.fallthrough_fn = Some(codegen.fallthrough_function(amount));
+                }
 
-            let name = lab.function.get_name().to_str().unwrap().to_string();
-            codegen.labels.push(lab);
-            (codegen, name)
-        }();
+                lab.compile(codegen);
+                lab
+            })
+            .unwrap_or_else(|err| panic!("{err}"));
 
-        let ptr = codegen
-            .execution_engine
-            .get_function_address(&name)
-            .unwrap();
+        let ptr = lab.pointer.unwrap();
+        codegen.labels.push(lab);
         self.codegen.set(Some(codegen));
-        ptr as u64
+        ptr
     }
 
     unsafe extern "C" fn on_instruction(&mut self, poll_interrupts: bool) {

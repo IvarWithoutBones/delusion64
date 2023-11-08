@@ -8,10 +8,12 @@ use inkwell::{attributes::AttributeLoc, context::Context, module::Module, values
 use mips_decomp::{instruction::ParsedInstruction, register, Label, INSTRUCTION_SIZE};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+pub type JitFunctionPointer = usize;
+
 // Ensure we dont define the same function twice, for example when TLB mappings change.
 static ID: AtomicUsize = AtomicUsize::new(0);
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct LabelWithContext<'ctx> {
     /// The label containing the instructions that will be compiled into this function.
     pub label: Label,
@@ -21,6 +23,8 @@ pub struct LabelWithContext<'ctx> {
     pub fallthrough_fn: Option<FunctionValue<'ctx>>,
     /// The instruction that the next block contains, if the current block ends with a delay slot.
     pub fallthrough_instr: Option<ParsedInstruction>,
+    /// A raw pointer to the JIT compiled function, from LLVM's execution engine.
+    pub pointer: Option<JitFunctionPointer>,
 }
 
 impl<'ctx> LabelWithContext<'ctx> {
@@ -49,6 +53,7 @@ impl<'ctx> LabelWithContext<'ctx> {
             function,
             fallthrough_fn,
             fallthrough_instr,
+            pointer: None,
         }
     }
 

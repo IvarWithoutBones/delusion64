@@ -42,7 +42,11 @@ impl RuntimeFunction {
     }
 
     #[inline]
-    fn signature<'ctx>(&self, context: &ContextRef<'ctx>) -> FunctionType<'ctx> {
+    fn signature<'ctx>(
+        &self,
+        context: &ContextRef<'ctx>,
+        execution_engine: &ExecutionEngine<'ctx>,
+    ) -> FunctionType<'ctx> {
         let bool_type = context.bool_type();
         let i8_type = context.i8_type();
         let i16_type = context.i16_type();
@@ -50,6 +54,7 @@ impl RuntimeFunction {
         let i64_type = context.i64_type();
         let void_type = context.void_type();
         let ptr_type = i64_type.ptr_type(Default::default());
+        let ptr_sized_int = context.ptr_sized_int_type(execution_engine.get_target_data(), None);
 
         // Dirty macro to make the signature generation a bit more readable.
         // The name doesn't do anything, its just there to enforce nicer syntax.
@@ -70,8 +75,8 @@ impl RuntimeFunction {
             Self::Panic => sig!(void_type, [string_ptr: ptr_type, len: i64_type]),
             // `Environment::on_instruction(&mut self, poll_interrupts: bool)`
             Self::OnInstruction => sig!(void_type, [poll_interrupts: bool_type]),
-            // `Environment::get_function_ptr(&mut self, vaddr: u64) -> u64`
-            Self::GetFunctionPtr => sig!(i64_type, [vaddr: i64_type]),
+            // `Environment::get_function_ptr(&mut self, vaddr: u64) -> usize`
+            Self::GetFunctionPtr => sig!(i64_type, [vaddr: ptr_sized_int]),
 
             // `Environment::handle_exception_jit(
             //     &mut self,
@@ -137,7 +142,8 @@ impl RuntimeFunction {
         execution_engine: &ExecutionEngine<'ctx>,
         ptr: *const u8,
     ) {
-        let func = module.add_function(self.name(), self.signature(context), None);
+        let sig = self.signature(context, execution_engine);
+        let func = module.add_function(self.name(), sig, None);
         execution_engine.add_global_mapping(&func, ptr as usize);
     }
 }
