@@ -7,7 +7,7 @@ mod header;
 pub const HEADER_SIZE: usize = 64;
 pub const IPL3_SIZE: usize = 0x1000 - HEADER_SIZE;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CartridgeError {
     InvalidHeader(String),
     UnknownCic { crc: u32 },
@@ -77,8 +77,8 @@ impl Cic {
 pub struct Cartridge {
     pub header: Header,
     #[bw(ignore)]
-    #[br(try_map = |b| Cic::new(&b), seek_before(SeekFrom::Current(2)), restore_position)]
-    pub cic: Cic,
+    #[br(map = |b| Cic::new(&b), seek_before(SeekFrom::Current(2)), restore_position)]
+    pub cic: CartridgeResult<Cic>,
     #[br(parse_with = Self::read_remainder)]
     pub data: Box<[u8]>,
 }

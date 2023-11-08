@@ -21,6 +21,8 @@ fn wait_for_gdb_connection(port: u16) -> io::Result<TcpStream> {
 
 const DEFAULT_GDB_PORT: u16 = 9001;
 
+const FALLBACK_CIC: Cic = Cic::Cic6102;
+
 #[derive(Parser, Debug)]
 #[command(author = "IvarWithoutBones")]
 struct CommandLineInterface {
@@ -38,7 +40,7 @@ fn main() {
     let cli = CommandLineInterface::parse();
 
     let bin = std::fs::read(cli.rom).expect("failed to read file");
-    let cart = Cartridge::new(&bin).unwrap_or_else(|e| {
+    let mut cart = Cartridge::new(&bin).unwrap_or_else(|e| {
         eprintln!("failed to parse cartridge: {e}");
         std::process::exit(1);
     });
@@ -54,8 +56,13 @@ fn main() {
         gdb::Connection::new(stream, Some(Bus::gdb_monitor_commands())).unwrap()
     });
 
+    cart.cic = cart.cic.or_else(|_| {
+        println!("warning: did not recognize CIC variant, assuming {FALLBACK_CIC:#?}");
+        Ok(FALLBACK_CIC)
+    });
+
     // The initial state of the registers, simulating the effects of IPL 1+2.
-    let regs = match cart.cic {
+    let regs = match cart.cic.as_ref().unwrap() {
         Cic::Cic6102 => [
             (register::GeneralPurpose::Sp.into(), 0xFFFF_FFFF_A400_1FF0),
             (register::GeneralPurpose::T3.into(), 0xFFFF_FFFF_A400_0040),

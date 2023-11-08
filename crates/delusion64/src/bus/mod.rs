@@ -50,13 +50,13 @@ impl Bus {
 
         // Write the length of RDRAM to the appropriate offset, simulating IPL.
         let mut rdram = boxed_array();
-        if let Some(offset) = cartridge.cic.rdram_len_offset() {
+        if let Some(offset) = cartridge.cic.as_ref().unwrap().rdram_len_offset() {
             const RDRAM_LEN: &[u8; 4] = &0x800000_u32.to_be_bytes();
             rdram[offset..offset + 4].copy_from_slice(RDRAM_LEN);
         }
 
         let controller = n64_si::controller::StandardController::default();
-        let mut si = SerialInterface::new(cartridge.cic.seed());
+        let mut si = SerialInterface::new(cartridge.cic.unwrap().seed());
         si.pif.channels.attach_controller(0, controller).unwrap();
 
         Self {
