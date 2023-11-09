@@ -71,46 +71,46 @@ fn generate_targets(instrs: &[MaybeInstruction]) -> Vec<JumpTarget> {
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct Label {
-    start_offset: usize,
+    range: Range<usize>,
     pub referenced_from_offsets: Vec<usize>,
     pub instructions: Vec<ParsedInstruction>,
     pub fallthrough_offset: Option<usize>,
 }
 
 impl Label {
-    pub fn set_start(&mut self, start_offset: usize) {
-        self.start_offset = start_offset;
+    pub fn set_start_address(&mut self, start: usize) {
+        self.range = start..(start + (self.instructions.len() * INSTRUCTION_SIZE));
+    }
+
+    #[inline]
+    pub const fn len(&self) -> usize {
+        self.range.end - self.range.start
     }
 
     #[inline]
     pub const fn start(&self) -> usize {
-        self.start_offset
+        self.range.start
     }
 
     #[inline]
-    pub fn end(&self) -> usize {
-        self.start_offset + self.instructions.len()
-    }
-
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.instructions.len()
-    }
-
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
+    pub const fn end(&self) -> usize {
+        self.range.start + self.len()
     }
 
     #[inline]
     pub fn range(&self) -> Range<usize> {
-        self.start()..self.end()
+        self.range.clone()
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
 impl fmt::Debug for Label {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut pos = self.start_offset * INSTRUCTION_SIZE;
+        let mut pos = self.range.start;
 
         write!(f, "label_{pos:06x}:\t\t")?;
         for ref_ in &self.referenced_from_offsets {
@@ -197,7 +197,7 @@ fn generate_labels(instrs: &[MaybeInstruction], targets: &[JumpTarget]) -> Vec<L
         };
 
         labels.push(Label {
-            start_offset,
+            range: start_offset..end_offset,
             referenced_from_offsets: jump_target.referenced_from.clone(),
             fallthrough_offset,
             instructions,
@@ -218,7 +218,7 @@ impl LabelList {
         let instrs = decomp.iter().collect::<Vec<_>>();
         let targets = generate_targets(&instrs);
         let mut labels = generate_labels(&instrs, &targets);
-        labels.sort_by_key(|l| l.start_offset);
+        labels.sort_by_key(|l| l.start());
         Self { labels }
     }
 
@@ -231,7 +231,7 @@ impl LabelList {
     }
 
     pub fn len(&self) -> usize {
-        self.labels.len()
+        self.labels.len() * INSTRUCTION_SIZE
     }
 
     #[must_use]
@@ -244,12 +244,12 @@ impl LabelList {
     }
 
     pub fn get(&self, offset: usize) -> Option<&Label> {
-        self.labels.iter().find(|l| l.start_offset == offset)
+        self.labels.iter().find(|l| l.start() == offset)
     }
 
-    pub fn set_offset(&mut self, offset: usize) {
+    pub fn set_start(&mut self, offset: usize) {
         for label in self.iter_mut() {
-            label.set_start(offset + label.start());
+            label.set_start_address(offset + label.start());
             for reference in label.referenced_from_offsets.iter_mut() {
                 *reference += offset;
             }

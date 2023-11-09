@@ -142,8 +142,8 @@ impl<'ctx> LabelWithContext<'ctx> {
 
     fn index_to_virtual_address(&self, index: usize) -> u64 {
         // Assumes the label start corresponds to a virtual address.
-        debug_assert!(self.label.len() > index);
-        ((self.label.start() + index) * INSTRUCTION_SIZE) as u64
+        debug_assert!((self.label.len() / 4) > index);
+        (self.label.start() + (index * INSTRUCTION_SIZE)) as u64
     }
 }
 

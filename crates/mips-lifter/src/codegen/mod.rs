@@ -18,11 +18,14 @@ use mips_decomp::{instruction::ParsedInstruction, Exception, INSTRUCTION_SIZE};
 
 #[macro_use]
 mod comparison;
+pub(crate) mod address_map;
 mod register;
 
 pub(crate) use register::{
     HOST_STACK_FRAME_STORAGE, INSIDE_DELAY_SLOT_STORAGE, RESERVED_CP0_REGISTER_LATCH,
 };
+
+use self::address_map::VirtualAddressMap;
 
 #[macro_export]
 macro_rules! env_call {
@@ -80,14 +83,14 @@ pub struct CodeGen<'ctx> {
     pub builder: Builder<'ctx>,
     pub execution_engine: ExecutionEngine<'ctx>,
 
-    /// Global mappings to the runtime environment. NOTE: this will get replaced for every new module.
+    /// Global mappings to the runtime environment.
     pub globals: Globals<'ctx>,
 
     /// The generated labels, with associated functions.
-    pub labels: Vec<LabelWithContext<'ctx>>,
+    pub labels: VirtualAddressMap<'ctx>,
 
     jump_helper: Option<FunctionValue<'ctx>>,
-    // Separate functions so that we can patch calls to them at runtime without worrying about arguments.
+    // Separate functions so that we can patch calls to them at runtime in the future, without worrying about arguments.
     fallthrough_one_helper: Option<FunctionValue<'ctx>>,
     fallthrough_two_helper: Option<FunctionValue<'ctx>>,
 }
@@ -105,7 +108,7 @@ impl<'ctx> CodeGen<'ctx> {
             builder: context.create_builder(),
             execution_engine,
             globals,
-            labels: Vec::new(),
+            labels: Default::default(),
             jump_helper: None,
             fallthrough_one_helper: None,
             fallthrough_two_helper: None,
@@ -283,9 +286,9 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(())
     }
 
-    pub fn add_dynamic_function<F>(&mut self, f: F) -> Result<LabelWithContext<'ctx>, String>
+    pub fn add_dynamic_function<F>(&self, f: F) -> Result<LabelWithContext<'ctx>, String>
     where
-        F: FnOnce(&mut CodeGen<'ctx>, &Module<'ctx>) -> LabelWithContext<'ctx>,
+        F: FnOnce(&CodeGen<'ctx>, &Module<'ctx>) -> LabelWithContext<'ctx>,
     {
         let new_module = self.context.create_module("tmp_dynamic_module");
         let mut lab = f(self, &new_module);
@@ -343,11 +346,7 @@ impl<'ctx> CodeGen<'ctx> {
 
     /// Generate a jump to the given constant virtual address, ending the current basic block.
     pub fn build_constant_jump(&self, address: u64) {
-        if let Some(lab) = self
-            .labels
-            .iter()
-            .find(|l| l.label.start() == (address as usize / INSTRUCTION_SIZE))
-        {
+        if let Ok(lab) = self.labels.get(address) {
             // Check if we have previously compiled this function.
             self.set_call_attrs(self.builder.build_call(lab.function, &[], "constant_jump"));
             self.builder.build_unreachable();

@@ -232,20 +232,20 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
     unsafe extern "C" fn get_function_ptr(&mut self, vaddr: u64) -> usize {
         let vaddr = vaddr & u32::MAX as u64;
         let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
-        let offset = vaddr as usize / 4;
         let mut codegen = self.codegen.take().unwrap();
 
-        if let Some(existing) = codegen.labels.iter().find(|l| l.label.start() == offset) {
-            if self.trace {
-                println!("found existing block at {vaddr:#x}");
-            }
+        let insert_index = match codegen.labels.get(vaddr) {
+            Ok(label) => {
+                if self.trace {
+                    println!("found existing block at {vaddr:#x}");
+                }
 
-            let ptr = existing.pointer.unwrap();
-            self.codegen.set(Some(codegen));
-            return ptr;
-        } else if self.trace {
-            println!("generating new block at {vaddr:#x}");
-        }
+                let ptr = label.pointer.unwrap();
+                self.codegen.set(Some(codegen));
+                return ptr;
+            }
+            Err(insert_index) => insert_index,
+        };
 
         let bin = {
             let mut addr = paddr;
@@ -280,13 +280,10 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         };
 
         let mut label_list = mips_decomp::LabelList::from(&*bin);
-        label_list.set_offset(offset);
+        label_list.set_start(vaddr as usize);
 
         let lab = codegen
             .add_dynamic_function(|codegen, module| {
-                // NOTE: we're never going to append to the previous module, so its fine to replace those globals.
-                codegen.globals = self.map_into(module, &codegen.execution_engine);
-
                 let mut lab = {
                     let mut labels = generate_label_functions(label_list, codegen.context, module);
                     labels.pop().unwrap_or_else(|| {
@@ -294,11 +291,8 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
                         self.panic_update_debugger(&msg)
                     })
                 };
-                if let Some(fallthrough) = codegen
-                    .labels
-                    .iter()
-                    .find(|l| l.label.start() == lab.label.end())
-                {
+
+                if let Ok(fallthrough) = codegen.labels.get(lab.label.end() as u64) {
                     if self.trace {
                         println!(
                             "found fallthrough block at {:#x}",
@@ -343,7 +337,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
             .unwrap_or_else(|err| panic!("{err}"));
 
         let ptr = lab.pointer.unwrap();
-        codegen.labels.push(lab);
+        codegen.labels.insert_at(insert_index, lab);
         self.codegen.set(Some(codegen));
         ptr
     }

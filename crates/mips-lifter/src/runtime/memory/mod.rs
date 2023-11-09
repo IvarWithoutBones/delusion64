@@ -67,15 +67,16 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
                 .unwrap_or_else(|e| {
                     let msg = &format!("failed to convert paddr to vaddr: {e:#x?}");
                     self.panic_update_debugger(msg);
-                }) as usize;
-            base..(base + paddr_range.len())
+                });
+            base..(base + (paddr_range.len() as u64))
         };
 
-        self.codegen.get_mut().as_mut().unwrap().labels.retain(|l| {
-            let start = l.label.range().start * 4;
-            let end = l.label.range().end * 4;
-            (start >= vaddr_range.start) || (end <= vaddr_range.end)
-        });
+        self.codegen
+            .get_mut()
+            .as_mut()
+            .unwrap()
+            .labels
+            .remove_within_range(vaddr_range);
     }
 
     fn read_or_panic<const SIZE: usize>(&mut self, vaddr: Option<u64>, paddr: u32) -> Int<SIZE> {
