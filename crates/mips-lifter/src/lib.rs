@@ -1,6 +1,7 @@
 use crate::codegen::CodeGen;
 use inkwell::{context::Context, execution_engine::JitFunction, OptimizationLevel};
 
+pub use self::builder::JitBuilder;
 pub use mips_decomp::register;
 
 pub mod gdb {
@@ -17,6 +18,7 @@ pub mod gdb {
 
 #[macro_use]
 mod codegen;
+mod builder;
 mod label;
 mod recompiler;
 pub mod runtime;
@@ -26,9 +28,8 @@ pub mod runtime;
 // TODO: upstream this to inkwell
 const LLVM_CALLING_CONVENTION_FAST: u32 = 8;
 
-pub type InitialRegisters<'a> = &'a [(register::Register, u64)];
-
-pub fn run<Bus>(bus: Bus, regs: InitialRegisters, gdb: Option<gdb::Connection<Bus>>)
+// TODO: move most of this to the JitBuilder. `build()` should initialise everything, and `run() -> !` start executing.
+pub(crate) fn run<Bus>(builder: JitBuilder<true, Bus>) -> !
 where
     Bus: runtime::bus::Bus,
 {
@@ -47,7 +48,7 @@ where
 
     // Create the compilation/runtime environment.
     let (env, codegen) = {
-        let env = runtime::Environment::new(bus, regs, gdb);
+        let env = runtime::Environment::new(builder);
         let globals = env.map_into(&module, &execution_engine);
         let codegen = CodeGen::new(&context, module, execution_engine, globals);
         (env, codegen)

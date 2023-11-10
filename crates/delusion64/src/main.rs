@@ -1,6 +1,6 @@
 use crate::bus::Bus;
 use clap::Parser;
-use mips_lifter::{gdb, register};
+use mips_lifter::{gdb, register, JitBuilder};
 use n64_cartridge::{Cartridge, Cic};
 use std::{
     io,
@@ -31,6 +31,9 @@ struct CommandLineInterface {
 
     #[clap(short, long)]
     show_cartridge: bool,
+
+    #[clap(short, long)]
+    trace: bool,
 
     #[clap(short, long, value_name = "port")]
     gdb: Option<Option<u16>>,
@@ -86,5 +89,9 @@ fn main() {
     // It will also write the size of RDRAM.
     let bus = Bus::new(cart);
 
-    mips_lifter::run(bus, &regs, gdb)
+    JitBuilder::new(bus)
+        .maybe_with_gdb(gdb)
+        .with_trace(cli.trace)
+        .with_registers(&regs)
+        .run()
 }

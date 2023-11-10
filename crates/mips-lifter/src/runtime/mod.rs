@@ -7,7 +7,7 @@ use self::{
 use crate::{
     codegen::{self, CodeGen, FallthroughAmount},
     label::generate_label_functions,
-    InitialRegisters,
+    JitBuilder,
 };
 use inkwell::{execution_engine::ExecutionEngine, module::Module};
 use mips_decomp::{instruction::ParsedInstruction, register, Exception, INSTRUCTION_SIZE};
@@ -34,13 +34,9 @@ pub struct Environment<'ctx, Bus: bus::Bus> {
 }
 
 impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
-    pub fn new(
-        bus: Bus,
-        regs: InitialRegisters,
-        gdb: Option<gdb::Connection<Bus>>,
-    ) -> Pin<Box<Self>> {
+    pub fn new(builder: JitBuilder<true, Bus>) -> Pin<Box<Self>> {
         let mut registers = Registers::default();
-        for (reg, val) in regs {
+        for (reg, val) in builder.registers() {
             registers[*reg] = *val;
         }
 
@@ -49,12 +45,12 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
             tlb: TranslationLookasideBuffer::default(),
             debugger: None,
             codegen: Default::default(),
-            bus,
             interrupt_pending: false,
-            trace: false,
+            bus: builder.bus,
+            trace: builder.trace,
         };
 
-        if let Some(gdb) = gdb {
+        if let Some(gdb) = builder.gdb {
             env.debugger = Some(gdb::Debugger::new(&mut env, gdb));
         }
 
