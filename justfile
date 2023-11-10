@@ -1,7 +1,6 @@
 alias ir := llvm-ir
 alias bin := compile-ll
 alias dis := disassemble
-alias swap := endian-swap
 
 # Show a disassembly of a MIPS ELF file.
 disassemble elf *args:
@@ -44,6 +43,10 @@ compile-ll input-ll output-bin:
 
     just disassemble "$TMPFILE"
 
-# Endian swaps a binary file, useful for older homebrew ROMs.
-endian-swap input-bin output-bin num-bytes="4":
-    objcopy --target binary --reverse-bytes={{num-bytes}} "{{input-bin}}" "{{output-bin}}"
+cargo_flamegraph_flags := "--release --palette hot" + if os() == "macos" { " --root" } else { "" }
+
+flamegraph *args:
+    cargo flamegraph {{cargo_flamegraph_flags}} {{args}}
+
+flamechart *args:
+    cargo flamegraph --flamechart {{cargo_flamegraph_flags}} {{args}}
