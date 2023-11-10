@@ -1,4 +1,3 @@
-use crate::codegen::CodeGen;
 use inkwell::{context::Context, execution_engine::JitFunction, OptimizationLevel};
 
 pub use self::builder::JitBuilder;
@@ -47,35 +46,26 @@ where
     let entry_block = context.append_basic_block(main, "entry");
 
     // Create the compilation/runtime environment.
-    let (env, codegen) = {
-        let env = runtime::Environment::new(builder);
-        let globals = env.map_into(&module, &execution_engine);
-        let codegen = CodeGen::new(&context, module, execution_engine, globals);
-        (env, codegen)
-    };
+    let env = runtime::Environment::new(builder, &context, module, execution_engine);
 
     // Build the main function.
     {
-        codegen.builder.position_at_end(entry_block);
+        env.codegen.builder.position_at_end(entry_block);
         // Save the current stack frame, will be restored on every block to ensure no stack overflows occur.
         // Its a rather bruteforce approach, but it works :)
-        codegen.save_host_stack();
-        codegen.build_dynamic_jump(codegen.read_register(i64_type, register::Special::Pc));
-
-        let a = codegen.context.i64_type().const_int(0, false);
-        cmps!(codegen, a <= a);
+        env.codegen.save_host_stack();
+        env.codegen
+            .build_dynamic_jump(env.codegen.read_register(i64_type, register::Special::Pc));
     }
 
     // Ensure the generated LLVM IR is valid.
-    if let Err(err) = codegen.verify() {
+    if let Err(err) = env.codegen.verify() {
         println!("\nERROR: Generated code failed to verify:\n\n{err}\nTerminating.");
         panic!()
     }
 
     let main_fn: JitFunction<unsafe extern "C" fn()> =
-        unsafe { codegen.execution_engine.get_function("main").unwrap() };
-
-    env.attach_codegen(codegen);
+        unsafe { env.codegen.execution_engine.get_function("main").unwrap() };
 
     // Run the generated code!
     unsafe { main_fn.call() };

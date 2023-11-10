@@ -14,7 +14,8 @@ impl<'ctx> VirtualAddressMap<'ctx> {
         Self { labels: Vec::new() }
     }
 
-    /// Returns the label that contains the given virtual address, or an index where it should be inserted while maintaining the sort order.
+    /// On success this returns the label that contains the given virtual address,
+    /// otherwise the index where it should be inserted while maintaining the sort order, which is meant to be used with [`insert`].
     pub fn get(&self, vaddr: u64) -> Result<&LabelWithContext<'ctx>, usize> {
         self.labels
             .binary_search_by_key(&vaddr, |l| l.label.start() as u64)
@@ -23,8 +24,8 @@ impl<'ctx> VirtualAddressMap<'ctx> {
     }
 
     /// Inserts the given label at the given index. After insertion, the labels must still be sorted by starting address.
-    /// The index is obtained by the [`get`] method, which returns the index when no label was already present.
-    pub unsafe fn insert_at(&mut self, index: usize, label: LabelWithContext<'ctx>) {
+    /// The index is obtained by the error case of the [`get`] method, when no existing label could be found.
+    pub unsafe fn insert(&mut self, index: usize, label: LabelWithContext<'ctx>) {
         self.labels.insert(index, label);
     }
 

@@ -70,13 +70,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
                 });
             base..(base + (paddr_range.len() as u64))
         };
-
-        self.codegen
-            .get_mut()
-            .as_mut()
-            .unwrap()
-            .labels
-            .remove_within_range(vaddr_range);
+        self.codegen.labels.remove_within_range(vaddr_range);
     }
 
     fn read_or_panic<const SIZE: usize>(&mut self, vaddr: Option<u64>, paddr: u32) -> Int<SIZE> {

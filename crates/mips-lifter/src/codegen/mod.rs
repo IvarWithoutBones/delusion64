@@ -33,7 +33,7 @@ macro_rules! env_call {
         // Type-check the arguments.
         let codegen: &$crate::codegen::CodeGen = $codegen;
         let func: &$crate::runtime::RuntimeFunction = &$func;
-        let args = &[codegen.globals.env_ptr.as_pointer_value().into(), $($args.into()),*];
+        let args = &[codegen.globals().env_ptr.as_pointer_value().into(), $($args.into()),*];
         let func = codegen.module.get_function(func.name()).unwrap();
         codegen.builder.build_call(func, args, "env_call")
     }};
@@ -61,6 +61,7 @@ pub struct RegisterGlobals<'ctx> {
     pub fpu_control: GlobalValue<'ctx>,
 }
 
+/// Mappings to the runtime environment.
 #[derive(Debug)]
 #[repr(C)]
 pub struct Globals<'ctx> {
@@ -82,12 +83,8 @@ pub struct CodeGen<'ctx> {
     pub module: Module<'ctx>,
     pub builder: Builder<'ctx>,
     pub execution_engine: ExecutionEngine<'ctx>,
-
-    /// Global mappings to the runtime environment.
-    pub globals: Globals<'ctx>,
-
-    /// The generated labels, with associated functions.
     pub labels: VirtualAddressMap<'ctx>,
+    globals: Option<Globals<'ctx>>,
 
     jump_helper: Option<FunctionValue<'ctx>>,
     // Separate functions so that we can patch calls to them at runtime in the future, without worrying about arguments.
@@ -96,28 +93,31 @@ pub struct CodeGen<'ctx> {
 }
 
 impl<'ctx> CodeGen<'ctx> {
-    pub fn new(
+    pub(crate) fn new(
         context: &'ctx Context,
         module: Module<'ctx>,
         execution_engine: ExecutionEngine<'ctx>,
-        globals: Globals<'ctx>,
     ) -> Self {
         Self {
             context,
             module,
             builder: context.create_builder(),
             execution_engine,
-            globals,
-            labels: Default::default(),
+            globals: None,
+            labels: VirtualAddressMap::new(),
             jump_helper: None,
             fallthrough_one_helper: None,
             fallthrough_two_helper: None,
         }
-        .with_jump_helper()
-        .with_fallthrough_helpers()
     }
 
-    fn with_jump_helper(mut self) -> Self {
+    pub fn initialise(&mut self, globals: Globals<'ctx>) {
+        self.globals = Some(globals);
+        self.with_jump_helper();
+        self.with_fallthrough_helpers();
+    }
+
+    fn with_jump_helper(&mut self) {
         let i64_type = self.context.i64_type();
         let void_type = self.context.void_type();
 
@@ -157,10 +157,9 @@ impl<'ctx> CodeGen<'ctx> {
         }
 
         self.jump_helper = Some(func);
-        self
     }
 
-    fn with_fallthrough_helpers(mut self) -> Self {
+    fn with_fallthrough_helpers(&mut self) {
         let make_func = |codegen: &Self, amount: u64, name: &str| -> FunctionValue<'ctx> {
             // Generate the function declaration.
             let func = codegen.set_func_attrs(codegen.module.add_function(
@@ -183,9 +182,13 @@ impl<'ctx> CodeGen<'ctx> {
             func
         };
 
-        self.fallthrough_one_helper = Some(make_func(&self, 1, "fallthrough_one_instruction"));
-        self.fallthrough_two_helper = Some(make_func(&self, 2, "fallthrough_two_instructions"));
-        self
+        self.fallthrough_one_helper = Some(make_func(self, 1, "fallthrough_one_instruction"));
+        self.fallthrough_two_helper = Some(make_func(self, 2, "fallthrough_two_instructions"));
+    }
+
+    pub(crate) fn globals(&self) -> &Globals<'ctx> {
+        // SAFETY: this only gets initialised by the runtime, which will call `initialise` before anything else.
+        unsafe { self.globals.as_ref().unwrap_unchecked() }
     }
 
     pub fn fallthrough_function(&self, amount: FallthroughAmount) -> FunctionValue<'ctx> {
@@ -288,10 +291,10 @@ impl<'ctx> CodeGen<'ctx> {
 
     pub fn add_dynamic_function<F>(&self, f: F) -> Result<LabelWithContext<'ctx>, String>
     where
-        F: FnOnce(&CodeGen<'ctx>, &Module<'ctx>) -> LabelWithContext<'ctx>,
+        F: FnOnce(&Module<'ctx>) -> Result<LabelWithContext<'ctx>, String>,
     {
         let new_module = self.context.create_module("tmp_dynamic_module");
-        let mut lab = f(self, &new_module);
+        let mut lab = f(&new_module)?;
         self.link_in_module(new_module, &mut lab)?;
         Ok(lab)
     }

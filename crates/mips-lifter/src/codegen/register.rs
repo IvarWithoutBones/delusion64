@@ -93,7 +93,7 @@ impl<'ctx> CodeGen<'ctx> {
             unsafe {
                 self.builder.build_in_bounds_gep(
                     i64_type,
-                    self.globals.registers.fpu.as_pointer_value(),
+                    self.globals().registers.fpu.as_pointer_value(),
                     &[i64_type.const_int(index as u64, false)],
                     &name(index), // This'll bounds check
                 )
@@ -159,14 +159,14 @@ impl<'ctx> CodeGen<'ctx> {
 
         let base_ptr = match reg {
             Register::GeneralPurpose(_) => {
-                self.globals.registers.general_purpose.as_pointer_value()
+                self.globals().registers.general_purpose.as_pointer_value()
             }
-            Register::Special(_) => self.globals.registers.special.as_pointer_value(),
-            Register::Cp0(_) => self.globals.registers.cp0.as_pointer_value(),
+            Register::Special(_) => self.globals().registers.special.as_pointer_value(),
+            Register::Cp0(_) => self.globals().registers.cp0.as_pointer_value(),
             Register::Fpu(_) => {
                 unimplemented!("use fpu_general_register_pointer instead of register_pointer")
             }
-            Register::FpuControl(_) => self.globals.registers.fpu_control.as_pointer_value(),
+            Register::FpuControl(_) => self.globals().registers.fpu_control.as_pointer_value(),
         };
 
         unsafe {

@@ -9,9 +9,9 @@ use crate::{
     label::generate_label_functions,
     JitBuilder,
 };
-use inkwell::{execution_engine::ExecutionEngine, module::Module};
+use inkwell::{context::Context, execution_engine::ExecutionEngine, module::Module};
 use mips_decomp::{instruction::ParsedInstruction, register, Exception, INSTRUCTION_SIZE};
-use std::{cell::Cell, pin::Pin};
+use std::pin::Pin;
 use strum::IntoEnumIterator;
 
 pub(crate) use self::function::RuntimeFunction;
@@ -25,39 +25,46 @@ mod registers;
 pub struct Environment<'ctx, Bus: bus::Bus> {
     pub(crate) registers: Pin<Box<Registers>>,
     pub(crate) interrupt_pending: bool,
+    pub(crate) codegen: CodeGen<'ctx>,
     bus: Bus,
     tlb: TranslationLookasideBuffer,
-    codegen: Cell<Option<CodeGen<'ctx>>>,
     debugger: Option<gdb::Debugger<'ctx, Bus>>,
     // TODO: replace this with a proper logging library
     trace: bool,
 }
 
 impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
-    pub fn new(builder: JitBuilder<true, Bus>) -> Pin<Box<Self>> {
+    pub(crate) fn new(
+        builder: JitBuilder<true, Bus>,
+        context: &'ctx Context,
+        module: Module<'ctx>,
+        execution_engine: ExecutionEngine<'ctx>,
+    ) -> Pin<Box<Self>> {
         let mut registers = Registers::default();
         for (reg, val) in builder.registers() {
             registers[*reg] = *val;
         }
 
-        let mut env = Self {
+        let mut env = Box::new(Self {
             registers: Box::pin(registers),
             tlb: TranslationLookasideBuffer::default(),
             debugger: None,
-            codegen: Default::default(),
+            codegen: CodeGen::new(context, module, execution_engine),
             interrupt_pending: false,
             bus: builder.bus,
             trace: builder.trace,
-        };
+        });
 
         if let Some(gdb) = builder.gdb {
             env.debugger = Some(gdb::Debugger::new(&mut env, gdb));
         }
 
-        Box::pin(env)
+        let globals = env.map_into(&env.codegen.module, &env.codegen.execution_engine);
+        env.codegen.initialise(globals);
+        env.into()
     }
 
-    pub fn map_into(
+    fn map_into(
         &self,
         module: &Module<'ctx>,
         execution_engine: &ExecutionEngine<'ctx>,
@@ -67,7 +74,8 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
 
         // Map a pointer to the environment struct
         let env_ptr = module.add_global(i64_ptr_type, Default::default(), "env");
-        execution_engine.add_global_mapping(&env_ptr, self as *const Environment<_> as usize);
+        let ptr = self as *const Environment<_> as usize;
+        execution_engine.add_global_mapping(&env_ptr, ptr);
 
         // Map the registers into the modules globals
         let registers = self.registers.map_into(&context, module, execution_engine);
@@ -113,10 +121,6 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
             env_ptr,
             registers,
         }
-    }
-
-    pub fn attach_codegen(&self, codegen: CodeGen<'ctx>) {
-        self.codegen.set(Some(codegen));
     }
 
     fn virtual_to_physical_address(&mut self, vaddr: u64, mode: AccessMode) -> u32 {
@@ -178,7 +182,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         self.registers[register::Cp0::Cause] = cause.raw() as u64;
 
         // Will set PC for us
-        let jump_function = self.codegen.get_mut().as_ref().unwrap().jump_function();
+        let jump_function = self.codegen.jump_function();
         unsafe { jump_function.call(exception.vector() as u64) }
     }
 
@@ -228,16 +232,14 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
     unsafe extern "C" fn get_function_ptr(&mut self, vaddr: u64) -> usize {
         let vaddr = vaddr & u32::MAX as u64;
         let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
-        let mut codegen = self.codegen.take().unwrap();
 
-        let insert_index = match codegen.labels.get(vaddr) {
+        let insert_index = match self.codegen.labels.get(vaddr) {
             Ok(label) => {
                 if self.trace {
                     println!("found existing block at {vaddr:#x}");
                 }
 
                 let ptr = label.pointer.unwrap();
-                self.codegen.set(Some(codegen));
                 return ptr;
             }
             Err(insert_index) => insert_index,
@@ -278,17 +280,18 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         let mut label_list = mips_decomp::LabelList::from(&*bin);
         label_list.set_start(vaddr as usize);
 
-        let lab = codegen
-            .add_dynamic_function(|codegen, module| {
+        let lab = self
+            .codegen
+            .add_dynamic_function(|module| {
+                let codegen = &self.codegen;
                 let mut lab = {
                     let mut labels = generate_label_functions(label_list, codegen.context, module);
-                    labels.pop().unwrap_or_else(|| {
-                        let msg = format!("failed to generate label functions for {vaddr:#x}");
-                        self.panic_update_debugger(&msg)
-                    })
+                    labels.pop().ok_or_else(|| {
+                        format!("failed to generate label functions for {vaddr:#x}")
+                    })?
                 };
 
-                if let Ok(fallthrough) = codegen.labels.get(lab.label.end() as u64) {
+                if let Ok(fallthrough) = self.codegen.labels.get(lab.label.end() as u64) {
                     if self.trace {
                         println!(
                             "found fallthrough block at {:#x}",
@@ -328,13 +331,14 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
                 }
 
                 lab.compile(codegen);
-                lab
+                Ok(lab)
             })
-            .unwrap_or_else(|err| panic!("{err}"));
+            .unwrap_or_else(|err| {
+                self.panic_update_debugger(&format!("failed to generate function: {err:#?}"))
+            });
 
         let ptr = lab.pointer.unwrap();
-        codegen.labels.insert_at(insert_index, lab);
-        self.codegen.set(Some(codegen));
+        self.codegen.labels.insert(insert_index, lab);
         ptr
     }
 
