@@ -526,6 +526,32 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             codegen.write_general_register(instr.rt(), source);
         }
 
+        Mnenomic::Dcfc1 => {
+            // Copy contents of CP1's control register frc, to GPR rt
+            codegen.assert_coprocessor_usable(1);
+            // TODO: floating point exception. This instruction is not implemented.
+        }
+
+        Mnenomic::Dctc1 => {
+            // Copy contents of GPR rt, to CP1's control register fcr.
+            codegen.assert_coprocessor_usable(1);
+            // TODO: floating point exception. This instruction is not implemented.
+        }
+
+        Mnenomic::Dcfc2 => {
+            // Copy contents of CP2's control register rd, to GPR rt.
+            codegen.assert_coprocessor_usable(2);
+            let source = codegen.read_cp2_register(i64_type);
+            codegen.write_general_register(instr.rt(), source);
+        }
+
+        Mnenomic::Dctc2 => {
+            // Copy contents of GPR rt, to CP2's control register rd.
+            codegen.assert_coprocessor_usable(2);
+            let target = codegen.read_general_register(i64_type, instr.rt());
+            codegen.write_cp2_register(target);
+        }
+
         Mnenomic::Mtlo => {
             // Copy contents of rs to register LO
             let target = codegen.read_general_register(i64_type, instr.rs());

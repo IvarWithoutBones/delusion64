@@ -58,6 +58,10 @@ pub enum Mnenomic {
     Ddivu,
     Div,
     Divu,
+    Dcfc1,
+    Dcfc2,
+    Dctc1,
+    Dctc2,
     Dmfc0,
     Dmfc1,
     Dmfc2,
@@ -680,7 +684,12 @@ impl ParsedInstruction {
     }
 
     pub fn float_format(&self) -> FloatFormat {
-        FloatFormat::from_repr(self.get(Operand::Format).unwrap() as u8).unwrap()
+        FloatFormat::from_repr(self.get(Operand::Format).unwrap() as u8).unwrap_or_else(|| {
+            panic!(
+                "failed to parse float format from {:32b} for {:?}",
+                self.raw, self.mnemonic()
+            )
+        })
     }
 
     pub fn float_condition(&self) -> FloatCondition {
@@ -794,6 +803,10 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Ddivu,   "0000 00ss ssst tttt 0000 0000 0001 1111", (Source)(Target)),
     instr!(Div,     "0000 00ss ssst tttt 0000 0000 0001 1010", (Source)(Target)),
     instr!(Divu,    "0000 00ss ssst tttt 0000 0000 0001 1011", (Source)(Target)),
+    instr!(Dcfc1,   "0100 0100 011t tttt dddd d000 0000 0000", (Target)(Destination)),
+    instr!(Dcfc2,   "0100 1000 011t tttt dddd d000 0000 0000", (Target)(Destination)),
+    instr!(Dctc1,   "0100 0100 111t tttt dddd d000 0000 0000", (Target)(Destination)),
+    instr!(Dctc2,   "0100 1000 111t tttt dddd d000 0000 0000", (Target)(Destination)),
     instr!(Dmfc0,   "0100 0000 001t tttt dddd d000 0000 0000", (Target)(Destination)),
     instr!(Dmfc1,   "0100 0100 001t tttt SSSS S000 0000 0000", (Target)(FloatSource)),
     instr!(Dmfc2,   "0100 1000 001t tttt ssss s000 0000 0000", (Target)(Source)),
