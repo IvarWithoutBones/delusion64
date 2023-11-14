@@ -83,7 +83,7 @@ bitfield_without_debug! {
 
 impl PifAddressWrite64 {
     /// The data to be transferred to PIF-RAM.
-    pub fn data(&self) -> u32 {
+    pub fn address(&self) -> u32 {
         self.writable_data() << 1
     }
 }
@@ -92,7 +92,7 @@ impl fmt::Debug for PifAddressWrite64 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PifAddressWrite64")
             .field("<value>", &self.0)
-            .field("data", &self.data())
+            .field("address", &self.address())
             .finish()
     }
 }

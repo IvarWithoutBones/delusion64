@@ -36,6 +36,7 @@ pub enum PifError {
     OffsetOutOfBounds { region: Region, offset: usize },
     JoybusParseError(joybus::ParseError),
     InvalidChannel { channel: usize },
+    UnimplementedJoybusRequest { request: joybus::Request },
 }
 
 impl From<joybus::ParseError> for PifError {
@@ -140,7 +141,7 @@ impl Pif {
                     println!("stub: joybus::Command::WriteControllerAccessory");
                 }
 
-                req => todo!("PIF-NUS joybus request {req:#?}"),
+                request => Err(PifError::UnimplementedJoybusRequest { request })?,
             }
         }
         Ok(())

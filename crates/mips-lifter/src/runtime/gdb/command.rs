@@ -205,6 +205,22 @@ impl<Bus: bus::Bus> Environment<'_, Bus> {
                     Ok(())
                 }),
             },
+            MonitorCommand {
+                name: "vaddr",
+                description: "translate a physical address to a virtual address",
+                handler: Box::new(|env, out, args| {
+                    let paddr = str_to_u64(args.next().ok_or("expected a physical address")?)
+                        .map_err(|err| format!("invalid physical address: {err}"))?;
+                    let vaddr = env
+                        .tlb
+                        .translate_paddr(paddr as u32)
+                        .map_err(|err| {
+                            format!("physical address {paddr:#x} is not mapped: {err:#?}")
+                        })?;
+                    outputln!(out, "{vaddr:#x}");
+                    Ok(())
+                }),
+            },
         ]
     }
 }

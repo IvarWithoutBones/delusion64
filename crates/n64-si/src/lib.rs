@@ -132,7 +132,7 @@ impl SerialInterface {
             DramAddress::OFFSET => self.dram_address.address(),
             PifAddressRead64::OFFSET => self.pif_address_read_64.offset(),
             PifAddressWrite4::OFFSET => self.pif_address_write_4.into(),
-            PifAddressWrite64::OFFSET => self.pif_address_write_64.data(),
+            PifAddressWrite64::OFFSET => self.pif_address_write_64.address(),
             PifAddressRead4::OFFSET => self.pif_address_read_4.into(),
             Status::OFFSET => self.status.into(),
             _ => Err(SiError::OffsetOutOfBounds { offset })?,
@@ -168,12 +168,14 @@ impl SerialInterface {
                     ty: DmaType::Write,
                     length: 64,
                     cycles_remaining: 4065 * 3,
-                    pif_address: self.pif_address_write_64.data(),
+                    pif_address: self.pif_address_write_64.address(),
                     ram_address: self.dram_address.address(),
                 });
 
-                self.pif
-                    .write_dma(self.pif_address_write_64.data(), &rdram[self.rdram_range()])?;
+                self.pif.write_dma(
+                    self.pif_address_write_64.address(),
+                    &rdram[self.rdram_range()],
+                )?;
             }
             PifAddressRead4::OFFSET => self.pif_address_read_4 = value.into(),
             Status::OFFSET => {
