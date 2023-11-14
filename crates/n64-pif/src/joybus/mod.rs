@@ -1,5 +1,6 @@
 use self::response::Response;
 use strum::FromRepr;
+use tartan_bitfield::bitfield;
 
 pub use self::channel::Channels;
 
@@ -7,15 +8,45 @@ mod channel;
 pub mod controller;
 pub mod response;
 
-pub const fn parse_len(byte: u8) -> usize {
-    // Unsure what the upper two bits are used for?
-    (byte as usize) & 0b0011_1111
+bitfield! {
+    pub struct PacketMeta(u8) {
+        [0..=5] length: u8,
+        // For input
+        [6] pub reset,
+        [7] pub skip,
+        // For output
+        [6] pub over,
+        [7] pub invalid,
+    }
+}
+
+impl PacketMeta {
+    pub fn len(&self) -> usize {
+        self.length() as usize
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PacketLen {
+    pub input: u8,
+    pub output: u8,
+}
+
+impl PacketLen {
+    const fn new(input: u8, output: u8) -> Self {
+        Self { input, output }
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ParseError {
-    UnknownCommand(u8),
-    ReservedCommand(u8),
+    UnknownRequest(u8),
+    InvalidRequestLen {
+        request: Request,
+        expected: PacketLen,
+        got: PacketLen,
+    },
+    RequestInputEmpty,
 }
 
 /// Assigns a second identifier to an enum variant, since these all need to be unique,
@@ -47,24 +78,59 @@ pub enum Request {
 }
 
 impl Request {
-    pub fn new(value: u8, input_len: usize) -> Result<Self, ParseError> {
-        match Request::from_repr(value as u16) {
+    pub fn new(value: u8, input: PacketMeta, output: PacketMeta) -> Result<Self, ParseError> {
+        let len = PacketLen::new(input.length(), output.length());
+        let request = match Request::from_repr(value as u16) {
             Some(cmd) => Ok(cmd),
             None => match value {
                 // Manually fix up commands hard to model nicely with the derive macro.
                 0x09..=0x0D => Ok(Request::VoiceRecognition),
                 0x13 => {
-                    if input_len == 2 {
+                    if len == Request::ReadKeypress.len().unwrap() {
                         Ok(Request::ReadKeypress)
                     } else {
                         Ok(Request::ReadGameBoy)
                     }
                 }
 
-                0x0E | 0x10 | 0x11 | 0x12 => Err(ParseError::ReservedCommand(value)),
-                _ => Err(ParseError::UnknownCommand(value)),
+                _ => Err(ParseError::UnknownRequest(value)),
             },
+        }?;
+
+        let Some(expected) = request.len() else {
+            // Unknown packet size, we assume its fine.
+            return Ok(request);
+        };
+
+        if expected == len {
+            Ok(request)
+        } else {
+            Err(ParseError::InvalidRequestLen {
+                request,
+                expected,
+                got: len,
+            })
         }
+    }
+
+    const fn len(&self) -> Option<PacketLen> {
+        let (input, output) = match self {
+            Request::Info => (1, 3),
+            Request::ControllerState => (1, 4),
+            Request::ReadControllerAccessory => (3, 33),
+            Request::WriteControllerAccessory => (35, 1),
+            Request::ReadEEPROM => (2, 8),
+            Request::WriteEEPROM => (10, 1),
+            Request::RealtimeClockInfo => (1, 3),
+            Request::ReadRealtimeClockBlock => (2, 9),
+            Request::WriteRealtimeClockBlock => (10, 1),
+            Request::VoiceRecognition => return None,
+            Request::ReadKeypress => (2, 7),
+            Request::ReadGameBoy => (3, 33),
+            Request::WriteGameBoy => (35, 1),
+            Request::ResetInfo => (1, 3),
+        };
+        Some(PacketLen::new(input, output))
     }
 }
 
@@ -75,6 +141,14 @@ impl From<Request> for u8 {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Status<T> {
+    Message(T),
+    ResetChannel,
+    SkipChannel,
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Message<'a> {
     pub request: Request,
     pub input: &'a [u8],
@@ -82,31 +156,41 @@ pub struct Message<'a> {
 }
 
 impl<'a> Message<'a> {
-    pub fn new(mut addr: usize, ram: &'a mut [u8]) -> Result<Self, ParseError> {
-        let input_len = parse_len(ram[addr]);
-        let output_len = parse_len(ram[addr + 1]);
-        addr += 2;
+    pub fn new(addr: usize, ram: &'a mut [u8]) -> Result<Status<Self>, ParseError> {
+        let (meta, data) = ram[addr..].split_at_mut(2);
+        let input_meta = PacketMeta(meta[0]);
+        let output_meta = PacketMeta(meta[1]);
 
-        let request = if input_len != 0 {
-            Request::new(ram[addr], input_len)?
+        if input_meta.reset() {
+            return Ok(Status::ResetChannel);
+        } else if input_meta.skip() {
+            return Ok(Status::SkipChannel);
+        }
+
+        let request = if input_meta.len() != 0 {
+            Request::new(data[0], input_meta, output_meta)?
         } else {
-            Request::Info
+            Err(ParseError::RequestInputEmpty)?
         };
 
-        let (input, output) = ram[addr..addr + input_len + output_len].split_at_mut(input_len);
-        Ok(Self {
+        let (input, output) =
+            data[..input_meta.len() + output_meta.len()].split_at_mut(input_meta.len());
+
+        Ok(Status::Message(Self {
             request,
             input,
             output,
-        })
+        }))
     }
 
     pub fn reply(self, response: impl Response) {
         let bytes = response.into_bytes();
         let len = self.output.len().min(bytes.as_ref().len());
         self.output[..len].copy_from_slice(&bytes.as_ref()[..len]);
-        if len < self.output.len() {
-            self.output[len..].fill(0);
-        }
+        debug_assert_eq!(self.output.len(), bytes.as_ref().len());
+    }
+
+    pub fn reply_invalid(&mut self) {
+        self.output[0] = PacketMeta(self.output[0]).with_invalid(true).into();
     }
 }

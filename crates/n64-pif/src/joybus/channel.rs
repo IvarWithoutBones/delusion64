@@ -1,4 +1,4 @@
-use super::{parse_len, response::ControllerState};
+use super::{response::ControllerState, PacketMeta};
 use crate::{PifError, PifResult, Region};
 use strum::FromRepr;
 
@@ -61,10 +61,10 @@ impl Channels {
                     addr += 1;
                     continue;
                 } else {
-                    (addr, parse_len(maybe))
+                    (addr, PacketMeta(maybe).len())
                 }
             };
-            let output_len = parse_len(ram[address + 1]);
+            let output_len = PacketMeta(ram[address + 1]).len();
 
             addr += 2 + input_len + output_len;
             if addr < Region::Ram.len() {

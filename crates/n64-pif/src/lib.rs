@@ -118,7 +118,11 @@ impl Pif {
 
         // TODO: handle cartridge
         for (channel, state) in self.channels.controllers() {
-            let msg = joybus::Message::new(channel.address, self.ram.as_mut_slice())?;
+            let mut msg = match joybus::Message::new(channel.address, self.ram.as_mut_slice())? {
+                joybus::Status::Message(msg) => msg,
+                joybus::Status::ResetChannel | joybus::Status::SkipChannel => continue,
+            };
+
             match msg.request {
                 joybus::Request::Info | joybus::Request::ResetInfo => {
                     msg.reply(match state {
@@ -139,6 +143,7 @@ impl Pif {
                 joybus::Request::WriteControllerAccessory => {
                     // Namco Museum for some reason requests this, even though we never report `pak_installed`.
                     println!("stub: joybus::Command::WriteControllerAccessory");
+                    msg.reply_invalid();
                 }
 
                 request => Err(PifError::UnimplementedJoybusRequest { request })?,
