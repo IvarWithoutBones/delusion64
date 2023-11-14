@@ -1218,8 +1218,8 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             let address = codegen.base_plus_offset(instr, "lwr_addr");
 
             let shift = {
-                let three = i64_type.const_int(3, false);
-                let eight = i64_type.const_int(8, false);
+                let three = i32_type.const_int(3, false);
+                let eight = i32_type.const_int(8, false);
 
                 let xor = codegen.builder.build_xor(address, three, "lwr_shift_xor");
                 let and = codegen.builder.build_and(xor, three, "lwr_shift_and");
@@ -1227,19 +1227,19 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             };
 
             let mask = {
-                let max = i64_type.const_all_ones();
+                let initial = i32_type.const_int(0xFFFF_FFFF, false);
                 let mask = codegen
                     .builder
-                    .build_right_shift(max, shift, false, "lwr_mask");
+                    .build_right_shift(initial, shift, false, "lwr_mask");
                 codegen.builder.build_not(mask, "lwr_mask_not")
             };
 
             let data = {
-                let not_three = i64_type.const_int(!3, false);
+                let not_three = i32_type.const_int(!3, false);
                 let addr = codegen
                     .builder
                     .build_and(address, not_three, "lwr_data_and");
-                let data = codegen.read_memory(i64_type, addr);
+                let data = codegen.read_memory(i32_type, addr);
 
                 codegen
                     .builder
@@ -1247,12 +1247,12 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             };
 
             let result = {
-                let reg = codegen.zero_extend_to(
-                    i64_type,
-                    codegen.read_general_register(i32_type, instr.rt()),
-                );
+                let reg = codegen.read_general_register(i32_type, instr.rt());
                 let anded = codegen.builder.build_and(reg, mask, "lwr_result_and");
-                codegen.builder.build_or(anded, data, "lwr_result_or")
+                codegen.sign_extend_to(
+                    i64_type,
+                    codegen.builder.build_or(anded, data, "lwr_result_or"),
+                )
             };
 
             codegen.write_general_register(instr.rt(), result);
@@ -1446,20 +1446,18 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             let address = codegen.base_plus_offset(instr, "swl_addr");
 
             let shift = {
-                let zero = i64_type.const_zero();
-                let three = i64_type.const_int(3, false);
+                let zero = i32_type.const_zero();
+                let three = i32_type.const_int(3, false);
                 let eight = i32_type.const_int(8, false);
+
                 let xor = codegen.builder.build_xor(address, zero, "swl_shift_xor");
-                let and = codegen.truncate_to(
-                    i32_type,
-                    codegen.builder.build_and(xor, three, "swl_shift_and"),
-                );
+                let and = codegen.builder.build_and(xor, three, "swl_shift_and");
                 codegen.builder.build_int_mul(eight, and, "swl_shift_mul")
             };
 
             let address_masked = codegen.builder.build_and(
                 address,
-                i64_type.const_int(!3, false),
+                i32_type.const_int(!3, false),
                 "swl_addr_masked",
             );
 
@@ -1467,7 +1465,7 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
                 let data = {
                     let mask = {
                         let mask = codegen.builder.build_right_shift(
-                            i32_type.const_all_ones(),
+                            i32_type.const_int(0xFFFF_FFFF, false),
                             shift,
                             false,
                             "swl_mask",
@@ -1499,11 +1497,9 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
             let shift = {
                 let three = i64_type.const_int(3, false);
                 let eight = i32_type.const_int(8, false);
+
                 let xor = codegen.builder.build_xor(address, three, "swr_shift_xor");
-                let and = codegen.truncate_to(
-                    i32_type,
-                    codegen.builder.build_and(xor, three, "swr_shift_and"),
-                );
+                let and = codegen.builder.build_and(xor, three, "swr_shift_and");
                 codegen.builder.build_int_mul(eight, and, "swr_shift_mul")
             };
 
@@ -1517,7 +1513,7 @@ pub fn compile_instruction(codegen: &CodeGen, instr: &ParsedInstruction) -> Opti
                 let data = {
                     let mask = {
                         let mask = codegen.builder.build_left_shift(
-                            i32_type.const_all_ones(),
+                            i32_type.const_int(0xFFFF_FFFF, false),
                             shift,
                             "swr_mask",
                         );
