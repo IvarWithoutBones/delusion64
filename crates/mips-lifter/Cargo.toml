@@ -3,14 +3,16 @@ name = "mips-lifter"
 version = "0.1.0"
 edition = "2021"
 
-[features]
-default = ["debug-print"]
-debug-print = []
-
 [dependencies]
-inkwell = { version = "0.2.0", features = ["llvm16-0"] }
 gdbstub = "0.6.6"
 gdbstub_arch = "0.2.4"
 strum = { version = "0.25.0", features = ["derive"] }
 tartan-bitfield = "1.2.0"
 mips-decomp = { path = "../mips-decomp" }
+
+[dependencies.inkwell]
+version = "0.2.0"
+default-features = false
+# TODO: Enable dynamic linking on debug builds to speed up compile times (though release builds should still be static).
+# The feature flag for this is not yet available in a release, though the code for it has already been merged.
+features = ["llvm16-0", "target-x86"]

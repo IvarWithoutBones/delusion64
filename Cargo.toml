@@ -2,6 +2,10 @@
 resolver = "2"
 members = ["crates/*"]
 
+[profile.dev]
+opt-level = 3
+overflow-checks = false
+
 [profile.release]
-incremental = true
 debug = true
+lto = true

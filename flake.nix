@@ -95,6 +95,7 @@
         packages = [
           rustToolchain
           rustToolchain.availableComponents.rust-analyzer
+          llvmPackages.bintools
 
           # Optional debugging tools
           pkgs.cargo-expand

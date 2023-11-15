@@ -27,11 +27,15 @@ pub mod runtime;
 // TODO: upstream this to inkwell
 const LLVM_CALLING_CONVENTION_FAST: u32 = 8;
 
-// TODO: move most of this to the JitBuilder. `build()` should initialise everything, and `run() -> !` start executing.
+// TODO: move most of this Codegen. `JitBuilder::build()` should create the runtime::Environment,
+// which then initialises the entry point and helper functions. `Environment::run()` can start execution.
 pub(crate) fn run<Bus>(builder: JitBuilder<true, Bus>) -> !
 where
     Bus: runtime::bus::Bus,
 {
+    // Without calling this, the JIT will get optimised out when building with LTO.
+    inkwell::execution_engine::ExecutionEngine::link_in_mc_jit();
+
     // Create the compiler context.
     let context = Context::create();
     let module = context.create_module("codegen");
