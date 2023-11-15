@@ -39,11 +39,14 @@
         rustc = rustToolchain;
       };
 
-      # NOTE: LLVM version must be kept in sync with what inkwell expects!
+      # Must be kept in sync with what inkwell expects.
       llvmPackages = pkgs.llvmPackages_16;
 
-      # TODO: Could we use LLVM binutils instead?
-      mipsBinutils = pkgs.pkgsCross.mips64-linux-gnuabi64.buildPackages.binutilsNoLibc;
+      # Required for wgpu, it dynamically links to a graphics API.
+      libraryPath = lib.optionalString hostPlatform.isLinux
+        (lib.makeLibraryPath [
+          pkgs.vulkan-loader
+        ]);
 
       delusion64 = naerskLib.buildPackage {
         pname = "delusion64";
@@ -58,9 +61,18 @@
         src = lib.cleanSource ./.;
 
         nativeBuildInputs = with pkgs; [
-          llvmPackages.llvm.dev
+          llvmPackages.bintools # For LLD, only used at build time
         ] ++ lib.optionals hostPlatform.isLinux [
+          makeWrapper
           pkg-config
+        ];
+
+        buildInputs = with pkgs; [
+          llvmPackages.llvm.dev # For the JIT
+          libffi
+          libxml2
+        ] ++ lib.optionals hostPlatform.isLinux [
+          # Dependencies of eframe, the GUI library we use
           wayland
           xorg.libXcursor
           xorg.libXrandr
@@ -68,14 +80,14 @@
           xorg.libX11
           libxkbcommon
         ] ++ lib.optionals hostPlatform.isDarwin [
+          # Also dependencies of eframe
           darwin.apple_sdk.frameworks.AppKit
           darwin.apple_sdk.frameworks.OpenGL
         ];
 
-        buildInputs = with pkgs; [
-          libffi
-          libxml2
-        ];
+        postInstall = lib.optionalString hostPlatform.isLinux ''
+          wrapProgram $out/bin/delusion64 --prefix LD_LIBRARY_PATH : ${libraryPath}
+        '';
       };
     in
     {
@@ -87,26 +99,18 @@
       devShells.default = pkgs.mkShell {
         inputsFrom = [ delusion64 ];
 
-        LD_LIBRARY_PATH = lib.optional hostPlatform.isLinux
-          (lib.makeLibraryPath [
-            pkgs.vulkan-loader
-          ]);
+        LD_LIBRARY_PATH = lib.optionalString hostPlatform.isLinux libraryPath;
 
-        packages = [
+        packages = with pkgs; [
           rustToolchain
           rustToolchain.availableComponents.rust-analyzer
-          llvmPackages.bintools
 
           # Optional debugging tools
-          pkgs.cargo-expand
-          pkgs.just
-          pkgs.gdb
+          gdb
+          just
+          cargo-expand
+          cargo-flamegraph
           llvmPackages.clang
-          mipsBinutils
-          pkgs.cargo-flamegraph
-          # Temporary tools to convert and view the framebuffer, will be removed with actual rendering.
-          pkgs.imagemagick
-          pkgs.feh
         ];
       };
     });
