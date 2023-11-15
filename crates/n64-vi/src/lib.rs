@@ -27,6 +27,7 @@ pub struct FrameBuffer {
 pub struct SideEffects {
     pub lower_interrupt: bool,
     pub raise_interrupt: bool,
+    pub vblank: bool,
 }
 
 #[derive(Debug)]
@@ -55,6 +56,9 @@ pub struct VideoInterface {
 }
 
 impl VideoInterface {
+    pub const SCREEN_WIDTH: usize = 640;
+    pub const SCREEN_HEIGHT: usize = 480;
+
     pub fn new() -> Self {
         Self {
             control: Control::default(),
@@ -154,24 +158,23 @@ impl VideoInterface {
     #[must_use]
     pub fn tick(&mut self) -> SideEffects {
         self.counter = self.counter.checked_sub(1).unwrap_or(COUNTER_START);
-        if self.counter == BLANKING_DONE {
+        let vblank = self.counter == BLANKING_DONE;
+        if vblank {
             self.field = !self.field;
         }
 
         SideEffects {
             raise_interrupt: self.counter == self.interrupt_counter,
+            vblank,
             ..Default::default()
         }
     }
 
     /// Returns the guest framebuffer as RGBA8888 pixels.
     pub fn framebuffer(&self, rdram: &[u8]) -> Option<FrameBuffer> {
-        const SCREEN_WIDTH: usize = 640;
-        const SCREEN_HEIGHT: usize = 480;
-
         let (src_x_offset, dst_x_offset, dst_width) = {
             const HSCAN_MIN: usize = 108;
-            const HSCAN_MAX: usize = HSCAN_MIN + SCREEN_WIDTH;
+            const HSCAN_MAX: usize = HSCAN_MIN + VideoInterface::SCREEN_WIDTH;
             let hstart = self.horizontal_video.start() as usize;
             let hend = self.horizontal_video.end() as usize;
             let x0 = hstart.max(HSCAN_MIN);
@@ -181,7 +184,7 @@ impl VideoInterface {
 
         let (src_y_offset, dst_y_offset, dst_height) = {
             const VSCAN_MIN: usize = 34;
-            const VSCAN_MAX: usize = VSCAN_MIN + SCREEN_HEIGHT;
+            const VSCAN_MAX: usize = VSCAN_MIN + VideoInterface::SCREEN_HEIGHT;
             let vstart = self.vertical_video.start() as usize;
             let vend = self.vertical_video.end() as usize;
             let y0 = vstart.max(VSCAN_MIN);
@@ -198,13 +201,14 @@ impl VideoInterface {
 
         let pixel_type = self.control.pixel_type();
         let bytes_per_pixel = pixel_type.bytes_per_pixel()?; // For the guest, host always uses RGBA8888
-        let mut pixels = vec![0_u8; (SCREEN_WIDTH * SCREEN_HEIGHT) * 4].into_boxed_slice();
+        let mut pixels =
+            vec![0_u8; (Self::SCREEN_WIDTH * Self::SCREEN_HEIGHT) * 4].into_boxed_slice();
 
         let mut src_y = (src_y_offset * yscale) + self.yscale.subpixel() as usize;
         for y in 0..dst_height {
             let is_odd = ((dst_y_offset + y) & 1) != 0;
             if !self.control.serrate() || self.field != is_odd {
-                let dst_offset = (y * SCREEN_WIDTH) + dst_x_offset;
+                let dst_offset = (y * Self::SCREEN_WIDTH) + dst_x_offset;
                 let src_offset = {
                     let rdram_offset = self.origin.origin() as usize;
                     let pitch = self.width.width() as usize * bytes_per_pixel;

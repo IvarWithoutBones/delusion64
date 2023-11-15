@@ -1,4 +1,5 @@
 use self::location::BusSection;
+use delusion64_gui::context::{self, SendItem};
 use mips_lifter::{
     gdb::MonitorCommand,
     runtime::bus::{Address, Bus as BusInterface, BusResult, BusValue, Int, MemorySection},
@@ -27,6 +28,7 @@ pub struct Bus {
     mi: MipsInterface,
     vi: VideoInterface,
     si: SerialInterface,
+    context: context::Emulator,
     // TODO: remove once a proper interface is implemented, this is just here for input using GDB.
     controller: n64_si::controller::StandardController,
     // Buffer to view the result of unit tests from n64_systemtest. See https://github.com/lemmy-64/n64-systemtest#isviewer.
@@ -34,7 +36,7 @@ pub struct Bus {
 }
 
 impl Bus {
-    pub fn new(cartridge: Cartridge) -> Self {
+    pub fn new(context: context::Emulator, cartridge: Cartridge) -> Self {
         let cartridge_rom = {
             let mut array: Box<[u8; BusSection::CartridgeRom.len()]> = boxed_array();
             let rom = cartridge.read().unwrap();
@@ -67,6 +69,7 @@ impl Bus {
             mi: MipsInterface::new(),
             vi: VideoInterface::new(),
             si,
+            context,
             controller,
             n64_systemtest_isviewer_buffer: boxed_array(),
         }
@@ -214,6 +217,17 @@ impl BusInterface for Bus {
         // TODO: how does timing compare to the CPU?
 
         let vi_side_effects = self.vi.tick();
+
+        if vi_side_effects.vblank {
+            if let Some(fb) = self.vi.framebuffer(self.rdram.as_slice()) {
+                self.context.send(context::Framebuffer {
+                    width: VideoInterface::SCREEN_WIDTH,
+                    height: VideoInterface::SCREEN_HEIGHT,
+                    pixels: fb.pixels,
+                });
+            }
+        }
+
         if vi_side_effects.raise_interrupt {
             // println!("delusion64: vi halfline interrupt");
             if self.mi.raise_interrupt(InterruptType::VideoInterface) {

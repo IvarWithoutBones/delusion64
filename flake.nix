@@ -29,6 +29,7 @@
         overlays = [ (import rust-overlay) ];
       };
 
+      hostPlatform = pkgs.stdenvNoCC.hostPlatform;
       rustToolchain = pkgs.rust-bin.stable.latest.default.override {
         extensions = [ "rust-src" "clippy" "rustfmt" ];
       };
@@ -56,8 +57,19 @@
 
         src = lib.cleanSource ./.;
 
-        nativeBuildInputs = [
+        nativeBuildInputs = with pkgs; [
           llvmPackages.llvm.dev
+        ] ++ lib.optionals hostPlatform.isLinux [
+          pkg-config
+          wayland
+          xorg.libXcursor
+          xorg.libXrandr
+          xorg.libXi
+          xorg.libX11
+          libxkbcommon
+        ] ++ lib.optionals hostPlatform.isDarwin [
+          darwin.apple_sdk.frameworks.AppKit
+          darwin.apple_sdk.frameworks.OpenGL
         ];
 
         buildInputs = with pkgs; [
@@ -74,6 +86,11 @@
 
       devShells.default = pkgs.mkShell {
         inputsFrom = [ delusion64 ];
+
+        LD_LIBRARY_PATH = lib.optional hostPlatform.isLinux
+          (lib.makeLibraryPath [
+            pkgs.vulkan-loader
+          ]);
 
         packages = [
           rustToolchain
