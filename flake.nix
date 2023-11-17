@@ -82,7 +82,6 @@
         ] ++ lib.optionals hostPlatform.isDarwin [
           # Also dependencies of eframe
           darwin.apple_sdk.frameworks.AppKit
-          darwin.apple_sdk.frameworks.OpenGL
         ];
 
         postInstall = lib.optionalString hostPlatform.isLinux ''
