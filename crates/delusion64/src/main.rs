@@ -1,5 +1,6 @@
 use crate::bus::Bus;
 use clap::Parser;
+use input::ControllerEvent;
 use mips_lifter::{gdb, register, JitBuilder};
 use n64_cartridge::{Cartridge, Cic};
 use std::{
@@ -8,6 +9,7 @@ use std::{
 };
 
 pub mod bus;
+pub mod input;
 
 /// Blocks until a GDB client connects via TCP
 fn wait_for_gdb_connection(port: u16) -> io::Result<TcpStream> {
@@ -99,6 +101,7 @@ fn main() {
     });
 
     delusion64_gui::UiBuilder::new("Delusion64", ui_context)
-        .with_initial_window_size([640, 480])
+        .with_initial_window_size([640.0, 480.0])
+        .with_input_devices(vec![ControllerEvent::A])
         .run();
 }

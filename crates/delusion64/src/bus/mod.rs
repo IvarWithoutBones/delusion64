@@ -1,5 +1,6 @@
 use self::location::BusSection;
-use delusion64_gui::context::{self, SendItem};
+use crate::input::{Controller, ControllerEvent};
+use delusion64_gui::context::{self, ReceiveItem, SendItem};
 use mips_lifter::{
     gdb::MonitorCommand,
     runtime::bus::{Address, Bus as BusInterface, BusResult, BusValue, Int, MemorySection},
@@ -28,15 +29,13 @@ pub struct Bus {
     mi: MipsInterface,
     vi: VideoInterface,
     si: SerialInterface,
-    context: context::Emulator,
-    // TODO: remove once a proper interface is implemented, this is just here for input using GDB.
-    controller: n64_si::controller::StandardController,
+    context: context::Emulator<ControllerEvent>,
     // Buffer to view the result of unit tests from n64_systemtest. See https://github.com/lemmy-64/n64-systemtest#isviewer.
     n64_systemtest_isviewer_buffer: Box<[u8; 0x200]>,
 }
 
 impl Bus {
-    pub fn new(context: context::Emulator, cartridge: Cartridge) -> Self {
+    pub fn new(context: context::Emulator<ControllerEvent>, cartridge: Cartridge) -> Self {
         let cartridge_rom = {
             let mut array: Box<[u8; BusSection::CartridgeRom.len()]> = boxed_array();
             let rom = cartridge.read().unwrap();
@@ -70,56 +69,12 @@ impl Bus {
             vi: VideoInterface::new(),
             si,
             context,
-            controller,
             n64_systemtest_isviewer_buffer: boxed_array(),
         }
     }
 
     pub fn gdb_monitor_commands() -> Vec<MonitorCommand<Self>> {
         vec![
-            MonitorCommand {
-                name: "controller",
-                description: "change or print the controller state",
-                handler: Box::new(|bus, out, args| {
-                    if let Some(button) = args.next() {
-                        // TODO: parse joystick
-                        match button {
-                            "a" => bus.controller.set_a(!bus.controller.a()),
-                            "b" => bus.controller.set_b(!bus.controller.b()),
-                            "z" => bus.controller.set_z(!bus.controller.z()),
-                            "start" => bus.controller.set_start(!bus.controller.start()),
-                            "l" => bus.controller.set_l(!bus.controller.l()),
-                            "r" => bus.controller.set_r(!bus.controller.r()),
-                            "dpad_up" | "du" => {
-                                bus.controller.set_dpad_up(!bus.controller.dpad_up())
-                            }
-                            "dpad_down" | "dd" => {
-                                bus.controller.set_dpad_down(!bus.controller.dpad_down())
-                            }
-                            "dpad_left" | "dl" => {
-                                bus.controller.set_dpad_left(!bus.controller.dpad_left())
-                            }
-                            "dpad_right" | "dr" => {
-                                bus.controller.set_dpad_right(!bus.controller.dpad_right())
-                            }
-                            "c_up" | "cu" => bus.controller.set_c_up(!bus.controller.c_up()),
-                            "c_down" | "cd" => bus.controller.set_c_down(!bus.controller.c_down()),
-                            "c_left" | "cl" => bus.controller.set_c_left(!bus.controller.c_left()),
-                            "c_right" | "cr" => {
-                                bus.controller.set_c_right(!bus.controller.c_right())
-                            }
-                            _ => Err(format!("unknown button: {button}"))?,
-                        }
-                        bus.si
-                            .pif_update_controller(0, bus.controller)
-                            .map_err(|err| format!("failed to update controller: {err:#?}"))?;
-                        writeln!(out, "toggled {button}: {:#x?}", bus.controller)?;
-                    } else {
-                        writeln!(out, "{:#x?}", bus.controller)?;
-                    }
-                    Ok(())
-                }),
-            },
             MonitorCommand {
                 name: "mi",
                 description: "print the MIPS interface registers",
@@ -153,6 +108,17 @@ impl Bus {
                 }),
             },
         ]
+    }
+
+    fn update_controller(&mut self) -> Result<(), BusError> {
+        if let Some(controller_state) = self.context.receive() {
+            let id = controller_state.device_id;
+            let controller: Controller = controller_state.into();
+            self.si
+                .pif_update_controller(id, controller.into())
+                .map_err(BusError::SerialInterfaceError)?;
+        }
+        Ok(())
     }
 }
 
@@ -202,7 +168,6 @@ impl BusInterface for Bus {
         // TODO: how does timing compare to the CPU?
 
         let vi_side_effects = self.vi.tick();
-
         if vi_side_effects.vblank {
             if let Some(fb) = self.vi.framebuffer(self.rdram.as_slice()) {
                 self.context.send(context::Framebuffer {
@@ -211,6 +176,9 @@ impl BusInterface for Bus {
                     pixels: fb.pixels,
                 });
             }
+
+            // TODO: only call this on PIF DMA, it will not be read until then.
+            self.update_controller()?;
         }
 
         if vi_side_effects.raise_interrupt {

@@ -6,7 +6,7 @@ llvm-ir input-c output-ll *args:
 compile-ll input-ll output-bin:
     llc -filetype obj -relocation-model=pic -mtriple=mips64 -mcpu=mips3 -O2 -o "{{output-bin}}" "{{input-ll}}"
 
-cargo_flamegraph_flags := "--release --palette hot" + if os() == "macos" { " --root" } else { "" }
+cargo_flamegraph_flags := "--palette hot" + if os() == "macos" { " --root" } else { "" }
 
 flamegraph *args:
     cargo flamegraph {{cargo_flamegraph_flags}} {{args}}

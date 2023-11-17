@@ -1,31 +1,46 @@
-// TODO: crossbeams array queue would be useful for bounded channels:
-// https://docs.rs/crossbeam-queue/latest/crossbeam_queue/struct.ArrayQueue.html#method.force_push
+// TODO: switch to a bounded mpsc/spsc channel, using a ringbuffer to only store the item last send.
 
 use std::sync::mpsc;
 
-pub trait Item {}
+use crate::input;
 
-pub trait SendItem<T: Item> {
+#[repr(transparent)]
+pub(crate) struct Sender<T>(mpsc::Sender<T>);
+
+impl<T> Sender<T> {
+    pub fn send(&self, item: T) -> Result<(), mpsc::SendError<T>> {
+        self.0.send(item)
+    }
+}
+
+#[repr(transparent)]
+pub(crate) struct Receiver<T>(mpsc::Receiver<T>);
+
+impl<T> Receiver<T> {
+    pub fn receive(&self) -> Option<T> {
+        self.0.try_iter().last()
+    }
+}
+
+pub trait SendItem<T> {
     fn send(&self, item: T) -> Option<()>;
 }
 
-pub trait ReceiveItem<T: Item> {
+pub trait ReceiveItem<T> {
     fn receive(&self) -> Option<T>;
 }
 
 macro_rules! item {
     ($item:path, $from:tt . $from_field:ident => $to:tt . $to_field:ident) => {
-        impl Item for $item {}
-
-        impl SendItem<$item> for $from {
+        impl<T: input::Event> SendItem<$item> for $from<T> {
             fn send(&self, item: $item) -> Option<()> {
                 self.$from_field.send(item).ok()
             }
         }
 
-        impl ReceiveItem<$item> for $to {
+        impl<T: input::Event> ReceiveItem<$item> for $to<T> {
             fn receive(&self) -> Option<$item> {
-                self.$to_field.try_iter().last()
+                self.$to_field.receive()
             }
         }
     };
@@ -37,34 +52,31 @@ pub struct Framebuffer {
     pub pixels: Box<[u8]>,
 }
 
-// TODO: implement
-pub struct Buttons;
-
 item!(Framebuffer, Emulator.framebuffer => UserInterface.framebuffer);
-item!(Buttons, UserInterface.buttons => Emulator.buttons);
+item!(input::DeviceState<T>, UserInterface.input => Emulator.input);
 
-pub struct Emulator {
-    framebuffer: mpsc::Sender<Framebuffer>,
-    buttons: mpsc::Receiver<Buttons>,
+pub struct Emulator<T: input::Event> {
+    framebuffer: Sender<Framebuffer>,
+    input: Receiver<input::DeviceState<T>>,
 }
 
-pub struct UserInterface {
-    framebuffer: mpsc::Receiver<Framebuffer>,
-    buttons: mpsc::Sender<Buttons>,
+pub struct UserInterface<T: input::Event> {
+    pub(crate) framebuffer: Receiver<Framebuffer>,
+    pub(crate) input: Sender<input::DeviceState<T>>,
 }
 
 #[must_use]
-pub fn channel() -> (Emulator, UserInterface) {
+pub fn channel<T: input::Event>() -> (Emulator<T>, UserInterface<T>) {
     let (framebuffer_tx, framebuffer_rx) = mpsc::channel();
-    let (buttons_tx, buttons_rx) = mpsc::channel();
+    let (input_tx, input_rx) = mpsc::channel();
     (
         Emulator {
-            framebuffer: framebuffer_tx,
-            buttons: buttons_rx,
+            framebuffer: Sender(framebuffer_tx),
+            input: Receiver(input_rx),
         },
         UserInterface {
-            framebuffer: framebuffer_rx,
-            buttons: buttons_tx,
+            framebuffer: Receiver(framebuffer_rx),
+            input: Sender(input_tx),
         },
     )
 }
