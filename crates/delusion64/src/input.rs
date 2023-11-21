@@ -1,4 +1,4 @@
-use delusion64_gui::input::{self, DeviceState};
+use emgui::context::input::{self, DeviceState};
 use n64_si::controller::StandardController;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

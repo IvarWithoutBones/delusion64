@@ -556,7 +556,7 @@ name = "delusion64"
 version = "0.1.0"
 dependencies = [
  "clap",
- "delusion64-gui",
+ "emgui",
  "mips-lifter",
  "n64-cartridge",
  "n64-mi",
@@ -564,13 +564,6 @@ dependencies = [
  "n64-si",
  "n64-vi",
  "strum",
-]
-
-[[package]]
-name = "delusion64-gui"
-version = "0.1.0"
-dependencies = [
- "eframe",
 ]
 
 [[package]]
@@ -688,6 +681,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ef2b29de53074e575c18b694167ccbe6e5191f7b25fe65175a0d905a32eeec0"
 dependencies = [
  "bytemuck",
+]
+
+[[package]]
+name = "emgui"
+version = "0.1.0"
+dependencies = [
+ "eframe",
 ]
 
 [[package]]

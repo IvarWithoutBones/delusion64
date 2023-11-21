@@ -48,10 +48,10 @@ impl<T> From<T> for BusValue<T> {
     }
 }
 
-#[derive(Debug)]
 pub enum BusError<T> {
     UnexpectedSize { expected: usize, got: usize },
     AddressNotMapped { address: PhysicalAddress },
+    String(String),
     Other(T),
 }
 
@@ -66,6 +66,32 @@ impl From<BusError<fmt::Error>> for fmt::Error {
         match value {
             BusError::Other(result) => result,
             _ => unimplemented!(),
+        }
+    }
+}
+
+impl<T: fmt::Display> fmt::Display for BusError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedSize { expected, got } => {
+                write!(f, "bus: unexpected size, expected {expected} but got {got}")
+            }
+            Self::AddressNotMapped { address } => write!(f, "address {address:#x} is not mapped"),
+            Self::String(message) => write!(f, "{message}"),
+            Self::Other(message) => write!(f, "{message}"),
+        }
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for BusError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedSize { expected, got } => {
+                write!(f, "bus: unexpected size, expected {expected} but got {got}")
+            }
+            Self::AddressNotMapped { address } => write!(f, "address {address:#x} is not mapped"),
+            Self::String(message) => write!(f, "{message}"),
+            Self::Other(message) => write!(f, "{message:?}"),
         }
     }
 }
@@ -295,6 +321,15 @@ impl<Section: MemorySection> Address<Section> {
     }
 }
 
+/// Decides whom will kill the thread when an unrecoverable error occurs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PanicAction {
+    /// Kill the thread immediately after calling [`Bus::on_panic`].
+    Kill,
+    /// Sleep in an idle loop after calling [`Bus::on_panic`], blocking forever. The thread is expected to be killed externally.
+    Idle,
+}
+
 /// A bus that can be used to read and write memory.
 pub trait Bus {
     /// The error type that can be returned by the bus.
@@ -305,9 +340,6 @@ pub trait Bus {
 
     /// The sections of memory that the bus can access.
     const SECTIONS: &'static [Self::Section];
-
-    /// Performs a single tick, used to emulate clock cycles. Called after each CPU instruction.
-    fn tick(&mut self) -> BusResult<(), Self::Error>;
 
     /// Reads a value from memory.
     fn read_memory<const SIZE: usize>(
@@ -321,4 +353,14 @@ pub trait Bus {
         address: Address<Self::Section>,
         value: Int<SIZE>,
     ) -> BusResult<(), Self::Error>;
+
+    /// Performs a single tick, used to emulate clock cycles. Called after each CPU instruction.
+    fn tick(&mut self) -> BusResult<(), Self::Error>;
+
+    /// Called when an unrecoverable error occurs in the CPU. This can be used to notify the rest of the system of a shutdown.
+    /// If GDB integration is enabled, its connection will be kept alive and the [`PanicAction`] is ignored.
+    /// This means the function can be called multiple times, as in rare cases GDB could cause a panic.
+    fn on_panic(&mut self, _error: BusError<Self::Error>) -> PanicAction {
+        PanicAction::Kill
+    }
 }

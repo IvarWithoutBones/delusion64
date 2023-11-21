@@ -1,9 +1,11 @@
 use self::location::BusSection;
 use crate::input::{Controller, ControllerEvent};
-use delusion64_gui::context::{self, ReceiveItem, SendItem};
+use emgui::context::{self, ReceiveItem, SendItem};
 use mips_lifter::{
     gdb::MonitorCommand,
-    runtime::bus::{Address, Bus as BusInterface, BusResult, BusValue, Int, MemorySection},
+    runtime::bus::{
+        Address, Bus as BusInterface, BusResult, BusValue, Int, MemorySection, PanicAction,
+    },
 };
 use n64_cartridge::Cartridge;
 use n64_mi::{InterruptType, MiError, MipsInterface};
@@ -29,13 +31,20 @@ pub struct Bus {
     mi: MipsInterface,
     vi: VideoInterface,
     si: SerialInterface,
-    context: context::Emulator<ControllerEvent>,
     // Buffer to view the result of unit tests from n64_systemtest. See https://github.com/lemmy-64/n64-systemtest#isviewer.
     n64_systemtest_isviewer_buffer: Box<[u8; 0x200]>,
+
+    // GUI stuff
+    context: context::Emulator<ControllerEvent>,
+    gui_connected: bool,
 }
 
 impl Bus {
-    pub fn new(context: context::Emulator<ControllerEvent>, cartridge: Cartridge) -> Self {
+    pub fn new(
+        context: context::Emulator<ControllerEvent>,
+        cartridge: Cartridge,
+        gui_connected: bool,
+    ) -> Self {
         let cartridge_rom = {
             let mut array: Box<[u8; BusSection::CartridgeRom.len()]> = boxed_array();
             let rom = cartridge.read().unwrap();
@@ -68,8 +77,9 @@ impl Bus {
             mi: MipsInterface::new(),
             vi: VideoInterface::new(),
             si,
-            context,
             n64_systemtest_isviewer_buffer: boxed_array(),
+            context,
+            gui_connected,
         }
     }
 
@@ -161,49 +171,6 @@ impl BusInterface for Bus {
         BusSection::PifRom,
         BusSection::PifRam,
     ];
-
-    fn tick(&mut self) -> BusResult<(), Self::Error> {
-        let mut result = BusValue::default();
-
-        // TODO: how does timing compare to the CPU?
-
-        let vi_side_effects = self.vi.tick();
-        if vi_side_effects.vblank {
-            if let Some(fb) = self.vi.framebuffer(self.rdram.as_slice()) {
-                self.context.send(context::Framebuffer {
-                    width: VideoInterface::SCREEN_WIDTH,
-                    height: VideoInterface::SCREEN_HEIGHT,
-                    pixels: fb.pixels,
-                });
-            }
-
-            // TODO: only call this on PIF DMA, it will not be read until then.
-            self.update_controller()?;
-        }
-
-        if vi_side_effects.raise_interrupt {
-            // println!("delusion64: vi halfline interrupt");
-            if self.mi.raise_interrupt(InterruptType::VideoInterface) {
-                result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
-            }
-        }
-
-        if self.pi.tick() == DmaStatus::Finished {
-            println!("delusion64: pi dma finished");
-            if self.mi.raise_interrupt(InterruptType::PeripheralInterface) {
-                result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
-            }
-        }
-
-        if self.si.tick() == n64_si::DmaStatus::Completed {
-            println!("delusion64: si dma finished");
-            if self.mi.raise_interrupt(InterruptType::SerialInterface) {
-                result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
-            }
-        }
-
-        Ok(result)
-    }
 
     fn read_memory<const SIZE: usize>(
         &mut self,
@@ -404,5 +371,59 @@ impl BusInterface for Bus {
                 .ok_or(BusError::UnimplementedSection(*section))?,
         };
         Ok(result)
+    }
+
+    fn tick(&mut self) -> BusResult<(), Self::Error> {
+        let mut result = BusValue::default();
+
+        // TODO: how does timing compare to the CPU?
+
+        let vi_side_effects = self.vi.tick();
+        if vi_side_effects.vblank {
+            if let Some(fb) = self.vi.framebuffer(self.rdram.as_slice()) {
+                self.context.send(context::Framebuffer {
+                    width: VideoInterface::SCREEN_WIDTH,
+                    height: VideoInterface::SCREEN_HEIGHT,
+                    pixels: fb.pixels,
+                });
+            }
+
+            // TODO: only call this on PIF DMA, it will not be read until then.
+            self.update_controller()?;
+        }
+
+        if vi_side_effects.raise_interrupt {
+            // println!("delusion64: vi halfline interrupt");
+            if self.mi.raise_interrupt(InterruptType::VideoInterface) {
+                result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
+            }
+        }
+
+        if self.pi.tick() == DmaStatus::Finished {
+            println!("delusion64: pi dma finished");
+            if self.mi.raise_interrupt(InterruptType::PeripheralInterface) {
+                result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
+            }
+        }
+
+        if self.si.tick() == n64_si::DmaStatus::Completed {
+            println!("delusion64: si dma finished");
+            if self.mi.raise_interrupt(InterruptType::SerialInterface) {
+                result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
+            }
+        }
+
+        Ok(result)
+    }
+
+    fn on_panic(&mut self, error: mips_lifter::runtime::bus::BusError<Self::Error>) -> PanicAction {
+        if self.gui_connected {
+            let msg = format!("{error:?}");
+            self.context.send(context::error::Error::new(msg));
+            PanicAction::Idle
+        } else {
+            // Let the JIT runtime kill the process (unless GDB is attached)
+            PanicAction::Kill
+        }
     }
 }

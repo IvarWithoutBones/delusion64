@@ -1,5 +1,6 @@
 [package]
-name = "delusion64-gui"
+name = "emgui"
+description = "A GUI library designed for emulators, using egui."
 version = "0.1.0"
 edition = "2021"
 

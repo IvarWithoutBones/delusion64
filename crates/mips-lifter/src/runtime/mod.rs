@@ -7,6 +7,7 @@ use self::{
 use crate::{
     codegen::{self, CodeGen, FallthroughAmount},
     label::generate_label_functions,
+    runtime::bus::{BusError, PanicAction},
     JitBuilder,
 };
 use inkwell::{context::Context, execution_engine::ExecutionEngine, module::Module};
@@ -134,13 +135,20 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
 
     fn panic_update_debugger(&mut self, message: &str) -> ! {
         eprintln!("\n{message}\n{:?}", self.registers);
+        let action = self.bus.on_panic(BusError::String(message.to_string()));
         if self.debugger.is_some() {
             self.debugger.as_mut().unwrap().signal_panicked();
             loop {
                 self.update_debugger()
             }
         } else {
-            panic!();
+            match action {
+                PanicAction::Kill => panic!("unrecoverable CPU error"),
+                PanicAction::Idle => loop {
+                    // The thread will be killed externally.
+                    std::thread::sleep(std::time::Duration::from_secs(60))
+                },
+            }
         }
     }
 

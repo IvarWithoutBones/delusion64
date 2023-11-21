@@ -8,7 +8,7 @@ default = ["debug-print"]
 debug-print = []
 
 [dependencies]
-delusion64-gui = { path = "../delusion64-gui" }
+emgui = { path = "../emgui" }
 mips-lifter = { path = "../mips-lifter" }
 n64-cartridge = { path = "../n64-cartridge" }
 n64-pi = { path = "../n64-pi" }

@@ -1,5 +1,6 @@
 use crate::bus::Bus;
 use clap::Parser;
+use emgui::UiBuilder;
 use input::ControllerEvent;
 use mips_lifter::{gdb, register, JitBuilder};
 use n64_cartridge::{Cartridge, Cic};
@@ -58,7 +59,7 @@ fn main() {
         std::process::exit(0);
     }
 
-    let (emu_context, ui_context) = delusion64_gui::context::channel();
+    let (emu_context, ui_context) = emgui::context::channel();
     let emu_thread = std::thread::Builder::new()
         .name("cpu".to_string())
         .spawn(move || {
@@ -98,7 +99,7 @@ fn main() {
 
             // This will copy the first 0x1000 bytes of the PIF ROM to the RSP DMEM, simulating IPL2.
             // It will also write the size of RDRAM.
-            let bus = Bus::new(emu_context, cart);
+            let bus = Bus::new(emu_context, cart, !cli.headless);
 
             JitBuilder::new(bus)
                 .maybe_with_gdb(gdb)
@@ -111,15 +112,17 @@ fn main() {
             std::process::exit(1);
         });
 
-    if !cli.headless {
-        delusion64_gui::UiBuilder::new("Delusion64", ui_context)
+    if cli.headless {
+        // Block until the emulator thread exits.
+        emu_thread.join().unwrap_or_else(|e| {
+            eprintln!("failed to join emulator thread: {e:?}");
+            std::process::exit(1);
+        });
+    } else {
+        // Exit immediately when the GUI is closed.
+        UiBuilder::new("Delusion64", ui_context)
             .with_initial_window_size([640.0, 480.0])
             .with_input_devices(vec![ControllerEvent::A])
             .run();
     }
-
-    emu_thread.join().unwrap_or_else(|e| {
-        eprintln!("failed to join emulator thread: {e:?}");
-        std::process::exit(1);
-    });
 }

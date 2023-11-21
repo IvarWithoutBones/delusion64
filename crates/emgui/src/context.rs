@@ -1,8 +1,7 @@
 // TODO: switch to a bounded mpsc/spsc channel, using a ringbuffer to only store the item last send.
 
+pub use crate::widget::{error, input};
 use std::sync::mpsc;
-
-use crate::input;
 
 #[repr(transparent)]
 pub(crate) struct Sender<T>(mpsc::Sender<T>);
@@ -53,30 +52,37 @@ pub struct Framebuffer {
 }
 
 item!(Framebuffer, Emulator.framebuffer => UserInterface.framebuffer);
+item!(error::Error, Emulator.error => UserInterface.error);
 item!(input::DeviceState<T>, UserInterface.input => Emulator.input);
 
 pub struct Emulator<T: input::Event> {
     framebuffer: Sender<Framebuffer>,
     input: Receiver<input::DeviceState<T>>,
+    error: Sender<error::Error>,
 }
 
 pub struct UserInterface<T: input::Event> {
     pub(crate) framebuffer: Receiver<Framebuffer>,
     pub(crate) input: Sender<input::DeviceState<T>>,
+    pub(crate) error: Receiver<error::Error>,
 }
 
 #[must_use]
 pub fn channel<T: input::Event>() -> (Emulator<T>, UserInterface<T>) {
     let (framebuffer_tx, framebuffer_rx) = mpsc::channel();
     let (input_tx, input_rx) = mpsc::channel();
+    let (error_tx, error_rx) = mpsc::channel();
+
     (
         Emulator {
             framebuffer: Sender(framebuffer_tx),
             input: Receiver(input_rx),
+            error: Sender(error_tx),
         },
         UserInterface {
             framebuffer: Receiver(framebuffer_rx),
             input: Sender(input_tx),
+            error: Receiver(error_rx),
         },
     )
 }

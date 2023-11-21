@@ -1,12 +1,11 @@
 #![warn(clippy::all, clippy::pedantic)]
 
-use crate::ui::Ui;
+use crate::{ui::Ui, widget::input};
 use eframe::egui;
 
 pub mod context;
-mod frame;
-pub mod input;
 mod ui;
+pub(crate) mod widget;
 
 pub struct UiBuilder<T: input::Event> {
     context: context::UserInterface<T>,
