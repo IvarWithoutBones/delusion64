@@ -25,7 +25,7 @@ pub(crate) use register::{
     HOST_STACK_FRAME_STORAGE, INSIDE_DELAY_SLOT_STORAGE, RESERVED_CP0_REGISTER_LATCH,
 };
 
-use self::address_map::VirtualAddressMap;
+use self::{address_map::VirtualAddressMap, register::BitWidth};
 
 #[macro_export]
 macro_rules! env_call {
@@ -624,4 +624,49 @@ impl<'ctx> CodeGen<'ctx> {
             },
         );
     }
+
+    /// Builds a check for arithmetic overflow exception, and throws if it should occur.
+    pub fn check_overflow_exception(
+        &self,
+        ty: Overflow,
+        lhs: IntValue<'ctx>,
+        rhs: IntValue<'ctx>,
+        result: IntValue<'ctx>,
+    ) {
+        // Swap arguments for subtraction so that this function can be used the same way for both.
+        let (lhs, rhs) = match ty {
+            Overflow::Subtract => (rhs, lhs),
+            Overflow::Add => (lhs, rhs),
+        };
+
+        // Compare the twos complement sign bits of the operands and the result.
+        let overflow = {
+            let lhs = {
+                let xor = self.builder.build_xor(lhs, rhs, "signed_overflow_lhs_xor");
+                match ty {
+                    Overflow::Add => self.builder.build_not(xor, "signed_overflow_lhs"),
+                    Overflow::Subtract => xor,
+                }
+            };
+
+            let rhs = self
+                .builder
+                .build_xor(rhs, result, "signed_overflow_rhs_xor");
+
+            let combined = self.builder.build_and(lhs, rhs, "signed_overflow_and");
+            let ty = combined.get_type();
+            let shift = ty.const_int((ty.bit_width() as u64 * 8) - 1, false);
+            self.builder
+                .build_right_shift(combined, shift, false, "signed_overflow_shift")
+        };
+
+        self.build_if("signed_overflow", overflow, || {
+            self.throw_exception(Exception::ArithmeticOverflow, Some(0), None)
+        });
+    }
+}
+
+pub enum Overflow {
+    Subtract,
+    Add,
 }

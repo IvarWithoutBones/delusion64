@@ -1,7 +1,6 @@
-use std::fmt;
-
 use crate::context::Sender;
 use eframe::egui;
+use std::fmt;
 
 pub type DeviceID = usize;
 
