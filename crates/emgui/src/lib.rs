@@ -38,12 +38,11 @@ impl<T: input::Event + 'static> UiBuilder<T> {
     #[must_use]
     pub fn with_initial_window_size(self, [width, height]: [f32; 2]) -> Self {
         // Offsets are required since the screen does not fill the whole GUI, while we unfortunately cannot know the dimensions in advance.
-        const WIDTH_OFFSET: f32 = 16.0;
-        const HEIGHT_OFFSET: f32 = 13.0;
+        const OFFSET: f32 = 10.0;
         Self {
             initial_window_size: Some(egui::Vec2::new(
-                width + WIDTH_OFFSET,
-                height + HEIGHT_OFFSET,
+                width + OFFSET,
+                height + OFFSET + ui::MENU_BAR_HEIGHT,
             )),
             ..self
         }

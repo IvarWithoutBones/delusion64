@@ -687,7 +687,8 @@ impl ParsedInstruction {
         FloatFormat::from_repr(self.get(Operand::Format).unwrap() as u8).unwrap_or_else(|| {
             panic!(
                 "failed to parse float format from {:32b} for {:?}",
-                self.raw, self.mnemonic()
+                self.raw,
+                self.mnemonic()
             )
         })
     }
