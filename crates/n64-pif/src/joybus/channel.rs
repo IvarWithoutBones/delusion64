@@ -1,6 +1,34 @@
 use super::{response::ControllerState, PacketMeta};
 use crate::{PifError, PifResult, Region};
-use strum::FromRepr;
+use strum::{EnumCount, FromRepr};
+
+#[derive(FromRepr, EnumCount, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Channel {
+    Controller1 = 0,
+    Controller2 = 1,
+    Controller3 = 2,
+    Controller4 = 3,
+    Cartridge = 4,
+}
+
+impl Channel {
+    pub const CONTROLLER_COUNT: usize = 4;
+}
+
+pub(crate) struct Device<'a> {
+    channels: &'a Channels,
+    index: Channel,
+}
+
+impl Device<'_> {
+    pub fn controller(&self) -> Option<&ControllerState> {
+        self.channels.controllers[self.index as usize].as_ref()
+    }
+
+    pub fn address(&self) -> usize {
+        self.channels.channels[self.index as usize].unwrap().address
+    }
+}
 
 #[derive(FromRepr)]
 #[repr(u8)]
@@ -12,21 +40,18 @@ enum ControlByte {
 }
 
 #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct Channel {
-    pub reset: bool,
-    pub address: usize,
+struct ChannelMeta {
+    reset: bool,
+    address: usize,
 }
 
 #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Channels {
-    pub channels: [Option<Channel>; Self::CHANNELS_LEN],
-    pub controllers: [Option<ControllerState>; Self::CONTROLLERS_LEN],
+    channels: [Option<ChannelMeta>; Channel::COUNT],
+    controllers: [Option<ControllerState>; Channel::CONTROLLER_COUNT],
 }
 
 impl Channels {
-    pub const CHANNELS_LEN: usize = 4;
-    pub const CONTROLLERS_LEN: usize = 3;
-
     pub(crate) fn new() -> Self {
         Self::default()
     }
@@ -68,7 +93,7 @@ impl Channels {
 
             addr += 2 + input_len + output_len;
             if addr < Region::Ram.len() {
-                **channel = Some(Channel {
+                **channel = Some(ChannelMeta {
                     address,
                     reset: false,
                 });
@@ -77,40 +102,62 @@ impl Channels {
         }
     }
 
-    pub(crate) fn controllers(&self) -> impl Iterator<Item = (&Channel, &ControllerState)> {
-        self.channels
-            .iter()
-            .take(Self::CONTROLLERS_LEN)
-            .flatten()
-            .zip(self.controllers.iter().flatten())
+    pub(crate) fn connected_devices(&self) -> impl Iterator<Item = Device> {
+        self.channels.iter().enumerate().filter_map(|(i, c)| {
+            c.as_ref().map(|_| Device {
+                channels: self,
+                index: Channel::from_repr(i).unwrap(),
+            })
+        })
     }
 
     pub fn attach_controller(
         &mut self,
-        channel: usize,
+        channel: Channel,
         state: impl Into<ControllerState>,
     ) -> PifResult<()> {
         self.controllers
-            .get_mut(channel)
-            .map(|c| *c = Some(state.into()))
-            .ok_or(PifError::InvalidChannel { channel })
+            .get_mut(channel as usize)
+            .ok_or(PifError::Unexpected { channel })
+            .and_then(|c| {
+                if c.is_some() {
+                    Err(PifError::AlreadyAttached { channel })
+                } else {
+                    *c = Some(state.into());
+                    Ok(())
+                }
+            })
     }
 
-    pub fn detach_controller(&mut self, channel: usize) -> PifResult<()> {
+    pub fn detach_controller(&mut self, channel: Channel) -> PifResult<()> {
         self.controllers
-            .get_mut(channel)
-            .map(|c| *c = None)
-            .ok_or(PifError::InvalidChannel { channel })
+            .get_mut(channel as usize)
+            .ok_or(PifError::Unexpected { channel })
+            .and_then(|c: &mut Option<ControllerState>| {
+                if c.is_none() {
+                    Err(PifError::NotAttached { channel })
+                } else {
+                    *c = None;
+                    Ok(())
+                }
+            })
     }
 
     pub fn update_controller(
         &mut self,
-        channel: usize,
+        channel: Channel,
         state: impl Into<ControllerState>,
     ) -> PifResult<()> {
         self.controllers
-            .get_mut(channel)
-            .and_then(|c| c.as_mut().map(|c| *c = state.into()))
-            .ok_or(PifError::InvalidChannel { channel })
+            .get_mut(channel as usize)
+            .ok_or(PifError::Unexpected { channel })
+            .and_then(|c| {
+                if c.is_none() {
+                    Err(PifError::NotAttached { channel })
+                } else {
+                    *c = Some(state.into());
+                    Ok(())
+                }
+            })
     }
 }

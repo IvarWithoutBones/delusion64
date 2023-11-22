@@ -3,9 +3,10 @@ use std::ops::Range;
 use self::register::{
     DramAddress, PifAddressRead4, PifAddressRead64, PifAddressWrite4, PifAddressWrite64, Status,
 };
-use n64_pif::{Pif, PifError};
+use n64_pif::Pif;
 
-pub use n64_pif::controller;
+// TODO: move the PIF out of this crate
+pub use n64_pif::{controller, Channel, PifError};
 
 mod register;
 
@@ -87,28 +88,6 @@ impl SerialInterface {
             dma: None,
             pif: Pif::new(cic_seed),
         }
-    }
-
-    // TODO: move the PIF out of this crate
-
-    pub fn pif_attach_controller(
-        &mut self,
-        channel: usize,
-        controller: controller::StandardController,
-    ) -> SiResult<()> {
-        Ok(self.pif.channels.attach_controller(channel, controller)?)
-    }
-
-    pub fn pif_detach_controller(&mut self, channel: usize) -> SiResult<()> {
-        Ok(self.pif.channels.detach_controller(channel)?)
-    }
-
-    pub fn pif_update_controller(
-        &mut self,
-        channel: usize,
-        controller: controller::StandardController,
-    ) -> SiResult<()> {
-        Ok(self.pif.channels.update_controller(channel, controller)?)
     }
 
     pub fn read_pif_rom<const SIZE: usize>(&self, offset: usize) -> SiResult<&[u8; SIZE]> {

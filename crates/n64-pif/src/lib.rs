@@ -4,7 +4,7 @@ use tartan_bitfield::bitfield;
 
 mod joybus;
 
-pub use joybus::controller;
+pub use joybus::{controller, Channel};
 
 // TODO: deduplicate, this is stolen from delusion64::bus.
 /// Allocates a fixed-sized boxed array of a given length.
@@ -35,7 +35,9 @@ impl Region {
 pub enum PifError {
     OffsetOutOfBounds { region: Region, offset: usize },
     JoybusParseError(joybus::ParseError),
-    InvalidChannel { channel: usize },
+    AlreadyAttached { channel: Channel },
+    NotAttached { channel: Channel },
+    Unexpected { channel: Channel },
     UnimplementedJoybusRequest { request: joybus::Request },
 }
 
@@ -117,28 +119,38 @@ impl Pif {
         }
 
         // TODO: handle cartridge
-        for (channel, state) in self.channels.controllers() {
-            let mut msg = match joybus::Message::new(channel.address, self.ram.as_mut_slice())? {
+        for port in self.channels.connected_devices() {
+            let mut msg = match joybus::Message::new(port.address(), self.ram.as_mut_slice())? {
                 joybus::Status::Message(msg) => msg,
                 joybus::Status::ResetChannel | joybus::Status::SkipChannel => continue,
             };
 
             match msg.request {
                 joybus::Request::Info | joybus::Request::ResetInfo => {
-                    msg.reply(match state {
-                        joybus::response::ControllerState::Standard(_) => {
-                            joybus::response::Info::Controller {
-                                pak_installed: false,
-                                checksum_error: false,
+                    if let Some(state) = port.controller() {
+                        msg.reply(match state {
+                            joybus::response::ControllerState::Standard(_) => {
+                                joybus::response::Info::Controller {
+                                    pak_installed: false,
+                                    checksum_error: false,
+                                }
                             }
-                        }
-                        joybus::response::ControllerState::Mouse(_) => {
-                            joybus::response::Info::Mouse
-                        }
-                    });
+                            joybus::response::ControllerState::Mouse(_) => {
+                                joybus::response::Info::Mouse
+                            }
+                        });
+                    } else {
+                        msg.reply_invalid();
+                    }
                 }
 
-                joybus::Request::ControllerState => msg.reply(*state),
+                joybus::Request::ControllerState => {
+                    if let Some(state) = port.controller() {
+                        msg.reply(*state)
+                    } else {
+                        msg.reply_invalid();
+                    }
+                }
 
                 joybus::Request::WriteControllerAccessory => {
                     // Namco Museum for some reason requests this, even though we never report `pak_installed`.

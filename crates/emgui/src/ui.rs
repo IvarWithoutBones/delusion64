@@ -35,8 +35,10 @@ impl<T: input::Event> eframe::App for Ui<T> {
         self.error.widget(ctx);
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.add(self.input.widget());
-            ui.add(self.screen.widget());
+            ui.horizontal_top(|ui| {
+                ui.add(self.input.widget());
+                ui.add(self.screen.widget());
+            });
         });
 
         self.update(ctx);

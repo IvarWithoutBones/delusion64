@@ -10,7 +10,7 @@ use mips_lifter::{
 use n64_cartridge::Cartridge;
 use n64_mi::{InterruptType, MiError, MipsInterface};
 use n64_pi::{DmaStatus, PeripheralInterface, PiError};
-use n64_si::{SerialInterface, SiError};
+use n64_si::{Channel, SerialInterface, SiError};
 use n64_vi::VideoInterface;
 
 pub mod location;
@@ -67,7 +67,10 @@ impl Bus {
 
         let controller = n64_si::controller::StandardController::default();
         let mut si = SerialInterface::new(cartridge.cic.unwrap().seed());
-        si.pif.channels.attach_controller(0, controller).unwrap();
+        si.pif
+            .channels
+            .attach_controller(Channel::Controller1, controller)
+            .unwrap();
 
         Self {
             rdram,
@@ -122,11 +125,14 @@ impl Bus {
 
     fn update_controller(&mut self) -> Result<(), BusError> {
         if let Some(controller_state) = self.context.receive() {
-            let id = controller_state.device_id;
-            let controller: Controller = controller_state.into();
             self.si
-                .pif_update_controller(id, controller.into())
-                .map_err(BusError::SerialInterfaceError)?;
+                .pif
+                .channels
+                .update_controller(
+                    Channel::Controller1,
+                    Controller::new(controller_state).input(),
+                )
+                .map_err(BusError::PifError)?;
         }
         Ok(())
     }
@@ -137,6 +143,7 @@ pub enum BusError {
     MipsInterfaceError(MiError),
     PeripheralInterfaceError(PiError),
     SerialInterfaceError(SiError),
+    PifError(n64_si::PifError),
     UnmappedAddress(u32),
     ReadOnlyRegionWrite(BusSection),
     WriteOnlyRegionRead(BusSection),

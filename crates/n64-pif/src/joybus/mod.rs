@@ -2,7 +2,7 @@ use self::response::Response;
 use strum::FromRepr;
 use tartan_bitfield::bitfield;
 
-pub use self::channel::Channels;
+pub use self::channel::{Channel, Channels};
 
 mod channel;
 pub mod controller;
@@ -23,6 +23,10 @@ bitfield! {
 impl PacketMeta {
     pub fn len(&self) -> usize {
         self.length() as usize
+    }
+
+    pub const fn raw(&self) -> u8 {
+        self.0
     }
 }
 
@@ -151,8 +155,9 @@ pub enum Status<T> {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Message<'a> {
     pub request: Request,
-    pub input: &'a [u8],
-    pub output: &'a mut [u8],
+    input: &'a [u8],
+    output: &'a mut [u8],
+    output_meta: &'a mut u8,
 }
 
 impl<'a> Message<'a> {
@@ -173,13 +178,14 @@ impl<'a> Message<'a> {
             Err(ParseError::RequestInputEmpty)?
         };
 
-        let (input, output) =
-            data[..input_meta.len() + output_meta.len()].split_at_mut(input_meta.len());
+        let len = input_meta.len() + output_meta.len();
+        let (input, output) = data[..len].split_at_mut(input_meta.len());
 
         Ok(Status::Message(Self {
             request,
             input,
             output,
+            output_meta: &mut meta[1],
         }))
     }
 
@@ -191,6 +197,6 @@ impl<'a> Message<'a> {
     }
 
     pub fn reply_invalid(&mut self) {
-        self.output[0] = PacketMeta(self.output[0]).with_invalid(true).into();
+        *self.output_meta |= PacketMeta::default().with_invalid(true).raw()
     }
 }

@@ -166,7 +166,7 @@ impl<T: Event> Handler<T> {
 
     pub fn widget(&mut self) -> impl egui::Widget + '_ {
         move |ui: &mut egui::Ui| {
-            ui.horizontal(|ui| {
+            ui.vertical(|ui| {
                 let mut next_state = self.state;
                 for (idx, (info, mapping)) in self
                     .devices

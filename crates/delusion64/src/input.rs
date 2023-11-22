@@ -15,6 +15,8 @@ pub enum ControllerEvent {
     CDown,
     CLeft,
     CRight,
+    L,
+    R,
     JoystickX,
     JoystickY,
 }
@@ -35,18 +37,20 @@ impl input::Event for ControllerEvent {
             EventInfo::new(Type::Button, Self::CDown, "C Down"),
             EventInfo::new(Type::Button, Self::CLeft, "C Left"),
             EventInfo::new(Type::Button, Self::CRight, "C Right"),
+            EventInfo::new(Type::Button, Self::L, "L"),
+            EventInfo::new(Type::Button, Self::R, "R"),
             EventInfo::new(Type::Joystick, Self::JoystickX, "Joystick X"),
             EventInfo::new(Type::Joystick, Self::JoystickY, "Joystick Y"),
         ]
     }
 }
 
-/// Newtype wrapper for the standard controller, so that we can implement traits on it.
+/// Newtype wrapper for the standard controller, so that we can implement functions on it.
 #[repr(transparent)]
 pub struct Controller(StandardController);
 
-impl From<DeviceState<ControllerEvent>> for Controller {
-    fn from(state: DeviceState<ControllerEvent>) -> Self {
+impl Controller {
+    pub fn new(state: DeviceState<ControllerEvent>) -> Self {
         let mut controller = StandardController::default();
         for event in state.active() {
             match event {
@@ -62,15 +66,15 @@ impl From<DeviceState<ControllerEvent>> for Controller {
                 ControllerEvent::CDown => controller.set_c_down(true),
                 ControllerEvent::CLeft => controller.set_c_left(true),
                 ControllerEvent::CRight => controller.set_c_right(true),
+                ControllerEvent::L => controller.set_l(true),
+                ControllerEvent::R => controller.set_r(true),
                 _ => {}
             }
         }
         Self(controller)
     }
-}
 
-impl From<Controller> for StandardController {
-    fn from(controller: Controller) -> Self {
-        controller.0
+    pub fn input(self) -> StandardController {
+        self.0
     }
 }
