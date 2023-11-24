@@ -18,6 +18,7 @@ impl Item for File {
 
     fn menu_items(&mut self, ui: &mut egui::Ui) {
         if ui.button("Open").clicked() {
+            // TODO: actually open a file
             ui.close_menu();
         }
     }

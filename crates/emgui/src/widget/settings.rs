@@ -67,7 +67,7 @@ impl menu_bar::Item for Settings {
             .auto_sized()
             .show(ui.ctx(), |ui| {
                 for item in &mut self.items {
-                    ui.label(egui::RichText::new(item.name()).strong());
+                    ui.heading(item.name());
                     item.widget(ui);
                 }
             });

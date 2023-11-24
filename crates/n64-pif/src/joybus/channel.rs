@@ -22,7 +22,7 @@ pub(crate) struct Device<'a> {
 
 impl Device<'_> {
     pub fn controller(&self) -> Option<&ControllerState> {
-        self.channels.controllers[self.index as usize].as_ref()
+        self.channels.controllers.get(self.index as usize)?.as_ref()
     }
 
     pub fn address(&self) -> usize {

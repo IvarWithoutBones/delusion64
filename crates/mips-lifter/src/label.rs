@@ -87,9 +87,6 @@ impl<'ctx> LabelWithContext<'ctx> {
                     while let Some(next) = self.label.instructions.get(i + offset) {
                         if next.has_delay_slot() {
                             offset += 1;
-                            if offset == 3 {
-                                panic!("three delay slots in a row!")
-                            }
                         } else {
                             break;
                         }
