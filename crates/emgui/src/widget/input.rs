@@ -178,6 +178,14 @@ impl settings::Item for Settings {
     }
 
     fn widget(&mut self, ui: &mut egui::Ui) {
+        ui.with_layout(
+            egui::Layout::top_down_justified(egui::Align::Center),
+            |ui| {
+                ui.heading("Controller");
+                ui.separator();
+            },
+        );
+
         egui::Grid::new("input").show(ui, |ui| {
             for (device, event, (name, mapping)) in
                 self.devices

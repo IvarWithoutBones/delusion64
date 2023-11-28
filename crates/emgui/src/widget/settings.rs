@@ -15,9 +15,72 @@ pub trait Item {
     fn as_any(&self) -> &dyn std::any::Any;
 }
 
+struct Viewport {
+    id: egui::ViewportId,
+    builder: egui::ViewportBuilder,
+    opened: bool,
+    selected_category: usize,
+}
+
+impl Viewport {
+    const WINDOW_SIZE: egui::Vec2 = egui::vec2(400.0, 400.0);
+    const ITEMS_PANEL_WIDTH: f32 = 125.0;
+
+    pub fn new() -> Self {
+        Self {
+            opened: false,
+            selected_category: 0,
+            id: egui::ViewportId::from_hash_of("settings_viewport"),
+            builder: egui::ViewportBuilder::default()
+                .with_title("Settings")
+                .with_inner_size(Self::WINDOW_SIZE),
+        }
+    }
+
+    fn settings_panel(&mut self, ui: &mut egui::Ui, items: &[Box<dyn Item>]) {
+        ui.with_layout(
+            egui::Layout::top_down_justified(egui::Align::Center),
+            |ui| {
+                ui.heading("Settings");
+                ui.separator();
+                for (i, item) in items.iter().enumerate() {
+                    ui.selectable_value(&mut self.selected_category, i, item.name());
+                }
+            },
+        );
+    }
+
+    pub fn widget(&mut self, ctx: &egui::Context, items: &mut [Box<dyn Item>]) {
+        if self.opened {
+            ctx.show_viewport_immediate(self.id, self.builder.clone(), |ctx, _class| {
+                egui::SidePanel::left("items")
+                    .default_width(Self::ITEMS_PANEL_WIDTH)
+                    .show(ctx, |ui| self.settings_panel(ui, items));
+
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    if let Some(item) = items.get_mut(self.selected_category) {
+                        item.widget(ui);
+                    }
+                });
+
+                if ctx.input(|i| i.viewport().close_requested()) {
+                    self.opened = false;
+                    self.selected_category = 0;
+                };
+            });
+        }
+    }
+}
+
+impl Default for Viewport {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Default)]
 pub struct Settings {
-    opened: bool,
+    viewport: Viewport,
     items: Vec<Box<dyn Item>>,
 }
 
@@ -53,23 +116,11 @@ impl menu_bar::Item for Settings {
     }
 
     fn menu_items(&mut self, ui: &mut egui::Ui) {
-        self.opened = true;
+        self.viewport.opened = true;
         ui.close_menu();
     }
 
     fn widget(&mut self, ui: &mut egui::Ui) {
-        // TODO: switch this to a native window once support for that makes it into a release. See this PR:
-        // https://github.com/emilk/egui/pull/3172
-        egui::Window::new("Settings")
-            .open(&mut self.opened)
-            .collapsible(false)
-            .resizable(false)
-            .auto_sized()
-            .show(ui.ctx(), |ui| {
-                for item in &mut self.items {
-                    ui.heading(item.name());
-                    item.widget(ui);
-                }
-            });
+        self.viewport.widget(ui.ctx(), &mut self.items);
     }
 }

@@ -18,8 +18,14 @@ impl Item for File {
 
     fn menu_items(&mut self, ui: &mut egui::Ui) {
         if ui.button("Open").clicked() {
-            // TODO: actually open a file
+            // TODO: Actually open a file. We might want to own an EmulatorHandle object with functions like `run(rom: &[u8])`, etc which spawn an emu thread.
+            // One complication is later killing that thread. The standard library unfortunately provides no cross-platform way to kill threads from a JoinHandle.
+            // On Unix platforms we could call `pthread_cancel`, what about Windows though?
             ui.close_menu();
+        }
+
+        if ui.button("Exit").clicked() {
+            std::process::exit(0);
         }
     }
 }
