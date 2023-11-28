@@ -156,15 +156,23 @@ impl VideoInterface {
     }
 
     #[must_use]
-    pub fn tick(&mut self) -> SideEffects {
-        self.counter = self.counter.checked_sub(1).unwrap_or(COUNTER_START);
-        let vblank = self.counter == BLANKING_DONE;
+    pub fn tick(&mut self, cycles: usize) -> SideEffects {
+        let old_counter = self.counter;
+        self.counter = self
+            .counter
+            .checked_sub(cycles as u32)
+            .unwrap_or(COUNTER_START);
+
+        let vblank = old_counter > BLANKING_DONE && self.counter <= BLANKING_DONE;
+        let raise_interrupt =
+            old_counter > self.interrupt_counter && self.counter <= self.interrupt_counter;
+
         if vblank {
             self.field = !self.field;
         }
 
         SideEffects {
-            raise_interrupt: self.counter == self.interrupt_counter,
+            raise_interrupt,
             vblank,
             ..Default::default()
         }

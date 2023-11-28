@@ -354,8 +354,8 @@ pub trait Bus {
         value: Int<SIZE>,
     ) -> BusResult<(), Self::Error>;
 
-    /// Performs a single tick, used to emulate clock cycles. Called after each CPU instruction.
-    fn tick(&mut self) -> BusResult<(), Self::Error>;
+    /// Performs a single tick, used to emulate clock cycles.
+    fn tick(&mut self, cycles: usize) -> BusResult<(), Self::Error>;
 
     /// Called when an unrecoverable error occurs in the CPU. This can be used to notify the rest of the system of a shutdown.
     /// If GDB integration is enabled, its connection will be kept alive and the [`PanicAction`] is ignored.

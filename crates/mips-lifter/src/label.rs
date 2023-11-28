@@ -57,17 +57,27 @@ impl<'ctx> LabelWithContext<'ctx> {
         }
     }
 
-    pub fn compile(&self, codegen: &CodeGen<'ctx>) {
+    pub fn compile(&self, codegen: &CodeGen<'ctx>, instr_callback: bool) {
+        let i64_type = codegen.context.i64_type();
         let name = format!("block_{:06x}", self.label.start() * INSTRUCTION_SIZE);
         let basic_block = codegen.context.append_basic_block(self.function, &name);
         codegen.builder.position_at_end(basic_block);
+
+        let addr = i64_type.const_int(self.label.start() as u64, false);
+        codegen.write_special_register(register::Special::Pc, addr);
+
+        let instrs_len = i64_type.const_int(self.label.instructions.len() as u64, false);
+        env_call!(codegen, RuntimeFunction::OnBlockEntered, [instrs_len]);
 
         let len = self.label.instructions.len();
         let mut i = 0;
         while i < len {
             let instr = &self.label.instructions[i];
             if !instr.has_delay_slot() {
-                if self.compile_instruction(i, instr, codegen).is_none() {
+                if self
+                    .compile_instruction(i, instr_callback, instr, codegen)
+                    .is_none()
+                {
                     // Stubbed instruction encountered in the middle of the basic block, stop now so our runtime panic can take care of it.
                     // Note that we do not panic here because the runtime environment has the ability to update the debugger connection post panic.
                     break;
@@ -95,13 +105,9 @@ impl<'ctx> LabelWithContext<'ctx> {
                 };
 
                 let addr = self.index_to_virtual_address(i);
-                compile_instruction_with_delay_slot(
-                    codegen,
-                    addr,
-                    instr,
-                    next_instr,
-                    |pc, poll| self.on_instruction(pc, poll, codegen),
-                );
+                compile_instruction_with_delay_slot(codegen, addr, instr, next_instr, |pc| {
+                    self.on_instruction(pc, instr_callback, codegen)
+                });
                 break;
             }
         }
@@ -119,22 +125,27 @@ impl<'ctx> LabelWithContext<'ctx> {
     fn compile_instruction(
         &self,
         index: usize,
+        instr_callback: bool,
         instr: &ParsedInstruction,
         codegen: &CodeGen<'ctx>,
     ) -> Option<()> {
-        self.on_instruction(self.index_to_virtual_address(index), true, codegen);
+        self.on_instruction(
+            self.index_to_virtual_address(index),
+            instr_callback,
+            codegen,
+        );
         compile_instruction(codegen, instr)
     }
 
-    fn on_instruction(&self, addr: u64, poll_interrupts: bool, codegen: &CodeGen<'ctx>) {
+    fn on_instruction(&self, addr: u64, instr_callback: bool, codegen: &CodeGen<'ctx>) {
+        // TODO: only write this when we actually need to, for example when checking for exceptions, or the debugger is attached.
         let addr = codegen.context.i64_type().const_int(addr, false);
-        let poll_interrupts = codegen
-            .context
-            .bool_type()
-            .const_int(poll_interrupts as u64, false);
         codegen.write_special_register(register::Special::Pc, addr);
-        // Call the `on_instruction` callback from the environment, used for the debugger.
-        env_call!(codegen, RuntimeFunction::OnInstruction, [poll_interrupts]);
+
+        // Call the `on_instruction` callback from the environment, used for the debugger/tracing.
+        if instr_callback {
+            env_call!(codegen, RuntimeFunction::OnInstruction, []);
+        }
     }
 
     fn index_to_virtual_address(&self, index: usize) -> u64 {

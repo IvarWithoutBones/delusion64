@@ -87,6 +87,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
                 RuntimeFunction::Panic => Self::panic as _,
                 RuntimeFunction::OnInstruction => Self::on_instruction as _,
                 RuntimeFunction::GetFunctionPtr => Self::get_function_ptr as _,
+                RuntimeFunction::OnBlockEntered => Self::on_block_entered as _,
 
                 RuntimeFunction::HandleException => Self::handle_exception_jit as _,
                 RuntimeFunction::GetPhysicalAddress => Self::get_physical_address as _,
@@ -338,7 +339,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
                     lab.fallthrough_fn = Some(codegen.fallthrough_function(amount));
                 }
 
-                lab.compile(codegen);
+                lab.compile(codegen, self.trace || self.debugger.is_some());
                 Ok(lab)
             })
             .unwrap_or_else(|err| {
@@ -350,11 +351,14 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         ptr
     }
 
-    unsafe extern "C" fn on_instruction(&mut self, poll_interrupts: bool) {
-        let count = self.registers[register::Cp0::Count] as u32;
+    unsafe extern "C" fn on_block_entered(&mut self, instructions_in_block: u64) {
+        // Trigger an timer interrupt if it would happen anywhere in this block.
+        // We're doing this ahead of time to avoid trapping into the runtime environment to check on every instruction.
+        let old_count = self.registers[register::Cp0::Count] as u32;
         let compare = self.registers[register::Cp0::Compare] as u32;
-        self.registers[register::Cp0::Count] = count.wrapping_add(8) as u64;
-        if count == compare {
+        let new_count = old_count.wrapping_add(8 * instructions_in_block as u32);
+        self.registers[register::Cp0::Count] = new_count as u64;
+        if old_count < compare && new_count >= compare {
             let cause = self.registers.cause();
             let ip = cause.interrupt_pending().with_timer(true);
             self.registers.set_cause(cause.with_interrupt_pending(ip));
@@ -363,6 +367,22 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
             }
         }
 
+        self.bus
+            .tick(instructions_in_block as usize)
+            .unwrap_or_else(|err| {
+                let msg = format!("failed to tick: {err:#?}");
+                self.panic_update_debugger(&msg)
+            })
+            .handle(self);
+
+        if self.interrupt_pending {
+            self.interrupt_pending = false;
+            self.handle_exception(Exception::Interrupt, None);
+        }
+    }
+
+    // This will only be called if either the debugger or tracing is enabled.
+    unsafe extern "C" fn on_instruction(&mut self) {
         let pc_vaddr = self.registers[register::Special::Pc];
 
         if self.trace {
@@ -371,7 +391,6 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
                 *self.read(pc_paddr).unwrap().as_slice(),
             ))
             .unwrap();
-
             println!("{pc_vaddr:06x}: {instr}");
         }
 
@@ -382,20 +401,6 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
                 // Block until the debugger tells us to continue
                 self.update_debugger();
             }
-        }
-
-        self.bus
-            .tick()
-            .unwrap_or_else(|err| {
-                let msg = format!("failed to tick: {err:#?}");
-                self.panic_update_debugger(&msg)
-            })
-            .handle(self);
-
-        if poll_interrupts && self.interrupt_pending {
-            self.interrupt_pending = false;
-            println!("handling interrupt from {pc_vaddr:#x}");
-            self.handle_exception(Exception::Interrupt, None);
         }
     }
 

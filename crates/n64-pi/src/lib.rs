@@ -331,23 +331,22 @@ impl PeripheralInterface {
         Ok(side_effects)
     }
 
-    pub fn tick(&mut self) -> DmaStatus {
-        if let Some(cycles) = &mut self.latch_cycles_remaining {
-            if *cycles == 0 {
+    pub fn tick(&mut self, cycles: usize) -> DmaStatus {
+        if let Some(latch_cycles) = &mut self.latch_cycles_remaining {
+            *latch_cycles = latch_cycles.saturating_sub(cycles as u32);
+            if *latch_cycles == 0 {
                 self.latch_cycles_remaining.take();
                 self.latch.take();
                 self.status.set_io_busy(false);
-            } else {
-                *cycles -= 1;
             }
         }
 
-        if let Some(cycles) = &mut self.dma_cycles_remaining {
-            if *cycles == 0 {
+        if let Some(dma_cycles) = &mut self.dma_cycles_remaining {
+            *dma_cycles = dma_cycles.saturating_sub(cycles as u32);
+            if *dma_cycles == 0 {
                 self.reset_dma();
                 DmaStatus::Finished
             } else {
-                *cycles -= 1;
                 DmaStatus::Busy
             }
         } else {
@@ -391,7 +390,6 @@ impl PeripheralInterface {
                         .ok_or(PiError::RdramAddressOutOfBounds { range, rdram_len })?
                 };
 
-                println!("delusion64: pi DMA from cart {cart_offset:#x} to rdram {rdram_offset:#x} (length {len:#x})");
                 rdram_slice[..len].copy_from_slice(cart_slice);
 
                 Ok(SideEffects {

@@ -35,7 +35,7 @@ pub fn compile_instruction_with_delay_slot(
     pc: u64,
     instr: &ParsedInstruction,
     delay_slot_instr: &ParsedInstruction,
-    on_instruction: impl Fn(u64, bool),
+    on_instruction: impl Fn(u64),
 ) {
     debug_assert!(instr.mnemonic().has_delay_slot());
     let delay_slot_pc = pc + INSTRUCTION_SIZE as u64;
@@ -43,7 +43,7 @@ pub fn compile_instruction_with_delay_slot(
     let compile_delay_slot_instr = || {
         // Update runtime metadata about delay slots so we can properly handle traps and exceptions
         codegen.set_inside_delay_slot(true);
-        on_instruction(delay_slot_pc, true);
+        on_instruction(delay_slot_pc);
         compile_instruction(codegen, delay_slot_instr);
         codegen.set_inside_delay_slot(false);
     };
@@ -69,7 +69,7 @@ pub fn compile_instruction_with_delay_slot(
             compile_delay_slot_instr();
         }
 
-        on_instruction(pc, false);
+        on_instruction(pc);
         codegen.build_if(name, comparison, || {
             if instr.mnemonic().is_likely_branch() {
                 // If the delay slot is discarded, the delay slot instruction only gets executed when the branch is taken.
@@ -94,7 +94,7 @@ pub fn compile_instruction_with_delay_slot(
         compile_delay_slot_instr();
 
         // Execute the jump.
-        on_instruction(pc, false);
+        on_instruction(pc);
         match target {
             JumpTarget::Constant(vaddr) => codegen.build_constant_jump(vaddr),
             JumpTarget::Dynamic(vaddr) => codegen.build_dynamic_jump(vaddr),

@@ -48,13 +48,9 @@ struct Dma {
 
 impl Dma {
     #[must_use]
-    pub fn tick(&mut self) -> bool {
-        if self.cycles_remaining == 0 {
-            true
-        } else {
-            self.cycles_remaining -= 1;
-            false
-        }
+    pub fn tick(&mut self, cycles: usize) -> bool {
+        self.cycles_remaining = self.cycles_remaining.saturating_sub(cycles);
+        self.cycles_remaining == 0
     }
 }
 
@@ -167,9 +163,9 @@ impl SerialInterface {
         Ok(side_effects)
     }
 
-    pub fn tick(&mut self) -> DmaStatus {
+    pub fn tick(&mut self, cycles: usize) -> DmaStatus {
         if let Some(dma) = &mut self.dma {
-            if dma.tick() {
+            if dma.tick(cycles) {
                 self.status.set_dma_busy(false);
                 self.status.set_interrupt(true);
                 self.dma = None;

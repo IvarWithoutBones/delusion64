@@ -371,7 +371,7 @@ impl BusInterface for Bus {
                 .safe_to_stub()
                 .then(|| {
                     eprintln!(
-                        "STUB: memory write of {value:#x?} at {:#x} = {address:#x?}",
+                        "stub: memory write of {value:#x?} at {:#x} = {address:#x?}",
                         address.physical_address()
                     )
                 })
@@ -380,12 +380,12 @@ impl BusInterface for Bus {
         Ok(result)
     }
 
-    fn tick(&mut self) -> BusResult<(), Self::Error> {
+    fn tick(&mut self, cycles: usize) -> BusResult<(), Self::Error> {
         let mut result = BusValue::default();
 
         // TODO: how does timing compare to the CPU?
 
-        let vi_side_effects = self.vi.tick();
+        let vi_side_effects = self.vi.tick(cycles);
         if vi_side_effects.vblank {
             if let Some(fb) = self.vi.framebuffer(self.rdram.as_slice()) {
                 self.context.send(context::Framebuffer {
@@ -399,25 +399,21 @@ impl BusInterface for Bus {
             self.update_controller()?;
         }
 
-        if vi_side_effects.raise_interrupt {
-            // println!("delusion64: vi halfline interrupt");
-            if self.mi.raise_interrupt(InterruptType::VideoInterface) {
-                result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
-            }
+        if vi_side_effects.raise_interrupt && self.mi.raise_interrupt(InterruptType::VideoInterface)
+        {
+            result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
         }
 
-        if self.pi.tick() == DmaStatus::Finished {
-            println!("delusion64: pi dma finished");
-            if self.mi.raise_interrupt(InterruptType::PeripheralInterface) {
-                result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
-            }
+        if self.pi.tick(cycles) == DmaStatus::Finished
+            && self.mi.raise_interrupt(InterruptType::PeripheralInterface)
+        {
+            result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
         }
 
-        if self.si.tick() == n64_si::DmaStatus::Completed {
-            println!("delusion64: si dma finished");
-            if self.mi.raise_interrupt(InterruptType::SerialInterface) {
-                result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
-            }
+        if self.si.tick(cycles) == n64_si::DmaStatus::Completed
+            && self.mi.raise_interrupt(InterruptType::SerialInterface)
+        {
+            result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
         }
 
         Ok(result)
