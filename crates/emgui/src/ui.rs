@@ -5,25 +5,25 @@ use crate::{
 use eframe::egui;
 use std::time::Duration;
 
-pub const MENU_BAR_HEIGHT: f32 = 15.0;
-
 pub struct Ui<T: input::Event> {
     menu_bar: MenuBar,
     screen: Frame,
     input: input::Handler<T>,
     error: ErrorDialogue,
+    settings: Settings,
 }
 
 impl<T: input::Event> Ui<T> {
     pub fn new(context: context::UserInterface<T>, input_devices: Vec<T>) -> Self {
-        let (input, input_settings) = input::Handler::new(input_devices, context.input);
         let mut settings = Settings::new();
+        let (input, input_settings) = input::Handler::new(input_devices, context.input);
         settings.add(input_settings).unwrap();
 
         Self {
-            menu_bar: MenuBar::new(settings),
+            menu_bar: MenuBar::new(),
             screen: Frame::new(context.framebuffer),
             error: ErrorDialogue::new(context.error),
+            settings,
             input,
         }
     }
@@ -35,21 +35,17 @@ impl<T: input::Event> Ui<T> {
         self.error.update();
         if self.screen.update(ctx) {
             // Only update input if the screen has changed, so every frame.
-            let settings = self.menu_bar.settings.get().unwrap();
-            self.input.update(ctx, settings);
+            self.input.update(ctx, self.settings.get().unwrap());
         }
 
-        ctx.request_repaint_after(Duration::from_millis(8));
+        ctx.request_repaint_after(Duration::from_millis(1));
     }
 }
 
 impl<T: input::Event> eframe::App for Ui<T> {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::TopBottomPanel::top("menu_bar")
-            .exact_height(MENU_BAR_HEIGHT)
-            .show(ctx, |ui| {
-                self.menu_bar.widget(ui);
-            });
+        // Creates a TopBottomPanel, so must be added before the CentralPanel.
+        self.menu_bar.widget(ctx, &mut [&mut self.settings]);
 
         // This must be the last panel we add
         egui::CentralPanel::default().show(ctx, |ui| {

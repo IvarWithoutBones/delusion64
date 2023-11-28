@@ -1,5 +1,6 @@
-use super::settings::Settings;
 use eframe::egui;
+
+pub const HEIGHT: f32 = 15.0;
 
 pub trait Item {
     fn name(&self) -> &'static str;
@@ -9,7 +10,7 @@ pub trait Item {
     fn widget(&mut self, _ui: &mut egui::Ui) {}
 }
 
-pub struct File;
+struct File;
 
 impl Item for File {
     fn name(&self) -> &'static str {
@@ -32,35 +33,44 @@ impl Item for File {
 
 pub struct MenuBar {
     items: Vec<Box<dyn Item>>,
-    // TODO: move this
-    pub settings: Settings,
 }
 
 impl MenuBar {
-    pub fn new(settings: Settings) -> Self {
+    pub fn new() -> Self {
         Self {
             items: vec![Box::new(File)],
-            settings,
         }
     }
 
-    pub fn widget(&mut self, ui: &mut egui::Ui) {
+    fn bar(&mut self, ui: &mut egui::Ui, builtin_items: &mut [&mut dyn Item]) {
         egui::menu::bar(ui, |ui| {
-            for item in &mut self.items {
+            for item in self
+                .items
+                .iter_mut()
+                .map(|item| item.as_mut() as &mut dyn Item)
+                .chain(builtin_items.iter_mut().map(|item| *item as &mut dyn Item))
+            {
                 ui.menu_button(item.name(), |ui| {
                     item.menu_items(ui);
-                });
-
-                ui.menu_button(self.settings.name(), |ui| {
-                    self.settings.menu_items(ui);
                 });
             }
         });
 
-        for item in &mut self.items {
+        for item in self
+            .items
+            .iter_mut()
+            .map(|item| item.as_mut() as &mut dyn Item)
+            .chain(builtin_items.iter_mut().map(|item| *item as &mut dyn Item))
+        {
             item.widget(ui);
         }
+    }
 
-        self.settings.widget(ui);
+    pub fn widget(&mut self, ctx: &egui::Context, builtin_items: &mut [&mut dyn Item]) {
+        egui::TopBottomPanel::top("menu_bar")
+            .exact_height(HEIGHT)
+            .show(ctx, |ui| {
+                self.bar(ui, builtin_items);
+            });
     }
 }

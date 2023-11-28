@@ -37,7 +37,8 @@ impl Viewport {
         }
     }
 
-    fn settings_panel(&mut self, ui: &mut egui::Ui, items: &[Box<dyn Item>]) {
+    fn items_panel(&mut self, ui: &mut egui::Ui, items: &[Box<dyn Item>]) {
+        ui.add_space(6.0);
         ui.with_layout(
             egui::Layout::top_down_justified(egui::Align::Center),
             |ui| {
@@ -55,7 +56,7 @@ impl Viewport {
             ctx.show_viewport_immediate(self.id, self.builder.clone(), |ctx, _class| {
                 egui::SidePanel::left("items")
                     .default_width(Self::ITEMS_PANEL_WIDTH)
-                    .show(ctx, |ui| self.settings_panel(ui, items));
+                    .show(ctx, |ui| self.items_panel(ui, items));
 
                 egui::CentralPanel::default().show(ctx, |ui| {
                     if let Some(item) = items.get_mut(self.selected_category) {
@@ -72,13 +73,6 @@ impl Viewport {
     }
 }
 
-impl Default for Viewport {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Default)]
 pub struct Settings {
     viewport: Viewport,
     items: Vec<Box<dyn Item>>,
@@ -86,7 +80,10 @@ pub struct Settings {
 
 impl Settings {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            viewport: Viewport::new(),
+            items: vec![],
+        }
     }
 
     pub fn add<T: Item + 'static>(&mut self, item: T) -> Result<(), Error> {

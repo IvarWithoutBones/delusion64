@@ -1,6 +1,9 @@
 #![warn(clippy::all, clippy::pedantic)]
 
-use crate::{ui::Ui, widget::input};
+use crate::{
+    ui::Ui,
+    widget::{input, menu_bar},
+};
 use eframe::egui;
 
 pub mod context;
@@ -45,7 +48,7 @@ impl<T: input::Event + 'static> UiBuilder<T> {
         Self {
             initial_window_size: Some(egui::Vec2::new(
                 width + OFFSET,
-                height + OFFSET + ui::MENU_BAR_HEIGHT,
+                height + OFFSET + menu_bar::HEIGHT,
             )),
             ..self
         }
