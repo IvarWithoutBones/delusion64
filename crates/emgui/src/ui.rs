@@ -29,6 +29,9 @@ impl<T: input::Event> Ui<T> {
     }
 
     fn update(&mut self, ctx: &egui::Context) {
+        #[cfg(feature = "theme")]
+        crate::theme::set_theme(ctx, crate::theme::MOCHA);
+
         self.error.update();
         if self.screen.update(ctx) {
             // Only update input if the screen has changed, so every frame.

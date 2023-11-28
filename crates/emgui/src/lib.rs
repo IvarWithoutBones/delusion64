@@ -7,6 +7,9 @@ pub mod context;
 mod ui;
 pub(crate) mod widget;
 
+#[cfg(feature = "theme")]
+mod theme;
+
 pub struct UiBuilder<T: input::Event> {
     context: context::UserInterface<T>,
     window_name: String,
