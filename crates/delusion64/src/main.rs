@@ -121,7 +121,7 @@ fn main() {
     } else {
         // Exit immediately when the GUI is closed.
         UiBuilder::new("Delusion64", ui_context)
-            .with_initial_window_size([640.0, 480.0])
+            .with_initial_screen_size([640.0, 480.0])
             .with_input_devices(vec![ControllerEvent::A])
             .run();
     }

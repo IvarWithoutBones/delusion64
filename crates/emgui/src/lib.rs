@@ -36,9 +36,9 @@ impl<T: input::Event + 'static> UiBuilder<T> {
     }
 
     #[must_use]
-    pub fn with_initial_window_size(self, [width, height]: [f32; 2]) -> Self {
+    pub fn with_initial_screen_size(self, [width, height]: [f32; 2]) -> Self {
         // Offsets are required since the screen does not fill the whole GUI, while we unfortunately cannot know the dimensions in advance.
-        const OFFSET: f32 = 10.0;
+        const OFFSET: f32 = 15.0;
         Self {
             initial_window_size: Some(egui::Vec2::new(
                 width + OFFSET,
@@ -53,7 +53,10 @@ impl<T: input::Event + 'static> UiBuilder<T> {
     /// This function will panic if the UI fails to initialize. This can happen when the UI is not spawned on the main thread.
     pub fn run(self) {
         let native_options = eframe::NativeOptions {
-            initial_window_size: self.initial_window_size,
+            viewport: egui::ViewportBuilder {
+                inner_size: self.initial_window_size,
+                ..Default::default()
+            },
             follow_system_theme: false,
             ..Default::default()
         };
