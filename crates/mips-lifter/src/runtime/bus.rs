@@ -1,6 +1,9 @@
 use super::Environment;
 use std::{fmt, mem::size_of, ops::Range};
 
+// TODO: Returning a BusValue for every single tick/memory access seems wasteful.
+// Maybe we should give a mutable reference to a struct with side-effects instead?
+
 pub type PhysicalAddress = u32;
 
 /// The value returned by a memory read or write operation. Optionally contains a range of physical addresses that were mutated.
@@ -14,6 +17,8 @@ pub struct BusValue<T> {
     /// The mask of the external interrupt(s) that was triggered by this operation, if any.
     /// Only external interrupts should be set, which occupy bits 2..=6.
     pub interrupt: Option<u8>,
+    /// Whether the JIT should exit after this operation, returning to the caller of [`JitBuilder::run`].
+    pub request_exit: bool,
 }
 
 impl<T> BusValue<T> {
@@ -22,6 +27,7 @@ impl<T> BusValue<T> {
             inner: value,
             mutated: None,
             interrupt: None,
+            request_exit: false,
         }
     }
 
@@ -29,6 +35,7 @@ impl<T> BusValue<T> {
         if let Some(paddrs) = self.mutated {
             env.invalidate(paddrs);
         }
+
         if let Some(interrupt_mask) = self.interrupt {
             let cause = env.registers.cause();
             let pending = cause.interrupt_pending().raw() | interrupt_mask;
@@ -38,6 +45,11 @@ impl<T> BusValue<T> {
                 env.interrupt_pending = true;
             }
         }
+
+        if self.request_exit {
+            env.exit_requested = true;
+        }
+
         self.inner
     }
 }
@@ -327,6 +339,7 @@ pub enum PanicAction {
     /// Kill the thread immediately after calling [`Bus::on_panic`].
     Kill,
     /// Sleep in an idle loop after calling [`Bus::on_panic`], blocking forever. The thread is expected to be killed externally.
+    // TODO: should probably return from the jit instead.
     Idle,
 }
 

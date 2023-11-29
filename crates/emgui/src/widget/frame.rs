@@ -37,4 +37,9 @@ impl Frame {
             .response
         }
     }
+
+    pub fn clear(&mut self) {
+        while self.buffer_receiver.receive().is_some() {}
+        self.frame = None;
+    }
 }

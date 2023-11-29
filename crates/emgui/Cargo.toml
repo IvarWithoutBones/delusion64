@@ -8,6 +8,9 @@ edition = "2021"
 default = ["theme"]
 theme = []
 
+[dependencies]
+rfd = "0.12.1"
+
 [dependencies.eframe]
 version = "0.24.0"
 default-features = false

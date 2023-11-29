@@ -1,5 +1,7 @@
 #![warn(clippy::all, clippy::pedantic)]
 
+use std::path::PathBuf;
+
 use crate::{
     ui::Ui,
     widget::{input, menu_bar},
@@ -13,31 +15,45 @@ pub(crate) mod widget;
 #[cfg(feature = "theme")]
 mod theme;
 
-pub struct UiBuilder<T: input::Event> {
-    context: context::UserInterface<T>,
-    window_name: String,
-    initial_window_size: Option<egui::Vec2>,
-    input_devices: Vec<T>,
+pub trait EmulatorHandle {
+    type InputEvent: input::Event;
+
+    fn start(&mut self, rom: Box<[u8]>);
+
+    fn stop(&mut self);
 }
 
-impl<T: input::Event + 'static> UiBuilder<T> {
+pub struct UiBuilder<T: EmulatorHandle> {
+    handle: T,
+    context: context::UserInterface<T::InputEvent>,
+    window_name: String,
+    initial_window_size: Option<egui::Vec2>,
+    input_devices: Vec<T::InputEvent>,
+    rom_path: Option<PathBuf>,
+}
+
+impl<T: EmulatorHandle + 'static> UiBuilder<T> {
     #[must_use]
-    pub fn new(window_name: impl Into<String>, context: context::UserInterface<T>) -> Self {
+    pub fn new(
+        window_name: impl Into<String>,
+        handle: T,
+        context: context::UserInterface<T::InputEvent>,
+    ) -> Self {
         Self {
             context,
             window_name: window_name.into(),
-            initial_window_size: None,
             input_devices: vec![],
+            handle,
+            initial_window_size: None,
+            rom_path: None,
         }
     }
 
     #[must_use]
-    pub fn with_input_devices(self, devices: Vec<T>) -> UiBuilder<T> {
+    pub fn with_input_devices(self, devices: Vec<T::InputEvent>) -> UiBuilder<T> {
         UiBuilder {
-            context: self.context,
-            window_name: self.window_name,
-            initial_window_size: self.initial_window_size,
             input_devices: devices,
+            ..self
         }
     }
 
@@ -50,6 +66,14 @@ impl<T: input::Event + 'static> UiBuilder<T> {
                 width + OFFSET,
                 height + OFFSET + menu_bar::HEIGHT,
             )),
+            ..self
+        }
+    }
+
+    #[must_use]
+    pub fn with_rom_path(self, path: impl Into<PathBuf>) -> Self {
+        Self {
+            rom_path: Some(path.into()),
             ..self
         }
     }
@@ -68,9 +92,17 @@ impl<T: input::Event + 'static> UiBuilder<T> {
         };
 
         eframe::run_native(
-            &self.window_name,
+            &self.window_name.clone(),
             native_options,
-            Box::new(|_cc| Box::new(Ui::new(self.context, self.input_devices))),
+            Box::new(move |_cc| {
+                Box::new(Ui::new(
+                    &self.window_name,
+                    self.context,
+                    self.input_devices,
+                    self.handle,
+                    self.rom_path,
+                ))
+            }),
         )
         .unwrap_or_else(|e| {
             panic!("failed to run eframe: {e}");

@@ -1,4 +1,5 @@
 use inkwell::{context::Context, execution_engine::JitFunction, OptimizationLevel};
+use std::pin::Pin;
 
 pub use self::builder::JitBuilder;
 pub use mips_decomp::register;
@@ -36,7 +37,7 @@ const LLVM_CALLING_CONVENTION_TAILCC: u32 = 18;
 
 // TODO: move most of this Codegen. `JitBuilder::build()` should create the runtime::Environment,
 // which then initialises the entry point and helper functions. `Environment::run()` can start execution.
-pub(crate) fn run<Bus>(builder: JitBuilder<true, Bus>) -> !
+pub(crate) fn run<Bus>(builder: JitBuilder<true, Bus>) -> Bus
 where
     Bus: runtime::bus::Bus,
 {
@@ -68,7 +69,7 @@ where
 
     // Ensure the generated LLVM IR is valid.
     if let Err(err) = env.codegen.verify() {
-        println!("\nERROR: Generated code failed to verify:\n\n{err}\nTerminating.");
+        eprintln!("\nERROR: Generated code failed to verify:\n\n{err}\nTerminating.");
         panic!()
     }
 
@@ -77,5 +78,12 @@ where
 
     // Run the generated code!
     unsafe { main_fn.call() };
-    unreachable!()
+
+    // SAFETY: The runtime environment is pinned because it is self-referential:
+    // It owns both the guest registers and the JIT functions which utilise them through raw pointers,
+    // if we ever move it our pointers will be invalidated.
+    //
+    // We can safely unpin it here because both are about to be dropped, and we will never use said pointers again.
+    let env = unsafe { Pin::into_inner_unchecked(env) };
+    env.bus
 }

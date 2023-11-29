@@ -1,3 +1,4 @@
+use self::{address_map::VirtualAddressMap, register::BitWidth};
 use crate::{
     label::{JitFunctionPointer, LabelWithContext},
     runtime::RuntimeFunction,
@@ -21,8 +22,6 @@ pub(crate) mod address_map;
 mod register;
 
 pub(crate) use register::{INSIDE_DELAY_SLOT_STORAGE, RESERVED_CP0_REGISTER_LATCH};
-
-use self::{address_map::VirtualAddressMap, register::BitWidth};
 
 #[macro_export]
 macro_rules! env_call {
@@ -80,6 +79,10 @@ pub struct CodeGen<'ctx> {
     pub module: Module<'ctx>,
     pub builder: Builder<'ctx>,
     pub execution_engine: ExecutionEngine<'ctx>,
+
+    /// Every single module we compiled. We need to keep these around to cleanly shut down LLVM.
+    pub modules: Vec<Module<'ctx>>,
+
     pub labels: VirtualAddressMap<'ctx>,
     globals: Option<Globals<'ctx>>,
 
@@ -96,6 +99,7 @@ impl<'ctx> CodeGen<'ctx> {
         execution_engine: ExecutionEngine<'ctx>,
     ) -> Self {
         Self {
+            modules: vec![],
             context,
             module,
             builder: context.create_builder(),
@@ -168,6 +172,28 @@ impl<'ctx> CodeGen<'ctx> {
         self.fallthrough_two_helper = Some(make_func(self, 2, "fallthrough_two_instructions"));
     }
 
+    /// Get a host pointer to a function which simply returns.
+    /// Calling this inside of a JIT'ed block will return to the callee of [`JitBuilder::run`].
+    pub(crate) fn return_from_jit_ptr(&self) -> JitFunctionPointer {
+        const NAME: &str = "return_from_jit_helper";
+        let module = self.context.create_module("return_from_jit_helper_module");
+        let func = self.set_func_attrs(module.add_function(
+            NAME,
+            self.context.void_type().fn_type(&[], false),
+            None,
+        ));
+
+        let block = self.context.append_basic_block(func, "entry");
+        self.builder.position_at_end(block);
+        {
+            // Since every function we call uses tail calls, this should immediately return to the caller.
+            self.builder.build_return(None);
+        }
+
+        self.execution_engine.add_module(&module).unwrap();
+        self.execution_engine.get_function_address(NAME).unwrap() as JitFunctionPointer
+    }
+
     pub(crate) fn globals(&self) -> &Globals<'ctx> {
         // SAFETY: this only gets initialised by the runtime, which will call `initialise` before anything else.
         unsafe { self.globals.as_ref().unwrap_unchecked() }
@@ -195,7 +221,7 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     pub fn link_in_module(
-        &self,
+        &mut self,
         module: Module<'ctx>,
         lab: &mut LabelWithContext,
     ) -> Result<(), String> {
@@ -224,15 +250,17 @@ impl<'ctx> CodeGen<'ctx> {
 
             self.execution_engine.add_global_mapping(&func_decl, ptr);
         }
+
+        self.modules.push(module);
         Ok(())
     }
 
-    pub fn add_dynamic_function<F>(&self, f: F) -> Result<LabelWithContext<'ctx>, String>
+    pub fn add_dynamic_function<F>(&mut self, f: F) -> Result<LabelWithContext<'ctx>, String>
     where
-        F: FnOnce(&Module<'ctx>) -> Result<LabelWithContext<'ctx>, String>,
+        F: FnOnce(&CodeGen<'ctx>, &Module<'ctx>) -> Result<LabelWithContext<'ctx>, String>,
     {
         let new_module = self.context.create_module("tmp_dynamic_module");
-        let mut lab = f(&new_module)?;
+        let mut lab = f(self, &new_module)?;
         self.link_in_module(new_module, &mut lab)?;
         Ok(lab)
     }
@@ -613,6 +641,17 @@ impl<'ctx> CodeGen<'ctx> {
         self.build_if("signed_overflow", overflow, || {
             self.throw_exception(Exception::ArithmeticOverflow, Some(0), None)
         });
+    }
+}
+
+impl Drop for CodeGen<'_> {
+    fn drop(&mut self) {
+        // Without manually removing the modules from the execution engine LLVM segfaults.
+        // We use drain here to run their Drop implementation prior to anything else, which prevents out of bounds reads/writes according to valgrind.
+        for module in self.modules.drain(..) {
+            self.execution_engine.remove_module(&module).unwrap();
+        }
+        self.execution_engine.remove_module(&self.module).unwrap();
     }
 }
 

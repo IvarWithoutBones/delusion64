@@ -26,13 +26,14 @@ impl Viewport {
     const WINDOW_SIZE: egui::Vec2 = egui::vec2(400.0, 400.0);
     const ITEMS_PANEL_WIDTH: f32 = 125.0;
 
-    pub fn new() -> Self {
+    pub fn new(window_name: &str) -> Self {
+        let window_name = format!("{window_name} - Settings");
         Self {
             opened: false,
             selected_category: 0,
             id: egui::ViewportId::from_hash_of("settings_viewport"),
             builder: egui::ViewportBuilder::default()
-                .with_title("Settings")
+                .with_title(window_name)
                 .with_inner_size(Self::WINDOW_SIZE),
         }
     }
@@ -79,9 +80,9 @@ pub struct Settings {
 }
 
 impl Settings {
-    pub fn new() -> Self {
+    pub fn new(window_name: &str) -> Self {
         Self {
-            viewport: Viewport::new(),
+            viewport: Viewport::new(window_name),
             items: vec![],
         }
     }

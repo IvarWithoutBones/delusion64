@@ -58,7 +58,7 @@ impl<'a, Bus: runtime::bus::Bus> JitBuilder<'a, false, Bus> {
 }
 
 impl<'a, Bus: runtime::bus::Bus> JitBuilder<'a, true, Bus> {
-    pub fn run(self) -> ! {
+    pub fn run(self) -> Bus {
         run(self)
     }
 

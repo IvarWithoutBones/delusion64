@@ -35,7 +35,7 @@ pub struct Bus {
     n64_systemtest_isviewer_buffer: Box<[u8; 0x200]>,
 
     // GUI stuff
-    context: context::Emulator<ControllerEvent>,
+    pub context: context::Emulator<ControllerEvent>,
     gui_connected: bool,
 }
 
@@ -382,6 +382,11 @@ impl BusInterface for Bus {
 
     fn tick(&mut self, cycles: usize) -> BusResult<(), Self::Error> {
         let mut result = BusValue::default();
+
+        if let Some(stop) = self.context.receive() {
+            let _: emgui::context::Stop = stop;
+            result.request_exit = true;
+        }
 
         // TODO: how does timing compare to the CPU?
 

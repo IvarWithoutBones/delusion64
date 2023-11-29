@@ -42,11 +42,12 @@
       # Must be kept in sync with what inkwell expects.
       llvmPackages = pkgs.llvmPackages_16;
 
-      # Required for wgpu, it dynamically links to a graphics API.
+      mkShell = pkgs.mkShell.override {
+        stdenv = llvmPackages.stdenv;
+      };
+
       libraryPath = lib.optionalString hostPlatform.isLinux
-        (lib.makeLibraryPath [
-          pkgs.vulkan-loader
-        ]);
+        (lib.makeLibraryPath [ pkgs.vulkan-loader ]);
 
       delusion64 = naerskLib.buildPackage {
         pname = "delusion64";
@@ -61,14 +62,18 @@
         src = lib.cleanSource ./.;
 
         nativeBuildInputs = with pkgs; [
-          llvmPackages.bintools # For LLD, only used at build time
+          # Purely used for the lld linker, which is significantly faster than GNU ld, especially when performing LTO.
+          # Note that we cannot use the `llvmPackages.lld` package, as it is not wrapped to set the rpath of generated executables.
+          llvmPackages.bintools
         ] ++ lib.optionals hostPlatform.isLinux [
           makeWrapper
+          wrapGAppsHook
           pkg-config
         ];
 
         buildInputs = with pkgs; [
-          llvmPackages.llvm.dev # For the JIT
+          # LLVM and its dependencies, used by the JIT
+          llvmPackages.llvm.dev
           libffi
           libxml2
         ] ++ lib.optionals hostPlatform.isLinux [
@@ -79,13 +84,22 @@
           xorg.libXi
           xorg.libX11
           libxkbcommon
+          # Dependencies of rfd, provides a file picker
+          pango
+          gdk-pixbuf
+          atk
+          gtk3
+          libz
         ] ++ lib.optionals hostPlatform.isDarwin [
           # Also dependencies of eframe
           darwin.apple_sdk.frameworks.AppKit
         ];
 
+        dontWrapGApps = true;
+
         postInstall = lib.optionalString hostPlatform.isLinux ''
-          wrapProgram $out/bin/delusion64 --prefix LD_LIBRARY_PATH : ${libraryPath}
+          # Manually include the arguments from wrapGAppsHook to avoid double wrapping
+          wrapProgram $out/bin/delusion64 ''${gappsWrapperArgs[@]} --prefix LD_LIBRARY_PATH : ${libraryPath}
         '';
       };
     in
@@ -95,10 +109,15 @@
         inherit delusion64;
       };
 
-      devShells.default = pkgs.mkShell {
+      devShells.default = mkShell {
         inputsFrom = [ delusion64 ];
 
         LD_LIBRARY_PATH = lib.optionalString hostPlatform.isLinux libraryPath;
+
+        shellHook = ''
+          # Ensure we can find the relevant GSettings schemas, otherwise we crash when opening the file picker
+          export XDG_DATA_DIRS="$XDG_DATA_DIRS:$GSETTINGS_SCHEMAS_PATH"
+        '';
 
         packages = with pkgs; [
           rustToolchain

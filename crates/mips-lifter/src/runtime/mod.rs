@@ -6,7 +6,7 @@ use self::{
 };
 use crate::{
     codegen::{self, CodeGen, FallthroughAmount},
-    label::generate_label_functions,
+    label::{generate_label_functions, JitFunctionPointer},
     runtime::bus::{BusError, PanicAction},
     JitBuilder,
 };
@@ -25,11 +25,12 @@ mod registers;
 
 pub struct Environment<'ctx, Bus: bus::Bus> {
     pub(crate) registers: Pin<Box<Registers>>,
-    pub(crate) interrupt_pending: bool,
     pub(crate) codegen: CodeGen<'ctx>,
-    bus: Bus,
+    pub(crate) bus: Bus,
     tlb: TranslationLookasideBuffer,
     debugger: Option<gdb::Debugger<'ctx, Bus>>,
+    pub(crate) interrupt_pending: bool,
+    pub(crate) exit_requested: bool,
     // TODO: replace this with a proper logging library
     trace: bool,
 }
@@ -52,6 +53,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
             debugger: None,
             codegen: CodeGen::new(context, module, execution_engine),
             interrupt_pending: false,
+            exit_requested: false,
             bus: builder.bus,
             trace: builder.trace,
         });
@@ -240,7 +242,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
     }
 
     // TODO: split this up and prettify it a bit, it is rather unwieldy right now.
-    unsafe extern "C" fn get_function_ptr(&mut self, vaddr: u64) -> usize {
+    unsafe extern "C" fn get_function_ptr(&mut self, vaddr: u64) -> JitFunctionPointer {
         let vaddr = vaddr & u32::MAX as u64;
         let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
 
@@ -293,8 +295,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
 
         let lab = self
             .codegen
-            .add_dynamic_function(|module| {
-                let codegen = &self.codegen;
+            .add_dynamic_function(|codegen, module| {
                 let mut lab = {
                     let mut labels = generate_label_functions(label_list, codegen.context, module);
                     labels.pop().ok_or_else(|| {
@@ -302,7 +303,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
                     })?
                 };
 
-                if let Ok(fallthrough) = self.codegen.labels.get(lab.label.end() as u64) {
+                if let Ok(fallthrough) = codegen.labels.get(lab.label.end() as u64) {
                     if self.trace {
                         println!(
                             "found fallthrough block at {:#x}",
@@ -378,7 +379,9 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
             })
             .handle(self);
 
-        if self.interrupt_pending {
+        if self.exit_requested {
+            self.codegen.return_from_jit_ptr()
+        } else if self.interrupt_pending {
             self.interrupt_pending = false;
             self.handle_exception(Exception::Interrupt, None)
         } else {
