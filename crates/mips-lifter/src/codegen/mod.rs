@@ -1,15 +1,14 @@
 use crate::{
     label::{JitFunctionPointer, LabelWithContext},
     runtime::RuntimeFunction,
-    LLVM_CALLING_CONVENTION_FAST,
+    LLVM_CALLING_CONVENTION_TAILCC,
 };
 use inkwell::{
     attributes::{Attribute, AttributeLoc},
     basic_block::BasicBlock,
     builder::Builder,
     context::Context,
-    execution_engine::{ExecutionEngine, JitFunction},
-    intrinsics::Intrinsic,
+    execution_engine::ExecutionEngine,
     module::Module,
     types::IntType,
     values::{CallSiteValue, FunctionValue, GlobalValue, IntValue},
@@ -21,9 +20,7 @@ mod comparison;
 pub(crate) mod address_map;
 mod register;
 
-pub(crate) use register::{
-    HOST_STACK_FRAME_STORAGE, INSIDE_DELAY_SLOT_STORAGE, RESERVED_CP0_REGISTER_LATCH,
-};
+pub(crate) use register::{INSIDE_DELAY_SLOT_STORAGE, RESERVED_CP0_REGISTER_LATCH};
 
 use self::{address_map::VirtualAddressMap, register::BitWidth};
 
@@ -41,7 +38,7 @@ macro_rules! env_call {
 
 pub const FUNCTION_PREFIX: &str = "delusion64_jit_";
 
-const ATTRIBUTE_NAMES: &[&str] = &["noreturn", "nounwind", "nosync", "nofree", "nocf_check"];
+const ATTRIBUTE_NAMES: &[&str] = &["noreturn", "nosync", "nofree", "nocf_check"];
 pub fn function_attributes(context: &Context) -> [Attribute; ATTRIBUTE_NAMES.len()] {
     let mut attributes = [None; ATTRIBUTE_NAMES.len()];
     for (attr, name) in attributes.iter_mut().zip(ATTRIBUTE_NAMES.iter()) {
@@ -132,28 +129,13 @@ impl<'ctx> CodeGen<'ctx> {
         let block = self.context.append_basic_block(func, "entry");
         self.builder.position_at_end(block);
         {
-            unsafe { self.restore_host_stack() } // Hack to avoid stack overflows
-
             let address = func.get_first_param().unwrap().into_int_value();
-            let func_type = void_type.fn_type(&[], false);
-            let ptr_type = func_type.ptr_type(Default::default());
-
-            let ptr = {
-                let raw = env_call!(&self, RuntimeFunction::GetFunctionPtr, [address])
-                    .try_as_basic_value()
-                    .left()
-                    .unwrap()
-                    .into_int_value();
-                self.builder.build_int_to_ptr(raw, ptr_type, "jump_fn_ptr")
-            };
-
-            self.set_call_attrs(self.builder.build_indirect_call(
-                func_type,
-                ptr,
-                &[],
-                "jump_fn_call",
-            ));
-            self.builder.build_unreachable(); // The function should never return.
+            let ptr = env_call!(&self, RuntimeFunction::GetFunctionPtr, [address])
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_int_value();
+            self.build_jump_to_jit_func_ptr(ptr, "jump_fn_call")
         }
 
         self.jump_helper = Some(func);
@@ -202,50 +184,6 @@ impl<'ctx> CodeGen<'ctx> {
         let new = self.context.i64_type().const_int(inside as u64, false);
         let ptr = self.register_pointer(register::INSIDE_DELAY_SLOT_STORAGE);
         self.builder.build_store(ptr, new);
-    }
-
-    /// Saves the host stack frame to a global pointer, so that it can be restored later.
-    pub fn save_host_stack(&self) {
-        let stack_save_fn = {
-            let intrinsic = Intrinsic::find("llvm.stacksave").unwrap();
-            intrinsic.get_declaration(&self.module, &[]).unwrap()
-        };
-
-        let stack_ptr = self
-            .builder
-            .build_call(stack_save_fn, &[], "stack_save")
-            .try_as_basic_value()
-            .left()
-            .unwrap();
-
-        let storage_ptr = self.register_pointer(HOST_STACK_FRAME_STORAGE);
-        self.builder.build_store(storage_ptr, stack_ptr);
-    }
-
-    /// Restores the host stack frame from a global pointer.
-    /// Note: This must be called after `save_host_stack`, otherwise a null pointer will be dereferenced.
-    pub unsafe fn restore_host_stack(&self) {
-        let stack_restore_fn = {
-            let intrinsic = Intrinsic::find("llvm.stackrestore").unwrap();
-            intrinsic.get_declaration(&self.module, &[]).unwrap()
-        };
-
-        let ptr_type = self.context.i64_type().ptr_type(Default::default());
-        let storage_ptr = self.register_pointer(HOST_STACK_FRAME_STORAGE);
-        let stack_ptr = self.builder.build_load(ptr_type, storage_ptr, "stack_ptr");
-        self.builder
-            .build_call(stack_restore_fn, &[stack_ptr.into()], "stack_restore");
-    }
-
-    pub fn jump_function(&self) -> JitFunction<unsafe extern "C" fn(u64) -> !> {
-        let name = &self
-            .jump_helper
-            .as_ref()
-            .unwrap()
-            .get_name()
-            .to_str()
-            .unwrap();
-        unsafe { self.execution_engine.get_function(name).unwrap() }
     }
 
     /// Verify our module is valid.
@@ -301,7 +239,7 @@ impl<'ctx> CodeGen<'ctx> {
 
     fn set_call_attrs(&self, callsite_value: CallSiteValue<'ctx>) -> CallSiteValue<'ctx> {
         callsite_value.set_tail_call(true);
-        callsite_value.set_call_convention(LLVM_CALLING_CONVENTION_FAST);
+        callsite_value.set_call_convention(LLVM_CALLING_CONVENTION_TAILCC);
         for attr in function_attributes(self.context) {
             callsite_value.add_attribute(AttributeLoc::Function, attr);
         }
@@ -309,7 +247,7 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     fn set_func_attrs(&self, func: FunctionValue<'ctx>) -> FunctionValue<'ctx> {
-        func.set_call_conventions(LLVM_CALLING_CONVENTION_FAST);
+        func.set_call_conventions(LLVM_CALLING_CONVENTION_TAILCC);
         for attr in function_attributes(self.context) {
             func.add_attribute(AttributeLoc::Function, attr);
         }
@@ -339,7 +277,7 @@ impl<'ctx> CodeGen<'ctx> {
             &[address.into()],
             "build_jump",
         ));
-        self.builder.build_unreachable();
+        self.builder.build_return(None);
     }
 
     /// Generate a dynamic jump to the given dynamic virtual address, ending the current basic block.
@@ -352,7 +290,7 @@ impl<'ctx> CodeGen<'ctx> {
         if let Ok(lab) = self.labels.get(address) {
             // Check if we have previously compiled this function.
             self.set_call_attrs(self.builder.build_call(lab.function, &[], "constant_jump"));
-            self.builder.build_unreachable();
+            self.builder.build_return(None);
         } else {
             // Let the runtime environment JIT it, then jump to it.
             self.build_dynamic_jump(self.context.i64_type().const_int(address, false));
@@ -361,7 +299,7 @@ impl<'ctx> CodeGen<'ctx> {
 
     pub fn call_function(&self, func: FunctionValue<'ctx>) {
         self.set_call_attrs(self.builder.build_call(func, &[], "call_fn"));
-        self.builder.build_unreachable();
+        self.builder.build_return(None);
     }
 
     pub fn build_panic(&self, string: &str, storage_name: &str) {
@@ -505,7 +443,7 @@ impl<'ctx> CodeGen<'ctx> {
             .const_int(bad_vaddr.is_some() as u64, false);
         let bad_vaddr = bad_vaddr.unwrap_or_else(|| i64_type.const_zero());
 
-        env_call!(
+        let exception_vec_ptr = env_call!(
             self,
             RuntimeFunction::HandleException,
             [
@@ -515,9 +453,21 @@ impl<'ctx> CodeGen<'ctx> {
                 has_bad_vaddr,
                 bad_vaddr
             ]
-        );
+        )
+        .try_as_basic_value()
+        .left()
+        .unwrap()
+        .into_int_value();
+        self.build_jump_to_jit_func_ptr(exception_vec_ptr, "exception_vector");
+    }
 
-        self.builder.build_unreachable();
+    pub(crate) fn build_jump_to_jit_func_ptr(&self, host_ptr: IntValue<'ctx>, name: &str) {
+        let func_type = self.context.void_type().fn_type(&[], false);
+        let ptr_type = func_type.ptr_type(Default::default());
+        let ptr = self.builder.build_int_to_ptr(host_ptr, ptr_type, name);
+
+        self.set_call_attrs(self.builder.build_indirect_call(func_type, ptr, &[], name));
+        self.builder.build_return(None);
     }
 
     pub fn build_mask(&self, to_mask: IntValue<'ctx>, mask: u64, name: &str) -> IntValue<'ctx> {

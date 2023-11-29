@@ -22,10 +22,17 @@ mod label;
 mod recompiler;
 pub mod runtime;
 
-/// The "fast" calling convention, as defined by LLVM at https://llvm.org/doxygen/namespacellvm_1_1CallingConv.html.
-/// "Attempts to make calls as fast as possible (e.g. by passing things in registers)."
-// TODO: upstream this to inkwell
-const LLVM_CALLING_CONVENTION_FAST: u32 = 8;
+/// The "tailcc" calling convention, as defined by LLVM. It is described as follows:
+///
+/// "Attempts to make calls as fast as possible while guaranteeing that tail call optimization can always be performed."
+///
+/// Tail calls are important to us because the functions we generate are direct mappings to blocks of guest machine code,
+/// which can arbitrarily jump to other blocks. If we saved the return address on the stack when entering a block, it would overflow very quickly.
+///
+/// See the LLVM [language reference](https://releases.llvm.org/16.0.0/docs/LangRef.html#calling-conventions),
+/// and the `llvm::CallingConv` [namespace documentation](https://llvm.org/doxygen/namespacellvm_1_1CallingConv.html#a25d1d3b199fe3c8c6442ba8947b42be1ad6e9c0ff694f0fca0222e79e772b647e) for more information.
+// TODO: Upstream this enum to inkwell.
+const LLVM_CALLING_CONVENTION_TAILCC: u32 = 18;
 
 // TODO: move most of this Codegen. `JitBuilder::build()` should create the runtime::Environment,
 // which then initialises the entry point and helper functions. `Environment::run()` can start execution.
@@ -55,11 +62,8 @@ where
     // Build the main function.
     {
         env.codegen.builder.position_at_end(entry_block);
-        // Save the current stack frame, will be restored on every block to ensure no stack overflows occur.
-        // Its a rather bruteforce approach, but it works :)
-        env.codegen.save_host_stack();
-        env.codegen
-            .build_dynamic_jump(env.codegen.read_register(i64_type, register::Special::Pc));
+        let pc = env.codegen.read_register(i64_type, register::Special::Pc);
+        env.codegen.build_dynamic_jump(pc);
     }
 
     // Ensure the generated LLVM IR is valid.

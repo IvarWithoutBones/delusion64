@@ -147,13 +147,18 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
                 PanicAction::Kill => panic!("unrecoverable CPU error"),
                 PanicAction::Idle => loop {
                     // The thread will be killed externally.
-                    std::thread::sleep(std::time::Duration::from_secs(60))
+                    std::thread::park()
                 },
             }
         }
     }
 
-    pub(crate) fn handle_exception(&mut self, exception: Exception, coprocessor: Option<u8>) {
+    /// Updates the CPU state for the given exception, and returns a host pointer to the JIT'ed function containing the exception handler.
+    pub(crate) fn handle_exception(
+        &mut self,
+        exception: Exception,
+        coprocessor: Option<u8>,
+    ) -> usize {
         if self
             .registers
             .status()
@@ -189,10 +194,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         }
 
         self.registers[register::Cp0::Cause] = cause.raw() as u64;
-
-        // Will set PC for us
-        let jump_function = self.codegen.jump_function();
-        unsafe { jump_function.call(exception.vector() as u64) }
+        unsafe { self.get_function_ptr(exception.vector() as u64) }
     }
 
     /*
@@ -206,7 +208,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         coprocessor: u8,
         has_bad_vaddr: bool,
         bad_vaddr: u64,
-    ) {
+    ) -> usize {
         let exception = Exception::from_repr(code as usize).unwrap_or_else(|| {
             let msg = format!("invalid exception code {code:#x}");
             self.panic_update_debugger(&msg)
@@ -230,7 +232,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         }
 
         let cop = has_coprocessor.then_some(coprocessor);
-        self.handle_exception(exception, cop);
+        self.handle_exception(exception, cop)
     }
 
     unsafe extern "C" fn get_physical_address(&mut self, vaddr: u64) -> u32 {
@@ -351,7 +353,8 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         ptr
     }
 
-    unsafe extern "C" fn on_block_entered(&mut self, instructions_in_block: u64) {
+    /// Called whenever a block of JIT'ed code is entered. This returns a pointer to the exception handler if an interrupt is pending, otherwise null.
+    unsafe extern "C" fn on_block_entered(&mut self, instructions_in_block: u64) -> usize {
         // Trigger an timer interrupt if it would happen anywhere in this block.
         // We're doing this ahead of time to avoid trapping into the runtime environment to check on every instruction.
         let old_count = self.registers[register::Cp0::Count] as u32;
@@ -377,7 +380,10 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
 
         if self.interrupt_pending {
             self.interrupt_pending = false;
-            self.handle_exception(Exception::Interrupt, None);
+            self.handle_exception(Exception::Interrupt, None)
+        } else {
+            // Null pointer, must be checked by the caller.
+            0
         }
     }
 

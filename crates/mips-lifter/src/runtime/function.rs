@@ -76,8 +76,8 @@ impl RuntimeFunction {
             Self::Panic => sig!(void_type, [string_ptr: ptr_type, len: i64_type]),
             // `Environment::get_function_ptr(&mut self, vaddr: u64) -> usize`
             Self::GetFunctionPtr => sig!(i64_type, [vaddr: ptr_sized_int]),
-            // `Environment::on_block_entered(&mut self, instructions_in_block: u64)`
-            Self::OnBlockEntered => sig!(void_type, [instructions_in_block: i64_type]),
+            // `Environment::on_block_entered(&mut self, instructions_in_block: u64) -> usize`
+            Self::OnBlockEntered => sig!(ptr_sized_int, [instructions_in_block: i64_type]),
             // `Environment::on_instruction(&mut self)`
             Self::OnInstruction => sig!(void_type, []),
 
@@ -88,9 +88,9 @@ impl RuntimeFunction {
             //     coprocessor: u8,
             //     has_bad_vaddr: bool,
             //     bad_vaddr: u64,
-            // )`
+            // ) -> usize`
             Self::HandleException => {
-                sig!(void_type, [exception_code: i64_type, has_coprocessor: bool_type, coprocessor: i8_type, has_bad_vaddr: bool_type, bad_vaddr: i64_type])
+                sig!(ptr_sized_int, [exception_code: i64_type, has_coprocessor: bool_type, coprocessor: i8_type, has_bad_vaddr: bool_type, bad_vaddr: i64_type])
             }
             // `Environment::get_physical_address(&mut self, vaddr: u64) -> u32`
             Self::GetPhysicalAddress => sig!(i32_type, [vaddr: i64_type]),

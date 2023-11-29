@@ -2,7 +2,7 @@ use crate::{
     codegen::{function_attributes, CodeGen, FUNCTION_PREFIX},
     recompiler::{compile_instruction, compile_instruction_with_delay_slot},
     runtime::RuntimeFunction,
-    LLVM_CALLING_CONVENTION_FAST,
+    LLVM_CALLING_CONVENTION_TAILCC,
 };
 use inkwell::{attributes::AttributeLoc, context::Context, module::Module, values::FunctionValue};
 use mips_decomp::{instruction::ParsedInstruction, register, Label, INSTRUCTION_SIZE};
@@ -43,7 +43,7 @@ impl<'ctx> LabelWithContext<'ctx> {
 
         let void_fn_type = context.void_type().fn_type(&[], false);
         let function = module.add_function(&name, void_fn_type, None);
-        function.set_call_conventions(LLVM_CALLING_CONVENTION_FAST);
+        function.set_call_conventions(LLVM_CALLING_CONVENTION_TAILCC);
         for attr in function_attributes(context) {
             function.add_attribute(AttributeLoc::Function, attr);
         }
@@ -57,17 +57,33 @@ impl<'ctx> LabelWithContext<'ctx> {
         }
     }
 
-    pub fn compile(&self, codegen: &CodeGen<'ctx>, instr_callback: bool) {
+    fn on_block_entered(&self, codegen: &CodeGen<'ctx>) {
         let i64_type = codegen.context.i64_type();
-        let name = format!("block_{:06x}", self.label.start() * INSTRUCTION_SIZE);
-        let basic_block = codegen.context.append_basic_block(self.function, &name);
-        codegen.builder.position_at_end(basic_block);
 
+        // Write out the PC corresponding to this blocks starting address.
         let addr = i64_type.const_int(self.label.start() as u64, false);
         codegen.write_special_register(register::Special::Pc, addr);
 
+        // Trap into the runtime environment to poll interrupts, etc.
         let instrs_len = i64_type.const_int(self.label.instructions.len() as u64, false);
-        env_call!(codegen, RuntimeFunction::OnBlockEntered, [instrs_len]);
+        let maybe_exception_vec = env_call!(codegen, RuntimeFunction::OnBlockEntered, [instrs_len])
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_int_value();
+
+        // If an exception was raised, jump to the vector returned by the runtime environment. This is indicated by a non-null pointer.
+        let exception_occured = cmp!(codegen, maybe_exception_vec != 0);
+        codegen.build_if("exception_occured", exception_occured, || {
+            codegen.build_jump_to_jit_func_ptr(maybe_exception_vec, "exception_vector_jmp");
+        });
+    }
+
+    pub fn compile(&self, codegen: &CodeGen<'ctx>, instr_callback: bool) {
+        let name = format!("block_{:06x}", self.label.start() * INSTRUCTION_SIZE);
+        let basic_block = codegen.context.append_basic_block(self.function, &name);
+        codegen.builder.position_at_end(basic_block);
+        self.on_block_entered(codegen);
 
         let len = self.label.instructions.len();
         let mut i = 0;

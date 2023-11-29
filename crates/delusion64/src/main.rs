@@ -114,10 +114,7 @@ fn main() {
 
     if cli.headless {
         // Block until the emulator thread exits.
-        emu_thread.join().unwrap_or_else(|e| {
-            eprintln!("failed to join emulator thread: {e:?}");
-            std::process::exit(1);
-        });
+        emu_thread.join().expect("failed to join emulator thread")
     } else {
         // Exit immediately when the GUI is closed.
         UiBuilder::new("Delusion64", ui_context)
