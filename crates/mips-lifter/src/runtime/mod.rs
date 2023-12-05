@@ -120,11 +120,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
             func.map_into(&context, module, execution_engine, ptr);
         }
 
-        codegen::Globals {
-            stack_frame: Box::into_raw(Box::new(0_u64)),
-            env_ptr,
-            registers,
-        }
+        codegen::Globals { env_ptr, registers }
     }
 
     fn virtual_to_physical_address(&mut self, vaddr: u64, mode: AccessMode) -> u32 {

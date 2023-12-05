@@ -1,4 +1,4 @@
-use inkwell::{context::Context, execution_engine::JitFunction, OptimizationLevel};
+use inkwell::{context::Context, OptimizationLevel};
 use std::pin::Pin;
 
 pub use self::builder::JitBuilder;
@@ -35,8 +35,6 @@ pub mod runtime;
 // TODO: Upstream this enum to inkwell.
 const LLVM_CALLING_CONVENTION_TAILCC: u32 = 18;
 
-// TODO: move most of this Codegen. `JitBuilder::build()` should create the runtime::Environment,
-// which then initialises the entry point and helper functions. `Environment::run()` can start execution.
 pub(crate) fn run<Bus>(builder: JitBuilder<true, Bus>) -> Bus
 where
     Bus: runtime::bus::Bus,
@@ -51,33 +49,11 @@ where
         .create_jit_execution_engine(OptimizationLevel::None)
         .unwrap();
 
-    // Create the main function.
-    let fn_type = context.void_type().fn_type(&[], false);
-    let i64_type = context.i64_type();
-    let main = module.add_function("main", fn_type, None);
-    let entry_block = context.append_basic_block(main, "entry");
-
     // Create the compilation/runtime environment.
     let env = runtime::Environment::new(builder, &context, module, execution_engine);
 
-    // Build the main function.
-    {
-        env.codegen.builder.position_at_end(entry_block);
-        let pc = env.codegen.read_register(i64_type, register::Special::Pc);
-        env.codegen.build_dynamic_jump(pc);
-    }
-
-    // Ensure the generated LLVM IR is valid.
-    if let Err(err) = env.codegen.verify() {
-        eprintln!("\nERROR: Generated code failed to verify:\n\n{err}\nTerminating.");
-        panic!()
-    }
-
-    let main_fn: JitFunction<unsafe extern "C" fn()> =
-        unsafe { env.codegen.execution_engine.get_function("main").unwrap() };
-
-    // Run the generated code!
-    unsafe { main_fn.call() };
+    // Start JITing guest code by compiling the given PC register. This function will only return once Bus requests an exit.
+    unsafe { env.codegen.main().call() };
 
     // SAFETY: The runtime environment is pinned because it is self-referential:
     // It owns both the guest registers and the JIT functions which utilise them through raw pointers,

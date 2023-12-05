@@ -1,4 +1,4 @@
-use self::{address_map::VirtualAddressMap, register::BitWidth};
+use self::{address_map::VirtualAddressMap, init::Helpers, register::BitWidth};
 use crate::{
     label::{JitFunctionPointer, LabelWithContext},
     runtime::RuntimeFunction,
@@ -14,11 +14,12 @@ use inkwell::{
     types::IntType,
     values::{CallSiteValue, FunctionValue, GlobalValue, IntValue},
 };
-use mips_decomp::{instruction::ParsedInstruction, Exception, INSTRUCTION_SIZE};
+use mips_decomp::{instruction::ParsedInstruction, Exception};
 
 #[macro_use]
 mod comparison;
 pub(crate) mod address_map;
+mod init;
 mod register;
 
 pub(crate) use register::{INSIDE_DELAY_SLOT_STORAGE, RESERVED_CP0_REGISTER_LATCH};
@@ -63,8 +64,6 @@ pub struct RegisterGlobals<'ctx> {
 pub struct Globals<'ctx> {
     pub env_ptr: GlobalValue<'ctx>,
     pub registers: RegisterGlobals<'ctx>,
-    // NOTE: The backing memory must be externally managed, so that the pointer remains valid across module reloads.
-    pub stack_frame: *mut u64,
 }
 
 #[derive(Debug)]
@@ -79,17 +78,11 @@ pub struct CodeGen<'ctx> {
     pub module: Module<'ctx>,
     pub builder: Builder<'ctx>,
     pub execution_engine: ExecutionEngine<'ctx>,
-
-    /// Every single module we compiled. We need to keep these around to cleanly shut down LLVM.
-    pub modules: Vec<Module<'ctx>>,
-
     pub labels: VirtualAddressMap<'ctx>,
     globals: Option<Globals<'ctx>>,
-
-    jump_helper: Option<FunctionValue<'ctx>>,
-    // Separate functions so that we can patch calls to them at runtime in the future, without worrying about arguments.
-    fallthrough_one_helper: Option<FunctionValue<'ctx>>,
-    fallthrough_two_helper: Option<FunctionValue<'ctx>>,
+    helpers: Helpers<'ctx>,
+    /// Every single module we compiled. We need to keep these around to cleanly shut down LLVM.
+    pub modules: Vec<Module<'ctx>>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -102,74 +95,12 @@ impl<'ctx> CodeGen<'ctx> {
             modules: vec![],
             context,
             module,
+            helpers: Helpers::new(),
             builder: context.create_builder(),
             execution_engine,
             globals: None,
             labels: VirtualAddressMap::new(),
-            jump_helper: None,
-            fallthrough_one_helper: None,
-            fallthrough_two_helper: None,
         }
-    }
-
-    pub fn initialise(&mut self, globals: Globals<'ctx>) {
-        self.globals = Some(globals);
-        self.with_jump_helper();
-        self.with_fallthrough_helpers();
-    }
-
-    fn with_jump_helper(&mut self) {
-        let i64_type = self.context.i64_type();
-        let void_type = self.context.void_type();
-
-        // Generate the function signature
-        let func = self.set_func_attrs(self.module.add_function(
-            "jump_to_vaddr",
-            void_type.fn_type(&[i64_type.into()], false),
-            None,
-        ));
-
-        // Generate the function body.
-        let block = self.context.append_basic_block(func, "entry");
-        self.builder.position_at_end(block);
-        {
-            let address = func.get_first_param().unwrap().into_int_value();
-            let ptr = env_call!(&self, RuntimeFunction::GetFunctionPtr, [address])
-                .try_as_basic_value()
-                .left()
-                .unwrap()
-                .into_int_value();
-            self.build_jump_to_jit_func_ptr(ptr, "jump_fn_call")
-        }
-
-        self.jump_helper = Some(func);
-    }
-
-    fn with_fallthrough_helpers(&mut self) {
-        let make_func = |codegen: &Self, amount: u64, name: &str| -> FunctionValue<'ctx> {
-            // Generate the function declaration.
-            let func = codegen.set_func_attrs(codegen.module.add_function(
-                name,
-                codegen.context.void_type().fn_type(&[], false),
-                None,
-            ));
-
-            // Generate the function body.
-            let block = codegen.context.append_basic_block(func, "entry");
-            codegen.builder.position_at_end(block);
-            {
-                let i64_type = codegen.context.i64_type();
-                let pc = codegen.read_register(i64_type, mips_decomp::register::Special::Pc);
-                let offset = i64_type.const_int(amount * INSTRUCTION_SIZE as u64, false);
-                let new_pc = codegen.builder.build_int_add(pc, offset, "new_pc");
-                codegen.build_dynamic_jump(new_pc);
-            }
-
-            func
-        };
-
-        self.fallthrough_one_helper = Some(make_func(self, 1, "fallthrough_one_instruction"));
-        self.fallthrough_two_helper = Some(make_func(self, 2, "fallthrough_two_instructions"));
     }
 
     /// Get a host pointer to a function which simply returns.
@@ -201,8 +132,8 @@ impl<'ctx> CodeGen<'ctx> {
 
     pub fn fallthrough_function(&self, amount: FallthroughAmount) -> FunctionValue<'ctx> {
         match amount {
-            FallthroughAmount::One => self.fallthrough_one_helper.unwrap(),
-            FallthroughAmount::Two => self.fallthrough_two_helper.unwrap(),
+            FallthroughAmount::One => self.helpers.fallthrough_one(),
+            FallthroughAmount::Two => self.helpers.fallthrough_two(),
         }
     }
 
@@ -301,7 +232,7 @@ impl<'ctx> CodeGen<'ctx> {
 
     fn build_jump(&self, address: IntValue<'ctx>) {
         self.set_call_attrs(self.builder.build_call(
-            self.jump_helper.unwrap(),
+            self.helpers.jump(),
             &[address.into()],
             "build_jump",
         ));
