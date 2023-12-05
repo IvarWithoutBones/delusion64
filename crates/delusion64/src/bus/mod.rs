@@ -23,7 +23,11 @@ fn boxed_array<T: Default + Clone, const LEN: usize>() -> Box<[T; LEN]> {
     unsafe { result.try_into().unwrap_unchecked() }
 }
 
+/// The amount of CPU instructions to execute before checking for GUI events.
+const GUI_POLL_RATE: usize = 100_000;
+
 pub struct Bus {
+    gui_poll_counter: usize,
     rdram: Box<[u8; BusSection::RdramMemory.len()]>,
     rsp_dmem: Box<[u8; BusSection::RspDMemory.len()]>,
     rsp_imem: Box<[u8; BusSection::RspIMemory.len()]>,
@@ -73,6 +77,7 @@ impl Bus {
             .unwrap();
 
         Self {
+            gui_poll_counter: GUI_POLL_RATE,
             rdram,
             rsp_dmem,
             rsp_imem: boxed_array(),
@@ -135,6 +140,21 @@ impl Bus {
                 .map_err(BusError::PifError)?;
         }
         Ok(())
+    }
+
+    fn maybe_poll_gui_events(&mut self, cycles: usize, v: &mut BusValue<()>) {
+        self.gui_poll_counter = self
+            .gui_poll_counter
+            .checked_sub(cycles)
+            .unwrap_or_else(|| {
+                if let Some(stop) = self.context.receive() {
+                    // TODO: allow placing generics on receive()
+                    let _: emgui::context::Stop = stop;
+                    v.request_exit = true;
+                }
+
+                GUI_POLL_RATE
+            });
     }
 }
 
@@ -382,11 +402,7 @@ impl BusInterface for Bus {
 
     fn tick(&mut self, cycles: usize) -> BusResult<(), Self::Error> {
         let mut result = BusValue::default();
-
-        if let Some(stop) = self.context.receive() {
-            let _: emgui::context::Stop = stop;
-            result.request_exit = true;
-        }
+        self.maybe_poll_gui_events(cycles, &mut result);
 
         // TODO: how does timing compare to the CPU?
 
