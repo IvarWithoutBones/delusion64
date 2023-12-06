@@ -1,0 +1,9 @@
+[package]
+name = "n64-rsp"
+description = "The Reality Signal Processor, commonly referred to as the RSP, for the Nintendo 64."
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tartan-bitfield = "1.2.0"
+thiserror = "1.0.50"

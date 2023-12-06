@@ -17,7 +17,7 @@ pub struct BusValue<T> {
     /// The mask of the external interrupt(s) that was triggered by this operation, if any.
     /// Only external interrupts should be set, which occupy bits 2..=6.
     pub interrupt: Option<u8>,
-    /// Whether the JIT should exit after this operation, returning to the caller of [`JitBuilder::run`].
+    /// Whether the JIT should exit after this operation, returning to the caller of [`crate::builder::JitBuilder::run`].
     pub request_exit: bool,
 }
 
@@ -110,7 +110,7 @@ impl<T: fmt::Debug> fmt::Debug for BusError<T> {
 
 pub type BusResult<T, E> = Result<BusValue<T>, BusError<E>>;
 
-/// A trait for types that can be converted into an Int<SIZE>. Much like std::convert::Into, but with a const generic size.
+/// A trait for types that can be converted into an [`Int`]. Much like [`std::convert::Into`], but with a const generic size.
 pub trait IntoInt<const SIZE: usize> {
     fn into_int(self) -> Int<SIZE>;
 }

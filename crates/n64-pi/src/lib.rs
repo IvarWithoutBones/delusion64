@@ -1,5 +1,5 @@
 //! The Peripheral Interface (PI), used for communication with the cartridge and disk drive.
-//! See https://n64brew.dev/wiki/Peripheral_Interface, and https://github.com/Dillonb/n64-resources/blob/master/pi_dma.org.
+//! See [n64brew](https://n64brew.dev/wiki/Peripheral_Interface), and [Dillonb's DMA documentation](https://github.com/Dillonb/n64-resources/blob/master/pi_dma.org).
 
 use self::register::{
     CartAddress, DramAddress, Latch, PageSize, PulseWidth, ReadLength, Register, Release, Status,
@@ -28,18 +28,18 @@ pub enum PiError {
 
 pub type PiResult<T> = Result<T, PiError>;
 
-/// See https://n64brew.dev/wiki/Peripheral_Interface#Domains.
+/// See [n64brew](https://n64brew.dev/wiki/Peripheral_Interface#Domains).
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Domain {
     One,
     Two,
 }
 
-/// See https://n64brew.dev/wiki/Peripheral_Interface#Domains.
+/// See [n64brew](https://n64brew.dev/wiki/Peripheral_Interface#Domains).
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Region {
     /// Writes to this region will be ignored, while reads will return open-bus data.
-    /// See https://n64brew.dev/wiki/Peripheral_Interface#Open_bus_behavior.
+    /// See [n64brew](https://n64brew.dev/wiki/Peripheral_Interface#Open_bus_behavior).
     Unknown,
     DiskDriveRegisters,
     DiskDriveRom,
@@ -111,7 +111,7 @@ pub enum DmaStatus {
 }
 
 /// The Peripheral Interface (PI), used for communication with the cartridge and disk drive.
-/// See https://n64brew.dev/wiki/Peripheral_Interface.
+/// See [n64brew](https://n64brew.dev/wiki/Peripheral_Interface).
 #[derive(Default, Debug, PartialEq, Eq)]
 pub struct PeripheralInterface {
     cartridge: Box<[u8]>,

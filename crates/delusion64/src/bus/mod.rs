@@ -10,7 +10,8 @@ use mips_lifter::{
 use n64_cartridge::Cartridge;
 use n64_mi::{InterruptType, MiError, MipsInterface};
 use n64_pi::{DmaStatus, PeripheralInterface, PiError};
-use n64_si::{Channel, SerialInterface, SiError};
+use n64_rsp::{MemoryBank as RspBank, Rsp, RspError};
+use n64_si::{Channel, PifError, SerialInterface, SiError};
 use n64_vi::VideoInterface;
 
 pub mod location;
@@ -27,10 +28,8 @@ fn boxed_array<T: Default + Clone, const LEN: usize>() -> Box<[T; LEN]> {
 const GUI_POLL_RATE: usize = 100_000;
 
 pub struct Bus {
-    gui_poll_counter: usize,
     rdram: Box<[u8; BusSection::RdramMemory.len()]>,
-    rsp_dmem: Box<[u8; BusSection::RspDMemory.len()]>,
-    rsp_imem: Box<[u8; BusSection::RspIMemory.len()]>,
+    rsp: Rsp,
     pi: PeripheralInterface,
     mi: MipsInterface,
     vi: VideoInterface,
@@ -41,6 +40,7 @@ pub struct Bus {
     // GUI stuff
     pub context: context::Emulator<ControllerEvent>,
     gui_connected: bool,
+    gui_poll_counter: usize,
 }
 
 impl Bus {
@@ -56,11 +56,6 @@ impl Bus {
             array[..len].copy_from_slice(&rom[..len]);
             array
         };
-
-        // Copy the first 0x1000 bytes of the PIF ROM to the RSP DMEM, simulating IPL2.
-        let mut rsp_dmem = boxed_array();
-        let len = rsp_dmem.len().min(cartridge_rom.len());
-        rsp_dmem[..len].copy_from_slice(&cartridge_rom[..len]);
 
         // Write the length of RDRAM to the appropriate offset, simulating IPL.
         let mut rdram = boxed_array();
@@ -79,8 +74,7 @@ impl Bus {
         Self {
             gui_poll_counter: GUI_POLL_RATE,
             rdram,
-            rsp_dmem,
-            rsp_imem: boxed_array(),
+            rsp: Rsp::new(cartridge_rom.as_ref()),
             pi: PeripheralInterface::new(cartridge_rom, cartridge.header.pi_bsd_domain_1_flags),
             mi: MipsInterface::new(),
             vi: VideoInterface::new(),
@@ -125,6 +119,14 @@ impl Bus {
                     Ok(())
                 }),
             },
+            MonitorCommand {
+                name: "rsp",
+                description: "print the RSP status",
+                handler: Box::new(|bus, out, _args| {
+                    writeln!(out, "{:#x?}", bus.rsp)?;
+                    Ok(())
+                }),
+            },
         ]
     }
 
@@ -163,7 +165,8 @@ pub enum BusError {
     MipsInterfaceError(MiError),
     PeripheralInterfaceError(PiError),
     SerialInterfaceError(SiError),
-    PifError(n64_si::PifError),
+    PifError(PifError),
+    RspError(RspError),
     UnmappedAddress(u32),
     ReadOnlyRegionWrite(BusSection),
     WriteOnlyRegionRead(BusSection),
@@ -205,8 +208,6 @@ impl BusInterface for Bus {
     ) -> BusResult<Int<SIZE>, Self::Error> {
         let value = match address.section {
             BusSection::RdramMemory => Int::from_slice(&self.rdram[address.offset..]),
-            BusSection::RspDMemory => Int::from_slice(&self.rsp_dmem[address.offset..]),
-            BusSection::RspIMemory => Int::from_slice(&self.rsp_imem[address.offset..]),
 
             // TODO: dont stub these so naively, only here so namco museum and libdragon assume its initialized.
             BusSection::AudioInterface => Int::from_slice(&u32::MAX.to_be_bytes()),
@@ -246,6 +247,24 @@ impl BusInterface for Bus {
                 self.si
                     .read_pif_rom::<SIZE>(address.offset)
                     .map_err(BusError::SerialInterfaceError)?,
+            ),
+
+            BusSection::RspDMemory => Int::from_slice(
+                self.rsp
+                    .read_sp_memory::<SIZE>(RspBank::DMem, address.offset)
+                    .map_err(BusError::RspError)?,
+            ),
+
+            BusSection::RspIMemory => Int::from_slice(
+                self.rsp
+                    .read_sp_memory::<SIZE>(RspBank::IMem, address.offset)
+                    .map_err(BusError::RspError)?,
+            ),
+
+            BusSection::RspRegisters => Int::new(
+                self.rsp
+                    .read_register(address.offset)
+                    .map_err(BusError::RspError)?,
             ),
 
             BusSection::CartridgeRom | BusSection::CartridgeSram => Int::new(
@@ -307,20 +326,6 @@ impl BusInterface for Bus {
         match address.section {
             BusSection::RdramMemory => self.rdram[range].copy_from_slice(value.as_slice()),
 
-            BusSection::RspDMemory | BusSection::RspIMemory => {
-                // 64-bit values are truncated to 32 bits, while 8-bit and 16-bit values are zero-extended.
-                let range = address.offset..address.offset + 4;
-                let mut slice = [0_u8; 4];
-                let len = slice.len().min(SIZE);
-                slice[..len].copy_from_slice(&value.as_slice()[..len]);
-
-                match address.section {
-                    BusSection::RspDMemory => self.rsp_dmem[range].copy_from_slice(&slice),
-                    BusSection::RspIMemory => self.rsp_imem[range].copy_from_slice(&slice),
-                    _ => unreachable!(),
-                }
-            }
-
             BusSection::RdpCommandRegisters => {
                 // TODO: Properly implement the RDP. This is a hack to get past rdp_detach from libdragon.
                 if address.offset == 4 {
@@ -338,6 +343,35 @@ impl BusInterface for Bus {
                 .mi
                 .write(address.offset, value.try_into()?)
                 .map_err(BusError::MipsInterfaceError)?,
+
+            BusSection::RspDMemory => self
+                .rsp
+                .write_sp_memory::<SIZE>(RspBank::DMem, address.offset, value.as_slice())
+                .map_err(BusError::RspError)?,
+
+            BusSection::RspIMemory => self
+                .rsp
+                .write_sp_memory::<SIZE>(RspBank::IMem, address.offset, value.as_slice())
+                .map_err(BusError::RspError)?,
+
+            BusSection::RspRegisters => {
+                let side_effects = self
+                    .rsp
+                    .write_register(address.offset, value.try_into()?)
+                    .map_err(BusError::RspError)?;
+                if let Some(mi_change) = side_effects.interrupt {
+                    match mi_change {
+                        n64_rsp::InterruptChange::Set => {
+                            if self.mi.raise_interrupt(InterruptType::Rsp) {
+                                result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
+                            }
+                        }
+                        n64_rsp::InterruptChange::Clear => {
+                            self.mi.lower_interrupt(InterruptType::Rsp);
+                        }
+                    }
+                }
+            }
 
             BusSection::VideoInterface => {
                 let side_effects = self

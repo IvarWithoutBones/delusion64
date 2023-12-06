@@ -4,7 +4,7 @@ use mips_lifter::runtime::bus::{MemorySection, Mirroring, PhysicalAddress};
 use std::ops::Range;
 
 /// Memory regions in the physical memory map of the N64.
-/// See https://n64brew.dev/wiki/Memory_map#Physical_Memory_Map.
+/// See [n64brew](https://n64brew.dev/wiki/Memory_map#Physical_Memory_Map).
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum BusSection {
     RdramMemory,
@@ -93,7 +93,6 @@ impl BusSection {
             self,
             |BusSection::RdramInterface| BusSection::RdramRegisters
                 | BusSection::RdramRegistersWriteOnly
-                | BusSection::RspRegisters
                 | BusSection::DiskDriveRegisters
                 | BusSection::AudioInterface
                 | BusSection::RdpCommandRegisters

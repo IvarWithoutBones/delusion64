@@ -1,5 +1,5 @@
 //! Memory-mapped registers for the Peripheral Interface (PI).
-//! See https://n64brew.dev/wiki/Peripheral_Interface#Registers
+//! See [n64brew](https://n64brew.dev/wiki/Peripheral_Interface#Registers).
 
 use crate::PiError;
 
@@ -7,7 +7,7 @@ use super::Domain;
 use tartan_bitfield::bitfield;
 
 bitfield! {
-    /// https://n64brew.dev/wiki/Peripheral_Interface#0x0460_0000_-_PI_DRAM_ADDR
+    /// See [n64brew](https://n64brew.dev/wiki/Peripheral_Interface#0x0460_0000_-_PI_DRAM_ADDR).
     /// Note that DMA transfers are buggy if DRAM_ADDR[2:0] are not all zero.
     pub struct DramAddress(u32) {
         /// Base address of RDRAM for PI DMAs. Bit 0 must always be 0.
@@ -16,7 +16,7 @@ bitfield! {
 }
 
 bitfield! {
-    /// https://n64brew.dev/wiki/Peripheral_Interface#0x0460_0004_-_PI_CART_ADDR
+    /// See [n64brew](https://n64brew.dev/wiki/Peripheral_Interface#0x0460_0004_-_PI_CART_ADDR).
     pub struct CartAddress(u32) {
         /// Base address of the PI bus (e.g. cartridge) for PI DMAs. Bit 0 must always be 0.
         [0..=31] pub address: u32,
@@ -24,7 +24,7 @@ bitfield! {
 }
 
 bitfield! {
-    /// https://n64brew.dev/wiki/Peripheral_Interface#0x0460_0008_-_PI_RD_LEN
+    /// See [n64brew](https://n64brew.dev/wiki/Peripheral_Interface#0x0460_0008_-_PI_RD_LEN).
     /// Writing to this register will start the DMA transfer.
     pub struct ReadLength(u32) {
         /// Number of bytes, minus one, to be transferred from RDRAM, to the PI bus.
@@ -38,7 +38,7 @@ impl ReadLength {
 }
 
 bitfield! {
-    /// https://n64brew.dev/wiki/Peripheral_Interface#0x0460_000C_-_PI_WR_LEN
+    /// See [n64brew](https://n64brew.dev/wiki/Peripheral_Interface#0x0460_000C_-_PI_WR_LEN).
     /// Writing to this register will start the DMA transfer.
     pub struct WriteLength(u32) {
         /// Number of bytes, minus one, to be transferred from the PI bus, into RDRAM.
@@ -52,7 +52,7 @@ impl WriteLength {
 }
 
 bitfield! {
-    /// https://n64brew.dev/wiki/Peripheral_Interface#0x0460_0010_-_PI_STATUS
+    /// See [n64brew](https://n64brew.dev/wiki/Peripheral_Interface#0x0460_0010_-_PI_STATUS).
     pub struct Status(u32) {
         // For reading
         [0] pub dma_busy,
@@ -66,7 +66,7 @@ bitfield! {
 }
 
 bitfield! {
-    /// https://n64brew.dev/wiki/Peripheral_Interface#0x0460_00n4_-_PI_BSD_DOMn_LAT
+    /// See [n64brew](https://n64brew.dev/wiki/Peripheral_Interface#0x0460_00n4_-_PI_BSD_DOMn_LAT).
     // TODO: Configured to use the value from the cartridge header during IPL2.
     pub struct Latch(u32) {
         /// The number of RCP cycles, minus one, after the address has been sent,
@@ -76,7 +76,7 @@ bitfield! {
 }
 
 bitfield! {
-    /// https://n64brew.dev/wiki/Peripheral_Interface#0x0460_00n8_-_PI_BSD_DOMn_PWD
+    /// See [n64brew](https://n64brew.dev/wiki/Peripheral_Interface#0x0460_00n8_-_PI_BSD_DOMn_PWD).
     /// During IPL2, the N64 will initialize `Domain::One`'s `PulseWidth` using data read from the ROM header.
     pub struct PulseWidth(u32) {
         /// The number of RCP cycles, minus one, the `/RD` or `/WR` signals are held low.
@@ -86,7 +86,7 @@ bitfield! {
 
 bitfield! {
     /// Only matters for DMA transfers; all direct accesses via the PI are only ever 32 bits wide.
-    /// https://n64brew.dev/wiki/Peripheral_Interface#0x0460_00nC_-_PI_BSD_DOMn_PGS
+    /// See [n64brew](https://n64brew.dev/wiki/Peripheral_Interface#0x0460_00nC_-_PI_BSD_DOMn_PGS).
     pub struct PageSize(u32) {
         /// The number of bytes that can be sequentially read/written on the bus, before sending the next base address.
         [0..=3] page_size: u32,
@@ -103,7 +103,7 @@ impl PageSize {
 
 bitfield! {
     /// During IPL2, the N64 will initialize `Domain::One`'s `Release` using data read from the ROM header.
-    /// https://n64brew.dev/wiki/Peripheral_Interface#0x0460_00n0_-_PI_BSD_DOMn_RLS
+    /// See [n64brew](https://n64brew.dev/wiki/Peripheral_Interface#0x0460_00n0_-_PI_BSD_DOMn_RLS).
     pub struct Release(u32) {
         /// the number of RCP cycles, minus one, that the read/write signals are held high between each 16-bits of data.
         [0..=1] pub release: u32,

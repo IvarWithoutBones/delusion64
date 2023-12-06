@@ -593,6 +593,7 @@ dependencies = [
  "n64-cartridge",
  "n64-mi",
  "n64-pi",
+ "n64-rsp",
  "n64-si",
  "n64-vi",
  "strum",
@@ -1502,6 +1503,14 @@ version = "0.1.0"
 dependencies = [
  "strum",
  "tartan-bitfield",
+]
+
+[[package]]
+name = "n64-rsp"
+version = "0.1.0"
+dependencies = [
+ "tartan-bitfield",
+ "thiserror",
 ]
 
 [[package]]

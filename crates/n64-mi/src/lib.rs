@@ -133,7 +133,7 @@ impl From<Mask> for Register {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum InterruptType {
-    RspBreak = 0,
+    Rsp = 0,
     SerialInterface = 1,
     AudioInterface = 2,
     VideoInterface = 3,
@@ -275,7 +275,7 @@ impl MipsInterface {
     /// Sets the interrupt bit for the given interrupt type, returning whether to raise an interrupt or not by masking.
     fn set_interrupt(&mut self, interrupt: InterruptType, value: bool) -> bool {
         match interrupt {
-            InterruptType::RspBreak => self.interrupt.set_sp(value),
+            InterruptType::Rsp => self.interrupt.set_sp(value),
             InterruptType::SerialInterface => self.interrupt.set_si(value),
             InterruptType::AudioInterface => self.interrupt.set_ai(value),
             InterruptType::VideoInterface => self.interrupt.set_vi(value),

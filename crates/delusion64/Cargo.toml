@@ -15,5 +15,6 @@ n64-pi = { path = "../n64-pi" }
 n64-mi = { path = "../n64-mi" }
 n64-vi = { path = "../n64-vi" }
 n64-si = { path = "../n64-si" }
+n64-rsp = { path = "../n64-rsp" }
 clap = { version = "4.3.11", features = ["derive"] }
 strum = { version = "0.25.0", features = ["derive"] }
