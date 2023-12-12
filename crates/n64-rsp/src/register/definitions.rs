@@ -1,4 +1,4 @@
-use crate::{InterruptChange, MemoryBank, RspError, RspResult, SideEffects};
+use crate::{InterruptChange, MemoryBank};
 use std::fmt;
 use tartan_bitfield::{bitfield, bitfield_without_debug};
 
@@ -29,6 +29,14 @@ impl DmaSpAddress {
             MemoryBank::DMem
         }
     }
+
+    pub fn increment(&mut self) {
+        self.set_unmasked_address(self.address() + 8);
+        if self.address() as usize > self.bank().len() {
+            // Overflows wrap around within the same bank
+            self.set_unmasked_address(0);
+        }
+    }
 }
 
 impl fmt::Debug for DmaSpAddress {
@@ -43,12 +51,12 @@ impl fmt::Debug for DmaSpAddress {
 bitfield_without_debug! {
     /// Address in RDRAM for a DMA transfer.
     /// See [n64brew](https://n64brew.dev/wiki/Reality_Signal_Processor/Interface#SP_DMA_RAMADDR) for more information.
-    pub struct DmaDramAddress(u32) {
+    pub struct DmaRdramAddress(u32) {
         [0..=23] unmasked_address: u32,
     }
 }
 
-impl DmaDramAddress {
+impl DmaRdramAddress {
     pub const OFFSET: usize = 0x04;
 
     /// RDRAM address used in SP DMAs
@@ -56,20 +64,23 @@ impl DmaDramAddress {
     pub fn address(self) -> u32 {
         self.unmasked_address() & !0b111
     }
+
+    pub fn increment(&mut self) {
+        self.set_unmasked_address(self.address() + 8);
+    }
 }
 
-impl fmt::Debug for DmaDramAddress {
+impl fmt::Debug for DmaRdramAddress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("DmaDramAddress")
+        f.debug_struct("DmaRdramAddress")
             .field("address", &self.address())
             .finish()
     }
 }
 
-bitfield_without_debug! {
-    /// Length of a DMA transfer. Writing this register triggers a DMA transfer from RDRAM to IMEM/DMEM.
-    /// See [n64brew](https://n64brew.dev/wiki/Reality_Signal_Processor/Interface#SP_DMA_RDLEN) for more information.
-    pub struct DmaReadLength(u32) {
+bitfield! {
+    /// The combined definition of DmaReadLength and DmaWriteLength, they are identical.
+    struct DmaLength(u32) {
         [0..=11] unmasked_length: u32,
         /// Number of rows to transfer minus 1.
         [12..=19] pub count: u8,
@@ -77,19 +88,58 @@ bitfield_without_debug! {
     }
 }
 
-impl DmaReadLength {
-    pub const OFFSET: usize = 0x08;
+impl DmaLength {
+    // This the last block of a DMA transfer will set our length counter to -8, which translates to 0xFF8 for 11-bit integers.
+    const MINUS_8: u32 = 0xFF8;
 
     /// Number of bytes to transfer for each row minus 1
     #[must_use]
     pub fn length(self) -> u32 {
-        self.unmasked_length() & !0b111
+        // From n64-systemtest: "[..] 1 is added and then it is rounded up to the next multiple of 8 (e.g. 0..7 ==> 8 bytes, 8..15 => 16 bytes)"
+        (self.unmasked_length() + 1 + 7) & !0b111
     }
 
     /// Number of bytes to skip in RDRAM after each row
     #[must_use]
     pub fn skip(self) -> u32 {
         self.unmasked_skip() & !0b111
+    }
+
+    pub fn decrement(&mut self) {
+        let len = self
+            .unmasked_length()
+            .checked_sub(8)
+            .unwrap_or(Self::MINUS_8);
+        self.set_unmasked_length(len);
+    }
+}
+
+/// Length of a DMA transfer. Writing this register triggers a DMA transfer from RDRAM to IMEM/DMEM.
+/// See [n64brew](https://n64brew.dev/wiki/Reality_Signal_Processor/Interface#SP_DMA_RDLEN) for more information.
+#[derive(Default, Copy, Clone, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct DmaReadLength(DmaLength);
+
+impl DmaReadLength {
+    pub const OFFSET: usize = 0x08;
+}
+
+impl DmaReadLength {
+    /// Number of bytes to transfer for each row minus 1
+    #[must_use]
+    pub fn length(self) -> u32 {
+        self.0.length()
+    }
+
+    /// Number of bytes to skip in RDRAM after each row
+    #[must_use]
+    pub fn skip(self) -> u32 {
+        self.0.skip()
+    }
+
+    /// Decrement the length counter by 8 bytes
+    pub fn decrement(&mut self) {
+        self.0.decrement();
     }
 }
 
@@ -97,46 +147,72 @@ impl fmt::Debug for DmaReadLength {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DmaReadLength")
             .field("length", &self.length())
-            .field("count", &self.count())
+            .field("count", &self.0.count())
             .field("skip", &self.skip())
             .finish()
     }
 }
 
-bitfield_without_debug! {
-    /// Length of a DMA transfer. Writing this register triggers a DMA transfer from IMEM/DMEM to RDRAM.
-    /// See [n64brew](https://n64brew.dev/wiki/Reality_Signal_Processor/Interface#SP_DMA_WRLEN) for more information.
-    pub struct DmaWriteLength(u32) {
-        [0..=11] unmasked_length: u32,
-        /// Number of rows to transfer minus 1.
-        [12..=19] pub count: u8,
-        [21..=31] unmasked_skip: u32,
+impl From<u32> for DmaReadLength {
+    fn from(raw: u32) -> Self {
+        Self(DmaLength(raw))
     }
 }
 
+impl From<DmaReadLength> for u32 {
+    fn from(len: DmaReadLength) -> Self {
+        len.0.into()
+    }
+}
+
+/// Length of a DMA transfer. Writing this register triggers a DMA transfer from IMEM/DMEM to RDRAM.
+/// See [n64brew](https://n64brew.dev/wiki/Reality_Signal_Processor/Interface#SP_DMA_WRLEN) for more information.
+#[derive(Default, Copy, Clone, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct DmaWriteLength(DmaLength);
+
 impl DmaWriteLength {
     pub const OFFSET: usize = 0x0C;
+}
 
+impl DmaWriteLength {
     /// Number of bytes to transfer for each row minus 1
     #[must_use]
     pub fn length(self) -> u32 {
-        self.unmasked_length() & !0b111
+        self.0.length()
     }
 
     /// Number of bytes to skip in RDRAM after each row
     #[must_use]
     pub fn skip(self) -> u32 {
-        self.unmasked_skip() & !0b111
+        self.0.skip()
+    }
+
+    /// Decrement the length counter by 8 bytes
+    pub fn decrement(&mut self) {
+        self.0.decrement();
     }
 }
 
 impl fmt::Debug for DmaWriteLength {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("DmaWriteLength")
+        f.debug_struct(stringify!(DmaWriteLength))
             .field("length", &self.length())
-            .field("count", &self.count())
+            .field("count", &self.0.count())
             .field("skip", &self.skip())
             .finish()
+    }
+}
+
+impl From<u32> for DmaWriteLength {
+    fn from(raw: u32) -> Self {
+        Self(DmaLength(raw))
+    }
+}
+
+impl From<DmaWriteLength> for u32 {
+    fn from(len: DmaWriteLength) -> Self {
+        len.0.into()
     }
 }
 
@@ -308,105 +384,16 @@ impl SpSemaphore {
     }
 }
 
-#[derive(Debug)]
-struct DoubleBuffered<T> {
-    current: T,
-    next: T,
-}
-
-impl<T: Default> Default for DoubleBuffered<T> {
-    fn default() -> Self {
-        Self {
-            current: T::default(),
-            next: T::default(),
-        }
-    }
-}
-
-impl<T> DoubleBuffered<T> {
-    fn get(&self) -> &T {
-        &self.current
-    }
-
-    fn get_mut(&mut self) -> &mut T {
-        &mut self.current
-    }
-
-    fn next(&mut self) {
-        std::mem::swap(&mut self.current, &mut self.next);
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct Registers {
-    dma_sp_address: DoubleBuffered<DmaSpAddress>,
-    dma_dram_address: DoubleBuffered<DmaDramAddress>,
-    dma_read_length: DoubleBuffered<DmaReadLength>,
-    dma_write_length: DoubleBuffered<DmaWriteLength>,
-    // Note that [`SpDmaFull`] and [`SpDmaBusy`] are omitted here, since they're mirrors of [`SpStatus`]
-    sp_status: SpStatus,
-    sp_semaphore: SpSemaphore,
-}
-
-impl Registers {
-    const OFFSET_MASK: usize = 0x1C;
-
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Read a 32-bit integer from the RSP's memory-mapped COP0 registers
-    ///
-    /// # Errors
-    /// Returns an error if the given offset is out of bounds
-    pub fn read(&mut self, offset: usize) -> RspResult<u32> {
-        Ok(match offset & Self::OFFSET_MASK {
-            DmaSpAddress::OFFSET => self.dma_sp_address.get().to_owned().into(),
-            DmaDramAddress::OFFSET => self.dma_dram_address.get().to_owned().into(),
-            DmaReadLength::OFFSET => self.dma_read_length.get().to_owned().into(),
-            DmaWriteLength::OFFSET => self.dma_write_length.get().to_owned().into(),
-            SpStatus::OFFSET => self.sp_status.into(),
-            SpDmaFull::OFFSET => self.sp_status.dma_full().into(),
-            SpDmaBusy::OFFSET => self.sp_status.dma_busy().into(),
-            SpSemaphore::OFFSET => self.sp_semaphore.read().into(),
-            _ => Err(RspError::RegisterOffsetOutOfBounds { offset })?,
-        })
-    }
-
-    /// Write a 32-bit integer to the RSP's memory-mapped COP0 registers
-    ///
-    /// # Errors
-    /// Returns an error if the given offset is out of bounds
-    pub fn write(&mut self, offset: usize, value: u32) -> RspResult<SideEffects> {
-        // TODO: DMA transfers
-        let mut side_effects = SideEffects::default();
-        match offset & Self::OFFSET_MASK {
-            DmaSpAddress::OFFSET => *self.dma_sp_address.get_mut() = value.into(),
-            DmaDramAddress::OFFSET => *self.dma_dram_address.get_mut() = value.into(),
-            DmaReadLength::OFFSET => *self.dma_read_length.get_mut() = value.into(),
-            DmaWriteLength::OFFSET => *self.dma_write_length.get_mut() = value.into(),
-            SpStatus::OFFSET => side_effects.interrupt = self.sp_status.write(value),
-            SpDmaFull::OFFSET => self.sp_status.set_dma_full(SpDmaFull(value).dma_full()),
-            SpDmaBusy::OFFSET => self.sp_status.set_dma_busy(SpDmaBusy(value).dma_busy()),
-            SpSemaphore::OFFSET => self.sp_semaphore = value.into(),
-            _ => Err(RspError::RegisterOffsetOutOfBounds { offset })?,
-        }
-        Ok(side_effects)
-    }
-
-    #[allow(dead_code)]
-    fn start_dma(&mut self) {
-        self.dma_sp_address.next();
-        self.dma_dram_address.next();
-        self.dma_read_length.next();
-        self.dma_write_length.next();
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn read_semaphore() {
+        let mut semaphore = SpSemaphore::default();
+        assert!(!semaphore.read());
+        assert!(semaphore.read());
+    }
 
     #[test]
     fn write_signals() {
@@ -458,5 +445,29 @@ mod test {
         let maybe_irq_change = status.write(new.into());
         assert!(status.interrupt_break());
         assert!(maybe_irq_change == Some(InterruptChange::Set));
+    }
+
+    #[test]
+    fn dma_len() {
+        for i in 0..=7 {
+            let read = DmaReadLength::default().0.with_unmasked_length(i);
+            assert_eq!(read.length(), 8);
+            let write = DmaWriteLength::default().0.with_unmasked_length(i);
+            assert_eq!(write.length(), 8);
+        }
+
+        for i in 8..=15 {
+            let read = DmaReadLength::default().0.with_unmasked_length(i);
+            assert_eq!(read.length(), 16);
+            let write = DmaWriteLength::default().0.with_unmasked_length(i);
+            assert_eq!(write.length(), 16);
+        }
+
+        for i in 16..=23 {
+            let read = DmaReadLength::default().0.with_unmasked_length(i);
+            assert_eq!(read.length(), 24);
+            let write = DmaWriteLength::default().0.with_unmasked_length(i);
+            assert_eq!(write.length(), 24);
+        }
     }
 }

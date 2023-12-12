@@ -360,15 +360,10 @@ impl BusInterface for Bus {
                     .write_register(address.offset, value.try_into()?)
                     .map_err(BusError::RspError)?;
                 if let Some(mi_change) = side_effects.interrupt {
-                    match mi_change {
-                        n64_rsp::InterruptChange::Set => {
-                            if self.mi.raise_interrupt(InterruptType::Rsp) {
-                                result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
-                            }
-                        }
-                        n64_rsp::InterruptChange::Clear => {
-                            self.mi.lower_interrupt(InterruptType::Rsp);
-                        }
+                    if mi_change.set() && self.mi.raise_interrupt(InterruptType::Rsp) {
+                        result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
+                    } else if mi_change.clear() {
+                        self.mi.lower_interrupt(InterruptType::Rsp);
                     }
                 }
             }
@@ -435,28 +430,48 @@ impl BusInterface for Bus {
     }
 
     fn tick(&mut self, cycles: usize) -> BusResult<(), Self::Error> {
+        // TODO: how does timing compare to the CPU?
         let mut result = BusValue::default();
         self.maybe_poll_gui_events(cycles, &mut result);
 
-        // TODO: how does timing compare to the CPU?
+        // TODO: Handle side effects in a nicer way, probably a trait impl for each device so we can `self.handle(foo.tick())`.
+        // Devices should share an interface for common functionality (`n64-common` crate?).
 
-        let vi_side_effects = self.vi.tick(cycles);
-        if vi_side_effects.vblank {
-            if let Some(fb) = self.vi.framebuffer(self.rdram.as_slice()) {
-                self.context.send(context::Framebuffer {
-                    width: VideoInterface::SCREEN_WIDTH,
-                    height: VideoInterface::SCREEN_HEIGHT,
-                    pixels: fb.pixels,
-                });
+        {
+            let vi_side_effects = self.vi.tick(cycles);
+            if vi_side_effects.vblank {
+                if let Some(fb) = self.vi.framebuffer(self.rdram.as_slice()) {
+                    self.context.send(context::Framebuffer {
+                        width: VideoInterface::SCREEN_WIDTH,
+                        height: VideoInterface::SCREEN_HEIGHT,
+                        pixels: fb.pixels,
+                    });
+                }
+
+                // TODO: only call this on PIF DMA, it will not be read until then.
+                self.update_controller()?;
             }
 
-            // TODO: only call this on PIF DMA, it will not be read until then.
-            self.update_controller()?;
+            if vi_side_effects.raise_interrupt
+                && self.mi.raise_interrupt(InterruptType::VideoInterface)
+            {
+                result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
+            }
         }
 
-        if vi_side_effects.raise_interrupt && self.mi.raise_interrupt(InterruptType::VideoInterface)
         {
-            result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
+            let rsp_side_effects = self.rsp.tick(cycles, self.rdram.as_mut_slice());
+            if let Some(range) = rsp_side_effects.mutated_rdram {
+                let rdram_base = BusSection::RdramMemory.range().start;
+                result.mutated = Some(range.start + rdram_base..range.end + rdram_base);
+            }
+            if let Some((bank, range)) = rsp_side_effects.mutated_spmem {
+                let base = match bank {
+                    RspBank::DMem => BusSection::RspDMemory.range().start,
+                    RspBank::IMem => BusSection::RspIMemory.range().start,
+                };
+                result.mutated = Some(base + range.start..base + range.end);
+            }
         }
 
         if self.pi.tick(cycles) == DmaStatus::Finished

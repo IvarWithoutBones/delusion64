@@ -1,10 +1,11 @@
 #![warn(clippy::all, clippy::pedantic)]
 
 use self::register::Registers;
-use std::ops::Range;
+use std::{fmt, ops::Range};
 use thiserror::Error;
 
-pub mod register;
+mod dma;
+mod register;
 
 // TODO: deduplicate, this is stolen from delusion64::bus.
 /// Allocates a fixed-sized boxed array of a given length.
@@ -52,13 +53,28 @@ pub enum InterruptChange {
     Clear,
 }
 
-#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+impl InterruptChange {
+    #[must_use]
+    pub fn set(self) -> bool {
+        matches!(self, Self::Set)
+    }
+
+    #[must_use]
+    pub fn clear(self) -> bool {
+        matches!(self, Self::Clear)
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SideEffects {
     /// Whether or not the MI interrupt state should be changed
     pub interrupt: Option<InterruptChange>,
+    /// A range of addresses in RDRAM which have been mutated by a DMA transfer
+    pub mutated_rdram: Option<Range<u32>>,
+    /// A range of addresses in SP memory which have been mutated by a DMA transfer
+    pub mutated_spmem: Option<(MemoryBank, Range<u32>)>,
 }
 
-#[derive(Debug)]
 pub struct Rsp {
     registers: Registers,
     dmem: Box<[u8; MemoryBank::DMem.len()]>,
@@ -66,7 +82,7 @@ pub struct Rsp {
 }
 
 impl Rsp {
-    // This copies the first 0x1000 bytes of the PIF ROM to the RSP DMEM, simulating IPL2.
+    /// This copies the first 0x1000 bytes of the PIF ROM to the RSP DMEM, simulating IPL2.
     #[must_use]
     pub fn new(pif_rom: &[u8]) -> Self {
         let mut dmem = boxed_array();
@@ -116,7 +132,7 @@ impl Rsp {
         .map(|slice| unsafe { slice.try_into().unwrap_unchecked() })
     }
 
-    /// Write `SIZE.min(4)` bytes from the RSP's memory at the given bank and offset within said bank
+    /// Write `SIZE.min(4)` bytes into the RSP's memory, at the given bank and offset within said bank
     ///
     /// # Errors
     /// Returns an error if `offset..offset + SIZE.min(4)` is out of bounds for the given bank
@@ -126,7 +142,7 @@ impl Rsp {
         offset: usize,
         value: &[u8; SIZE],
     ) -> RspResult<()> {
-        // Emulate a hardware quirk: 64-bit values are truncated to 32 bits, while 8-bit and 16-bit values are zero-extended.
+        // Emulate a hardware quirk: 64-bit values are truncated to 32 bits, while 8-bit and 16-bit values are zero-extended to 32-bits.
         let value = {
             let mut res = [0_u8; 4];
             let len = res.len().min(SIZE);
@@ -144,5 +160,22 @@ impl Rsp {
         .copy_from_slice(&value);
 
         Ok(())
+    }
+
+    pub fn tick(&mut self, cycles: usize, rdram: &mut [u8]) -> SideEffects {
+        self.registers.tick(&mut dma::TickContext {
+            cycles,
+            rdram,
+            dmem: self.dmem.as_mut_slice(),
+            imem: self.imem.as_mut_slice(),
+        })
+    }
+}
+
+impl fmt::Debug for Rsp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RSP")
+            .field("registers", &self.registers)
+            .finish_non_exhaustive()
     }
 }
