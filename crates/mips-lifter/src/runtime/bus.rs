@@ -377,3 +377,22 @@ pub trait Bus {
         PanicAction::Kill
     }
 }
+
+pub(crate) fn u32_iter<T: Bus>(bus: &mut T, mut paddr: u32) -> impl Iterator<Item = u32> + '_ {
+    let find_section = |paddr| {
+        T::SECTIONS
+            .iter()
+            .find(|section| section.range().contains(&paddr))
+            .unwrap()
+    };
+
+    let mut section = find_section(paddr);
+    std::iter::from_fn(move || {
+        if !section.range().contains(&paddr) {
+            section = find_section(paddr);
+        }
+        let addr = Address::new(section, paddr);
+        paddr += 4;
+        Some(bus.read_memory(addr).unwrap().inner.into())
+    })
+}

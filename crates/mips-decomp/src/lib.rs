@@ -135,73 +135,37 @@ impl std::fmt::Display for MaybeInstruction {
     }
 }
 
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Endian {
-    #[default]
-    Big,
-    Little,
-}
+pub fn read_labels(count: usize, data: &mut impl Iterator<Item = u32>) -> Option<LabelList> {
+    let mut instrs = Vec::new();
+    for _ in 0..count {
+        let mut break_after = None;
+        loop {
+            let Ok(instr) = ParsedInstruction::try_from(data.next()?) else {
+                return None;
+            };
 
-pub struct Decompiler<'a> {
-    /// The binary to disassemble.
-    pub bin: &'a [u8],
-    /// The endianness of the binary.
-    pub endian: Endian,
-    /// The current position in the binary.
-    pos: usize,
-}
+            if instr.has_delay_slot() {
+                // Include the delay slot in this label
+                break_after = Some(1);
+            } else if instr.ends_block() {
+                break_after = Some(0);
+            }
 
-impl<'a> Decompiler<'a> {
-    pub fn new(bin: &'a [u8], endian: Endian) -> Self {
-        Self {
-            bin,
-            endian,
-            pos: 0,
+            instrs.push(MaybeInstruction::Instruction(instr));
+            if let Some(break_after) = &mut break_after {
+                if *break_after == 0 {
+                    break;
+                } else {
+                    *break_after -= 1;
+                }
+            }
         }
     }
 
-    pub fn next_instruction(&mut self) -> Option<MaybeInstruction> {
-        let raw_instr = self.read_u32(self.pos)?;
-        self.pos += INSTRUCTION_SIZE;
-        raw_instr.try_into().ok()
-    }
-
-    pub fn instruction_at(&self, pos: usize) -> Option<MaybeInstruction> {
-        self.read_u32(pos)?.try_into().ok()
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = MaybeInstruction> + '_ {
-        let mut pos = 0;
-        std::iter::from_fn(move || {
-            let instr = self.instruction_at(pos)?;
-            pos += INSTRUCTION_SIZE;
-            Some(instr)
-        })
-    }
-
-    fn read_u32(&self, from_pos: usize) -> Option<u32> {
-        debug_assert!(from_pos % INSTRUCTION_SIZE == 0);
-
-        let data = {
-            let slice = self.bin.get(from_pos..from_pos + INSTRUCTION_SIZE)?;
-            // SAFETY: We already checked that the slice is the correct length.
-            unsafe { slice.try_into().unwrap_unchecked() }
-        };
-
-        Some(match self.endian {
-            Endian::Big => u32::from_be_bytes(data),
-            Endian::Little => u32::from_le_bytes(data),
-        })
-    }
-}
-
-impl<'a> From<&'a [u8]> for Decompiler<'a> {
-    fn from(bin: &'a [u8]) -> Self {
-        Self {
-            bin,
-            pos: 0,
-            // Most MIPS binaries are big endian.
-            endian: Endian::Big,
-        }
+    let labels = LabelList::new(&instrs);
+    if labels.is_empty() {
+        None
+    } else {
+        Some(labels)
     }
 }

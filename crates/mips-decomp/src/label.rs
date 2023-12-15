@@ -1,4 +1,4 @@
-use crate::{instruction::ParsedInstruction, Decompiler, MaybeInstruction, INSTRUCTION_SIZE};
+use crate::{instruction::ParsedInstruction, MaybeInstruction, INSTRUCTION_SIZE};
 use std::{fmt, ops::Range};
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -110,7 +110,7 @@ impl Label {
 
 impl fmt::Debug for Label {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut pos = self.range.start;
+        let mut pos = self.range.start * INSTRUCTION_SIZE;
 
         write!(f, "label_{pos:06x}:\t\t")?;
         for ref_ in &self.referenced_from_offsets {
@@ -214,10 +214,9 @@ pub struct LabelList {
 }
 
 impl LabelList {
-    pub fn new(decomp: &Decompiler) -> Self {
-        let instrs = decomp.iter().collect::<Vec<_>>();
-        let targets = generate_targets(&instrs);
-        let mut labels = generate_labels(&instrs, &targets);
+    pub fn new(instrs: &[MaybeInstruction]) -> Self {
+        let targets = generate_targets(instrs);
+        let mut labels = generate_labels(instrs, &targets);
         labels.sort_by_key(|l| l.start());
         Self { labels }
     }
@@ -258,13 +257,6 @@ impl LabelList {
                 *fallthrough += offset;
             }
         }
-    }
-}
-
-impl From<&[u8]> for LabelList {
-    fn from(bytes: &[u8]) -> Self {
-        let decomp = Decompiler::from(bytes);
-        Self::new(&decomp)
     }
 }
 

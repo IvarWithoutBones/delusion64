@@ -254,40 +254,19 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
             Err(insert_index) => insert_index,
         };
 
-        let bin = {
-            let mut addr = paddr;
-            let mut break_after = None;
-            let mut bin: Vec<u8> = Vec::new();
-            loop {
-                let value = u32::from_be_bytes(*self.read(addr).unwrap().as_slice());
-                if let Ok(instr) = ParsedInstruction::try_from(value) {
-                    if instr.has_delay_slot() {
-                        break_after = Some(2);
-                    } else if instr.ends_block() {
-                        bin.extend_from_slice(&value.to_be_bytes());
-                        break;
-                    }
-                } else {
-                    break;
-                }
-
-                bin.extend_from_slice(&value.to_be_bytes());
-
-                if let Some(break_after) = break_after.as_mut() {
-                    *break_after -= 1;
-                    if *break_after == 0 {
-                        break;
-                    }
-                }
-
-                addr += 4;
+        let label_list = {
+            let mut labels = {
+                // Arbitrary limit on the maximum number of instructions in a block to avoid infinite loops.
+                let mut iter = bus::u32_iter(&mut self.bus, paddr).take(0x1000);
+                mips_decomp::read_labels(1, &mut iter)
             }
-
-            bin.into_boxed_slice()
+            .unwrap_or_else(|| {
+                let msg = format!("failed to read labels for {vaddr:#x}");
+                self.panic_update_debugger(&msg)
+            });
+            labels.set_start(vaddr as usize);
+            labels
         };
-
-        let mut label_list = mips_decomp::LabelList::from(&*bin);
-        label_list.set_start(vaddr as usize);
 
         let lab = self
             .codegen
