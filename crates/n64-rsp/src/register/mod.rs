@@ -1,6 +1,6 @@
 use self::definitions::{
     DmaRdramAddress, DmaReadLength, DmaSpAddress, DmaWriteLength, SpDmaBusy, SpDmaFull,
-    SpSemaphore, SpStatus,
+    SpProgramCounter, SpSemaphore, SpStatus,
 };
 use crate::{dma, MemoryBank, RspError, RspResult, SideEffects};
 
@@ -123,6 +123,9 @@ impl DmaRegisters {
 
 #[derive(Debug, Default)]
 pub struct Registers {
+    // Memory-mapped, not accessible to the RSP
+    sp_program_counter: SpProgramCounter,
+    // Internal state, accessible to the RSP via CP0 operations
     dma: DoubleBuffered<DmaRegisters>,
     // Note that [`SpDmaFull`] and [`SpDmaBusy`] are omitted here, since they're mirrors of [`SpStatus`]
     sp_status: SpStatus,
@@ -130,15 +133,16 @@ pub struct Registers {
 }
 
 impl Registers {
-    const OFFSET_MASK: usize = 0b11100;
-
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            sp_status: SpStatus::new(),
+            ..Default::default()
+        }
     }
 
     pub fn read(&mut self, offset: usize) -> RspResult<u32> {
-        Ok(match offset & Self::OFFSET_MASK {
+        Ok(match offset {
             DmaSpAddress::OFFSET => self.dma.current.sp_address.into(),
             DmaRdramAddress::OFFSET => self.dma.current.dram_address.into(),
             DmaReadLength::OFFSET => self.dma.current.read_length.into(),
@@ -147,13 +151,14 @@ impl Registers {
             SpDmaFull::OFFSET => self.sp_status.dma_full().into(),
             SpDmaBusy::OFFSET => self.sp_status.dma_busy().into(),
             SpSemaphore::OFFSET => self.sp_semaphore.read().into(),
+            SpProgramCounter::OFFSET => self.sp_program_counter.into(),
             _ => Err(RspError::RegisterOffsetOutOfBounds { offset })?,
         })
     }
 
     pub fn write(&mut self, offset: usize, value: u32) -> RspResult<SideEffects> {
         let mut side_effects = SideEffects::default();
-        match offset & Self::OFFSET_MASK {
+        match offset {
             DmaSpAddress::OFFSET => {
                 self.dma.get_next_if(self.sp_status.dma_busy()).sp_address = value.into();
             }
@@ -172,12 +177,13 @@ impl Registers {
                 self.queue_dma(dma::Direction::ToRdram);
             }
 
-            SpStatus::OFFSET => side_effects.interrupt = self.sp_status.write(value),
-            SpSemaphore::OFFSET => self.sp_semaphore = value.into(),
             SpDmaFull::OFFSET | SpDmaBusy::OFFSET => {
                 // Read-only mirrors of [`SpStatus`]
             }
 
+            SpStatus::OFFSET => side_effects.interrupt = self.sp_status.write(value),
+            SpSemaphore::OFFSET => self.sp_semaphore.write(value),
+            SpProgramCounter::OFFSET => self.sp_program_counter.write(value),
             _ => Err(RspError::RegisterOffsetOutOfBounds { offset })?,
         }
         Ok(side_effects)

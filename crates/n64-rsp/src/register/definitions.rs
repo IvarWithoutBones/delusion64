@@ -223,16 +223,16 @@ pub struct Signals([bool; 8]);
 
 impl Signals {
     fn write(mut self, raw: u16) -> Self {
-        // When writing, two bits are used per signal, starting from the LSB:
+        // When writing, two bits are used per signal, if both are set no change occurs.
         // 0: Clear signal
         // 1: Set signal
         for i in 0..8 {
             let base = i * 2;
             let clear = (raw >> base) & 1 == 1;
             let set = (raw >> (base + 1)) & 1 == 1;
-            if clear {
+            if clear && !set {
                 self.0[i] = false;
-            } else if set {
+            } else if set && !clear {
                 self.0[i] = true;
             }
         }
@@ -314,6 +314,10 @@ bitfield! {
 impl SpStatus {
     pub const OFFSET: usize = 0x10;
 
+    pub fn new() -> Self {
+        Self::default().with_halted(true)
+    }
+
     pub fn write(&mut self, raw: u32) -> Option<InterruptChange> {
         let x = SpStatusWrite(raw);
         self.set_signals(self.signals().write(x.raw_signals()));
@@ -322,16 +326,26 @@ impl SpStatus {
             self.set_broke(false);
         }
 
-        // Set or clear flags with toggles, where setting takes precedence over clearing
-        self.set_halted((self.halted() && !x.clear_halted()) || x.set_halted());
-        self.set_single_step((self.single_step() && !x.clear_single_step()) || x.set_single_step());
-        self.set_interrupt_break(
-            (self.interrupt_break() && !x.clear_interrupt_break()) || x.set_interrupt_break(),
-        );
+        // Set or clear flags with toggles, if both set and clear are set, no change occurs
+        if !(x.set_halted() && x.clear_halted()) {
+            self.set_halted((self.halted() && !x.clear_halted()) || x.set_halted());
+        }
 
-        if x.clear_interrupt() {
+        if !(x.set_single_step() && x.clear_single_step()) {
+            self.set_single_step(
+                (self.single_step() && !x.clear_single_step()) || x.set_single_step(),
+            );
+        }
+
+        if !(x.set_interrupt_break() && x.clear_interrupt_break()) {
+            self.set_interrupt_break(
+                (self.interrupt_break() && !x.clear_interrupt_break()) || x.set_interrupt_break(),
+            );
+        }
+
+        if x.clear_interrupt() && !x.set_interrupt() {
             Some(InterruptChange::Clear)
-        } else if x.set_interrupt() {
+        } else if x.set_interrupt() && !x.clear_interrupt() {
             Some(InterruptChange::Set)
         } else {
             None
@@ -369,7 +383,8 @@ bitfield! {
     /// Register to assist implementing a simple mutex between VR4300 and RSP.
     /// See [n64brew](https://n64brew.dev/wiki/Reality_Signal_Processor/Interface#SP_SEMAPHORE) for more information.
     pub struct SpSemaphore(u32) {
-        /// Can be read and written, but after each read, it is always automatically set to true.
+        /// After each read, this is always automatically set to true while returning the previous value.
+        /// When writing, it is set to false, regardless of the value written.
         [0] pub semaphore,
     }
 }
@@ -377,10 +392,30 @@ bitfield! {
 impl SpSemaphore {
     pub const OFFSET: usize = 0x1C;
 
+    pub fn write(&mut self, _value: u32) {
+        self.set_semaphore(false);
+    }
+
     pub fn read(&mut self) -> bool {
         let res = self.semaphore();
         self.set_semaphore(true);
         res
+    }
+}
+
+bitfield! {
+    /// The memory-mapped RSP program counter.
+    /// See [n64brew](https://n64brew.dev/wiki/Reality_Signal_Processor/Interface#RSP_PC_register) for more information.
+    pub struct SpProgramCounter(u32) {
+        [0..=11] unmasked_pc: u32,
+    }
+}
+
+impl SpProgramCounter {
+    pub const OFFSET: usize = 0x40000; // 0x0408_0000
+
+    pub fn write(&mut self, value: u32) {
+        self.set_unmasked_pc(value & !0b11);
     }
 }
 
