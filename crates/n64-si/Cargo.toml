@@ -6,4 +6,4 @@ edition = "2021"
 
 [dependencies]
 n64-pif = { path = "../n64-pif" }
-tartan-bitfield = "1.2.0"
+n64-common = { path = "../n64-common" }

@@ -1,0 +1,9 @@
+[package]
+name = "n64-common"
+description = "Common code for the Delusion64 project"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tartan-bitfield = "1.2.0"
+thiserror = "1.0.51"

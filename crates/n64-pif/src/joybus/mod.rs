@@ -1,6 +1,6 @@
 use self::response::Response;
+use n64_common::utils::{tartan_bitfield::bitfield, thiserror};
 use strum::FromRepr;
-use tartan_bitfield::bitfield;
 
 pub use self::channel::{Channel, Channels};
 
@@ -42,14 +42,17 @@ impl PacketLen {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(thiserror::Error, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ParseError {
+    #[error("Unknown request: {0:#04X}")]
     UnknownRequest(u8),
+    #[error("Invalid request length: {request:?}, expected {expected:?} but got {got:?}")]
     InvalidRequestLen {
         request: Request,
         expected: PacketLen,
         got: PacketLen,
     },
+    #[error("Request input is empty")]
     RequestInputEmpty,
 }
 

@@ -1,4 +1,4 @@
-use tartan_bitfield::bitfield;
+use n64_common::utils::tartan_bitfield::bitfield;
 
 bitfield! {
     /// See [n64brew](https://n64brew.dev/wiki/Joybus_Protocol#Standard_Controller).

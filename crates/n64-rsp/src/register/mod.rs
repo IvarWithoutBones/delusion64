@@ -1,3 +1,5 @@
+use n64_common::memory::Section;
+
 use self::definitions::{
     DmaRdramAddress, DmaReadLength, DmaSpAddress, DmaWriteLength, SpDmaBusy, SpDmaFull,
     SpProgramCounter, SpSemaphore, SpStatus,
@@ -76,16 +78,18 @@ impl DmaRegisters {
             dma::Direction::ToRdram => {
                 let bytes = self.write_length.length();
                 {
-                    let range = self.dram_address.address()..self.dram_address.address() + bytes;
-                    side_effects.mutated_rdram = Some(range);
+                    let range = self.dram_address.address() as usize
+                        ..(self.dram_address.address() + bytes) as usize;
+                    side_effects.set_dirty_section(Section::RdramMemory, range);
                 }
                 bytes
             }
             dma::Direction::ToSpMemory => {
                 let bytes = self.read_length.length();
                 {
-                    let range = self.sp_address.address()..self.sp_address.address() + bytes;
-                    side_effects.mutated_spmem = Some((self.sp_address.bank(), range));
+                    let range = self.sp_address.address() as usize
+                        ..(self.sp_address.address() + bytes) as usize;
+                    side_effects.set_dirty_section(self.sp_address.bank().as_section(), range);
                 }
                 bytes
             }

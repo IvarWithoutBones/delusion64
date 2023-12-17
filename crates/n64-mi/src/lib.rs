@@ -1,5 +1,8 @@
+use n64_common::{
+    utils::{tartan_bitfield::bitfield, thiserror},
+    InterruptDevice,
+};
 use std::mem::size_of;
-use tartan_bitfield::bitfield;
 
 bitfield! {
     /// https://n64brew.dev/wiki/MIPS_Interface#0x0430_0000_-_MI_MODE
@@ -130,20 +133,11 @@ impl From<Mask> for Register {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum InterruptType {
-    Rsp = 0,
-    SerialInterface = 1,
-    AudioInterface = 2,
-    VideoInterface = 3,
-    PeripheralInterface = 4,
-    RdpSync = 5,
-}
-
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum MiError {
+    #[error("Register at offset {0:#x?} does not exist")]
     RegisterNotFound(usize),
+    #[error("Attempted to write to read-only register {0:#x?}")]
     ReadOnlyRegisterWrite(Register),
 }
 
@@ -272,25 +266,25 @@ impl MipsInterface {
             || (self.interrupt.dp() && self.mask.dp_mask())
     }
 
-    /// Sets the interrupt bit for the given interrupt type, returning whether to raise an interrupt or not by masking.
-    fn set_interrupt(&mut self, interrupt: InterruptType, value: bool) -> bool {
+    /// Sets the interrupt bit for the given interrupt device, returning whether to raise an interrupt or not by masking.
+    fn set_interrupt(&mut self, interrupt: InterruptDevice, value: bool) -> bool {
         match interrupt {
-            InterruptType::Rsp => self.interrupt.set_sp(value),
-            InterruptType::SerialInterface => self.interrupt.set_si(value),
-            InterruptType::AudioInterface => self.interrupt.set_ai(value),
-            InterruptType::VideoInterface => self.interrupt.set_vi(value),
-            InterruptType::PeripheralInterface => self.interrupt.set_pi(value),
-            InterruptType::RdpSync => self.interrupt.set_dp(value),
+            InterruptDevice::Rsp => self.interrupt.set_sp(value),
+            InterruptDevice::SerialInterface => self.interrupt.set_si(value),
+            InterruptDevice::AudioInterface => self.interrupt.set_ai(value),
+            InterruptDevice::VideoInterface => self.interrupt.set_vi(value),
+            InterruptDevice::PeripheralInterface => self.interrupt.set_pi(value),
+            InterruptDevice::Rdp => self.interrupt.set_dp(value),
         }
         self.should_interrupt()
     }
 
-    pub fn raise_interrupt(&mut self, interrupt: InterruptType) -> bool {
-        self.set_interrupt(interrupt, true)
+    pub fn raise_interrupt(&mut self, dev: InterruptDevice) -> bool {
+        self.set_interrupt(dev, true)
     }
 
-    pub fn lower_interrupt(&mut self, interrupt: InterruptType) -> bool {
-        self.set_interrupt(interrupt, false)
+    pub fn lower_interrupt(&mut self, dev: InterruptDevice) -> bool {
+        self.set_interrupt(dev, false)
     }
 }
 

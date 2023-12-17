@@ -1,7 +1,7 @@
 //! Register definitions for the Serial Interface.
 
+use n64_common::utils::tartan_bitfield::{bitfield, bitfield_without_debug};
 use std::fmt;
-use tartan_bitfield::{bitfield, bitfield_without_debug};
 
 bitfield_without_debug! {
     /// Known as `SI_DRAM_ADDR`.

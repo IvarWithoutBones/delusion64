@@ -1,20 +1,15 @@
 #![warn(clippy::all, clippy::pedantic)]
 
 use self::register::Registers;
+use n64_common::{
+    memory::Section,
+    utils::{boxed_array, thiserror::Error},
+    SideEffects,
+};
 use std::{fmt, ops::Range};
-use thiserror::Error;
 
 mod dma;
 mod register;
-
-// TODO: deduplicate, this is stolen from delusion64::bus.
-/// Allocates a fixed-sized boxed array of a given length.
-fn boxed_array<T: Default + Clone, const LEN: usize>() -> Box<[T; LEN]> {
-    // Use a Vec to allocate directly onto the heap. Using an array will allocate on the stack,
-    // which can cause a stack overflow. SAFETY: We're sure the input size matches the output size.
-    let result = vec![Default::default(); LEN].into_boxed_slice();
-    unsafe { result.try_into().unwrap_unchecked() }
-}
 
 /// Errors which can occur when interacting with the RSP
 #[derive(Error, Debug)]
@@ -38,41 +33,20 @@ pub enum MemoryBank {
 }
 
 impl MemoryBank {
+    #[must_use]
+    pub fn as_section(self) -> Section {
+        match self {
+            Self::IMem => Section::RspIMemory,
+            Self::DMem => Section::RspDMemory,
+        }
+    }
+
     /// Get the size of the memory bank in bytes
     #[must_use]
     #[allow(clippy::len_without_is_empty)] // Does not make sense on enums
     pub const fn len(self) -> usize {
         0x1000
     }
-}
-
-/// A change which should be applied to the MI's interrupt state
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum InterruptChange {
-    Set,
-    Clear,
-}
-
-impl InterruptChange {
-    #[must_use]
-    pub fn set(self) -> bool {
-        matches!(self, Self::Set)
-    }
-
-    #[must_use]
-    pub fn clear(self) -> bool {
-        matches!(self, Self::Clear)
-    }
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct SideEffects {
-    /// Whether or not the MI interrupt state should be changed
-    pub interrupt: Option<InterruptChange>,
-    /// A range of addresses in RDRAM which have been mutated by a DMA transfer
-    pub mutated_rdram: Option<Range<u32>>,
-    /// A range of addresses in SP memory which have been mutated by a DMA transfer
-    pub mutated_spmem: Option<(MemoryBank, Range<u32>)>,
 }
 
 pub struct Rsp {
@@ -132,10 +106,10 @@ impl Rsp {
         .map(|slice| unsafe { slice.try_into().unwrap_unchecked() })
     }
 
-    /// Write `SIZE.min(4)` bytes into the RSP's memory, at the given bank and offset within said bank
+    /// Write `SIZE.min(4).max(4)` bytes into the RSP's memory, at the given bank and offset within said bank
     ///
     /// # Errors
-    /// Returns an error if `offset..offset + SIZE.min(4)` is out of bounds for the given bank
+    /// Returns an error if `offset..offset + SIZE.min(4).max(4)` is out of bounds for the given bank
     pub fn write_sp_memory<const SIZE: usize>(
         &mut self,
         bank: MemoryBank,

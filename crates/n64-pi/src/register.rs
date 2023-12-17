@@ -1,10 +1,9 @@
 //! Memory-mapped registers for the Peripheral Interface (PI).
 //! See [n64brew](https://n64brew.dev/wiki/Peripheral_Interface#Registers).
 
-use crate::PiError;
-
 use super::Domain;
-use tartan_bitfield::bitfield;
+use crate::PiError;
+use n64_common::utils::tartan_bitfield::bitfield;
 
 bitfield! {
     /// See [n64brew](https://n64brew.dev/wiki/Peripheral_Interface#0x0460_0000_-_PI_DRAM_ADDR).

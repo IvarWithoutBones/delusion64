@@ -1,6 +1,9 @@
-use crate::{InterruptChange, MemoryBank};
+use crate::MemoryBank;
+use n64_common::{
+    utils::tartan_bitfield::{bitfield, bitfield_without_debug},
+    InterruptDevice, InterruptRequest,
+};
 use std::fmt;
-use tartan_bitfield::{bitfield, bitfield_without_debug};
 
 bitfield_without_debug! {
     /// Address in IMEM/DMEM for a DMA transfer.
@@ -318,7 +321,7 @@ impl SpStatus {
         Self::default().with_halted(true)
     }
 
-    pub fn write(&mut self, raw: u32) -> Option<InterruptChange> {
+    pub fn write(&mut self, raw: u32) -> Option<InterruptRequest> {
         let x = SpStatusWrite(raw);
         self.set_signals(self.signals().write(x.raw_signals()));
 
@@ -344,9 +347,9 @@ impl SpStatus {
         }
 
         if x.clear_interrupt() && !x.set_interrupt() {
-            Some(InterruptChange::Clear)
+            Some(InterruptRequest::Lower(InterruptDevice::Rsp))
         } else if x.set_interrupt() && !x.clear_interrupt() {
-            Some(InterruptChange::Set)
+            Some(InterruptRequest::Raise(InterruptDevice::Rsp))
         } else {
             None
         }
@@ -468,18 +471,18 @@ mod test {
         let mut status = SpStatus::default();
         let new = SpStatusWrite::default().with_set_interrupt(true);
         let maybe_irq_change = status.write(new.into());
-        assert!(maybe_irq_change == Some(InterruptChange::Set));
+        assert!(maybe_irq_change == Some(InterruptRequest::Raise(InterruptDevice::Rsp)));
 
         let mut status = SpStatus::default();
         let new = SpStatusWrite::default().with_clear_interrupt(true);
         let maybe_irq_change = status.write(new.into());
-        assert!(maybe_irq_change == Some(InterruptChange::Clear));
+        assert!(maybe_irq_change == Some(InterruptRequest::Lower(InterruptDevice::Rsp)));
 
         let mut status = SpStatus::default().with_interrupt_break(true);
         let new = SpStatusWrite::default().with_set_interrupt(true);
         let maybe_irq_change = status.write(new.into());
         assert!(status.interrupt_break());
-        assert!(maybe_irq_change == Some(InterruptChange::Set));
+        assert!(maybe_irq_change == Some(InterruptRequest::Raise(InterruptDevice::Rsp)));
     }
 
     #[test]

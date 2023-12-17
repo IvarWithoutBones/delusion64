@@ -1,19 +1,10 @@
 use self::joybus::Channels;
+use n64_common::utils::{boxed_array, tartan_bitfield::bitfield, thiserror};
 use std::{fmt, ops::Range};
-use tartan_bitfield::bitfield;
 
 mod joybus;
 
 pub use joybus::{controller, Channel};
-
-// TODO: deduplicate, this is stolen from delusion64::bus.
-/// Allocates a fixed-sized boxed array of a given length.
-fn boxed_array<T: Default + Clone, const LEN: usize>() -> Box<[T; LEN]> {
-    // Use a Vec to allocate directly onto the heap. Using an array will allocate on the stack,
-    // which can cause a stack overflow. SAFETY: We're sure the input size matches the output size.
-    let result = vec![Default::default(); LEN].into_boxed_slice();
-    unsafe { result.try_into().unwrap_unchecked() }
-}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Region {
@@ -31,13 +22,19 @@ impl Region {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(thiserror::Error, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PifError {
+    #[error("Offset {offset} is out of bounds in {region:?}")]
     OffsetOutOfBounds { region: Region, offset: usize },
+    #[error("Joybus parse error: {0}")]
     JoybusParseError(joybus::ParseError),
+    #[error("Channel {channel:?} is already attached")]
     AlreadyAttached { channel: Channel },
+    #[error("Channel {channel:?} is not attached")]
     NotAttached { channel: Channel },
+    #[error("Channel {channel:?} is not attached")]
     Unexpected { channel: Channel },
+    #[error("Unimplemented joybus request: {request:?}")]
     UnimplementedJoybusRequest { request: joybus::Request },
 }
 

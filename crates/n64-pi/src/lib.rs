@@ -5,21 +5,23 @@ use self::register::{
     CartAddress, DramAddress, Latch, PageSize, PulseWidth, ReadLength, Register, Release, Status,
     WriteLength,
 };
+use n64_common::{memory::Section, utils::thiserror, InterruptDevice, SideEffects};
 use std::ops::Range;
 
 mod register;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum PiError {
+    #[error("Offset {0:#x} is out of bounds")]
     InvalidRegisterOffset(usize),
-    UnimplementedDma {
-        region: Region,
-        domain: Domain,
-    },
+    #[error("Unimplemented DMA: {region:?} (domain {domain:?})")]
+    UnimplementedDma { region: Region, domain: Domain },
+    #[error("RDRAM address {range:?} is out of bounds (RDRAM length: {rdram_len})")]
     RdramAddressOutOfBounds {
         range: Range<usize>,
         rdram_len: usize,
     },
+    #[error("Cartridge address {range:?} is out of bounds (cartridge length: {cartridge_len})")]
     CartridgeAddressOutOfBounds {
         range: Range<usize>,
         cartridge_len: usize,
@@ -80,14 +82,6 @@ impl Region {
     }
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct SideEffects {
-    /// Whether to invalidate the cached JIT blocks at the given range of physical addresses in RDRAM.
-    pub mutated_rdram: Option<Range<u32>>,
-    /// If set, the PI interrupt should be lowered using MI.
-    pub lower_interrupt: bool,
-}
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum BusDevice {
     CartridgeRom,
@@ -101,13 +95,6 @@ impl BusDevice {
             BusDevice::CartridgeRom | BusDevice::CartridgeSram => 150,
         }
     }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum DmaStatus {
-    Idle,
-    Busy,
-    Finished,
 }
 
 /// The Peripheral Interface (PI), used for communication with the cartridge and disk drive.
@@ -303,7 +290,7 @@ impl PeripheralInterface {
 
                 if status.clear_interrupt() {
                     self.status.set_interrupt(false);
-                    side_effects.lower_interrupt = true;
+                    side_effects.lower_interrupt(InterruptDevice::PeripheralInterface);
                 }
             }
 
@@ -331,7 +318,8 @@ impl PeripheralInterface {
         Ok(side_effects)
     }
 
-    pub fn tick(&mut self, cycles: usize) -> DmaStatus {
+    pub fn tick(&mut self, cycles: usize) -> SideEffects {
+        let mut side_effects = SideEffects::new();
         if let Some(latch_cycles) = &mut self.latch_cycles_remaining {
             *latch_cycles = latch_cycles.saturating_sub(cycles as u32);
             if *latch_cycles == 0 {
@@ -345,13 +333,11 @@ impl PeripheralInterface {
             *dma_cycles = dma_cycles.saturating_sub(cycles as u32);
             if *dma_cycles == 0 {
                 self.reset_dma();
-                DmaStatus::Finished
-            } else {
-                DmaStatus::Busy
+                side_effects.raise_interrupt(InterruptDevice::PeripheralInterface);
             }
-        } else {
-            DmaStatus::Idle
         }
+
+        side_effects
     }
 
     fn reset_dma(&mut self) {
@@ -382,20 +368,21 @@ impl PeripheralInterface {
                 )?;
 
                 let rdram_offset = self.dram_address.address() as usize;
+                let rdram_range = rdram_offset..(rdram_offset + len);
                 let rdram_slice = {
-                    let range = rdram_offset..(rdram_offset + len);
                     let rdram_len = rdram.len();
                     rdram
-                        .get_mut(range.clone())
-                        .ok_or(PiError::RdramAddressOutOfBounds { range, rdram_len })?
+                        .get_mut(rdram_range.clone())
+                        .ok_or(PiError::RdramAddressOutOfBounds {
+                            range: rdram_range.clone(),
+                            rdram_len,
+                        })?
                 };
 
                 rdram_slice[..len].copy_from_slice(cart_slice);
-
-                Ok(SideEffects {
-                    mutated_rdram: Some(rdram_offset as u32..(rdram_offset + len) as u32),
-                    ..Default::default()
-                })
+                let mut side_effects = SideEffects::new();
+                side_effects.set_dirty_section(Section::RdramMemory, rdram_range);
+                Ok(side_effects)
             }
 
             region => Err(PiError::UnimplementedDma {

@@ -1,34 +1,50 @@
-use self::location::BusSection;
 use crate::input::{Controller, ControllerEvent};
 use emgui::context::{self, ReceiveItem, SendItem};
 use mips_lifter::{
     gdb::MonitorCommand,
     runtime::bus::{
-        Address, Bus as BusInterface, BusResult, BusValue, Int, MemorySection, PanicAction,
+        Address, Bus as BusInterface, BusResult, BusValue, Int, MemorySection, Mirroring,
+        PanicAction,
     },
 };
 use n64_cartridge::Cartridge;
-use n64_mi::{InterruptType, MiError, MipsInterface};
-use n64_pi::{DmaStatus, PeripheralInterface, PiError};
+use n64_common::{
+    memory::{PhysicalAddress, Section},
+    utils::{boxed_array, thiserror},
+    InterruptDevice,
+};
+use n64_mi::{MiError, MipsInterface};
+use n64_pi::{BusDevice as PiDevice, PeripheralInterface, PiError};
 use n64_rsp::{MemoryBank as RspBank, Rsp, RspError};
 use n64_si::{Channel, PifError, SerialInterface, SiError};
 use n64_vi::VideoInterface;
+use std::ops::Range;
 
-pub mod location;
+/// Newtype wrapper for a `Section` to implement `MemorySection`.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct SectionWrapper(pub Section);
 
-/// Allocates a fixed-sized boxed array of a given length.
-fn boxed_array<T: Default + Clone, const LEN: usize>() -> Box<[T; LEN]> {
-    // Use a Vec to allocate directly onto the heap. Using an array will allocate on the stack,
-    // which can cause a stack overflow. SAFETY: We're sure the input size matches the output size.
-    let result = vec![Default::default(); LEN].into_boxed_slice();
-    unsafe { result.try_into().unwrap_unchecked() }
+impl MemorySection for SectionWrapper {
+    fn range(&self) -> Range<PhysicalAddress> {
+        self.0.range()
+    }
+
+    fn mirroring(&self) -> Mirroring<Self> {
+        // TODO: this does not consider imem/dmem mirroring
+        Mirroring::None
+    }
+
+    fn auto_invalidate_written_addresses(&self) -> bool {
+        true
+    }
 }
 
 /// The amount of CPU instructions to execute before checking for GUI events.
 const GUI_POLL_RATE: usize = 100_000;
 
 pub struct Bus {
-    rdram: Box<[u8; BusSection::RdramMemory.len()]>,
+    rdram: Box<[u8; Section::RdramMemory.len()]>,
     rsp: Rsp,
     pi: PeripheralInterface,
     mi: MipsInterface,
@@ -50,7 +66,7 @@ impl Bus {
         gui_connected: bool,
     ) -> Self {
         let cartridge_rom = {
-            let mut array: Box<[u8; BusSection::CartridgeRom.len()]> = boxed_array();
+            let mut array: Box<[u8; Section::CartridgeRom.len()]> = boxed_array();
             let rom = cartridge.read().unwrap();
             let len = array.len().min(rom.len());
             array[..len].copy_from_slice(&rom[..len]);
@@ -158,137 +174,168 @@ impl Bus {
                 GUI_POLL_RATE
             });
     }
+
+    fn handle<T>(&mut self, side_effects: n64_common::SideEffects, bus_val: &mut BusValue<T>) {
+        let n64_common::SideEffects { interrupt, dirty } = side_effects;
+
+        bus_val.mutated = dirty;
+        if let Some(interrupt) = interrupt {
+            match interrupt {
+                n64_common::InterruptRequest::Raise(dev) => {
+                    if self.mi.raise_interrupt(dev) {
+                        bus_val.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
+                    }
+                }
+                n64_common::InterruptRequest::Lower(dev) => {
+                    self.mi.lower_interrupt(dev);
+                }
+            }
+        }
+    }
 }
 
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum BusError {
-    MipsInterfaceError(MiError),
-    PeripheralInterfaceError(PiError),
-    SerialInterfaceError(SiError),
-    PifError(PifError),
-    RspError(RspError),
+    #[error("MIPS interface error: {0}")]
+    MipsInterfaceError(#[from] MiError),
+    #[error("Serial interface error: {0}")]
+    PeripheralInterfaceError(#[from] PiError),
+    #[error("Serial interface error: {0}")]
+    SerialInterfaceError(#[from] SiError),
+    #[error("PIF error: {0}")]
+    PifError(#[from] PifError),
+    #[error("RSP error: {0}")]
+    RspError(#[from] RspError),
+    #[error("Physical address {0:#x} is not mapped")]
     UnmappedAddress(u32),
-    ReadOnlyRegionWrite(BusSection),
-    WriteOnlyRegionRead(BusSection),
-    OffsetOutOfBounds(Address<BusSection>),
-    UnimplementedSection(BusSection),
+    #[error("Attempted to write to read-only region {0:?}")]
+    ReadOnlyRegionWrite(Section),
+    #[error("Attempted to read from write-only region {0:?}")]
+    WriteOnlyRegionRead(Section),
+    #[error("Offset {0:#x?} is out of bounds for its section")]
+    OffsetOutOfBounds(Address<SectionWrapper>),
+    #[error("Unimplemented section {0:?}")]
+    UnimplementedSection(Section),
 }
 
 impl BusInterface for Bus {
     type Error = BusError;
-    type Section = BusSection;
+    type Section = SectionWrapper;
 
     const SECTIONS: &'static [Self::Section] = &[
-        BusSection::RdramMemory,
-        BusSection::RdramRegisters,
-        BusSection::RdramRegistersWriteOnly,
-        BusSection::RspDMemory,
-        BusSection::RspIMemory,
-        BusSection::RspMemoryMirrors,
-        BusSection::RspRegisters,
-        BusSection::RdpCommandRegisters,
-        BusSection::RspSpanRegisters,
-        BusSection::MipsInterface,
-        BusSection::VideoInterface,
-        BusSection::AudioInterface,
-        BusSection::PeripheralInterface,
-        BusSection::RdramInterface,
-        BusSection::SerialInterface,
-        BusSection::DiskDriveRegisters,
-        BusSection::DiskDriveIpl4Rom,
-        BusSection::CartridgeSram,
-        BusSection::CartridgeRom,
-        BusSection::PifRom,
-        BusSection::PifRam,
+        SectionWrapper(Section::RdramMemory),
+        SectionWrapper(Section::RdramRegisters),
+        SectionWrapper(Section::RdramRegistersWriteOnly),
+        SectionWrapper(Section::RspDMemory),
+        SectionWrapper(Section::RspIMemory),
+        SectionWrapper(Section::RspMemoryMirrors),
+        SectionWrapper(Section::RspRegisters),
+        SectionWrapper(Section::RdpCommandRegisters),
+        SectionWrapper(Section::RspSpanRegisters),
+        SectionWrapper(Section::MipsInterface),
+        SectionWrapper(Section::VideoInterface),
+        SectionWrapper(Section::AudioInterface),
+        SectionWrapper(Section::PeripheralInterface),
+        SectionWrapper(Section::RdramInterface),
+        SectionWrapper(Section::SerialInterface),
+        SectionWrapper(Section::DiskDriveRegisters),
+        SectionWrapper(Section::DiskDriveIpl4Rom),
+        SectionWrapper(Section::CartridgeSram),
+        SectionWrapper(Section::CartridgeRom),
+        SectionWrapper(Section::PifRom),
+        SectionWrapper(Section::PifRam),
     ];
 
     fn read_memory<const SIZE: usize>(
         &mut self,
         address: Address<Self::Section>,
     ) -> BusResult<Int<SIZE>, Self::Error> {
-        let value = match address.section {
-            BusSection::RdramMemory => Int::from_slice(&self.rdram[address.offset..]),
+        let value = match address.section.0 {
+            Section::RdramMemory => Int::from_slice(&self.rdram[address.offset..]),
 
             // TODO: dont stub these so naively, only here so namco museum and libdragon assume its initialized.
-            BusSection::AudioInterface => Int::from_slice(&u32::MAX.to_be_bytes()),
-            BusSection::RdramInterface => Int::from_slice(&u32::MAX.to_be_bytes()),
+            Section::AudioInterface => Int::from_slice(&u32::MAX.to_be_bytes()),
+            Section::RdramInterface => Int::from_slice(&u32::MAX.to_be_bytes()),
 
-            BusSection::MipsInterface => Int::new(
+            Section::MipsInterface => Int::new(
                 self.mi
                     .read(address.offset)
                     .map_err(BusError::MipsInterfaceError)?,
             ),
 
-            BusSection::VideoInterface => Int::new(
+            Section::VideoInterface => Int::new(
                 self.vi
                     .read(address.offset)
                     .ok_or(BusError::OffsetOutOfBounds(address))?,
             ),
 
-            BusSection::PeripheralInterface => Int::new(
+            Section::PeripheralInterface => Int::new(
                 self.pi
                     .read_register(address.offset)
                     .map_err(BusError::PeripheralInterfaceError)?,
             ),
 
-            BusSection::SerialInterface => Int::new(
+            Section::SerialInterface => Int::new(
                 self.si
                     .read(address.offset)
                     .map_err(BusError::SerialInterfaceError)?,
             ),
 
-            BusSection::PifRam => Int::new(
+            Section::PifRam => Int::new(
                 self.si
                     .read_pif_ram::<SIZE>(address.offset)
                     .map_err(BusError::SerialInterfaceError)?,
             ),
 
-            BusSection::PifRom => Int::new(
+            Section::PifRom => Int::new(
                 self.si
                     .read_pif_rom::<SIZE>(address.offset)
                     .map_err(BusError::SerialInterfaceError)?,
             ),
 
-            BusSection::RspDMemory => Int::from_slice(
+            Section::RspDMemory => Int::from_slice(
                 self.rsp
                     .read_sp_memory::<SIZE>(RspBank::DMem, address.offset)
                     .map_err(BusError::RspError)?,
             ),
 
-            BusSection::RspIMemory => Int::from_slice(
+            Section::RspIMemory => Int::from_slice(
                 self.rsp
                     .read_sp_memory::<SIZE>(RspBank::IMem, address.offset)
                     .map_err(BusError::RspError)?,
             ),
 
-            BusSection::RspRegisters => Int::new(
+            Section::RspRegisters => Int::new(
                 self.rsp
                     .read_register(address.offset)
                     .map_err(BusError::RspError)?,
             ),
 
-            BusSection::CartridgeRom | BusSection::CartridgeSram => Int::new(
+            Section::CartridgeRom => Int::new(
                 self.pi
-                    .read_bus::<SIZE>(address.section.into(), address.offset)
+                    .read_bus::<SIZE>(PiDevice::CartridgeRom, address.offset)
                     .map_err(BusError::PeripheralInterfaceError)?,
             ),
 
-            BusSection::RdramRegistersWriteOnly => {
-                Err(BusError::WriteOnlyRegionRead(*address.section))?
+            Section::CartridgeSram => Int::new(
+                self.pi
+                    .read_bus::<SIZE>(PiDevice::CartridgeSram, address.offset)
+                    .map_err(BusError::PeripheralInterfaceError)?,
+            ),
+
+            Section::RdramRegistersWriteOnly => {
+                Err(BusError::WriteOnlyRegionRead(address.section.0))?
             }
 
-            BusSection::RspMemoryMirrors => unreachable!("rsp memory mirrors should be resolved"),
+            Section::RspMemoryMirrors => unreachable!("rsp memory mirrors should be resolved"),
 
-            section => Ok(section
-                .safe_to_stub()
-                .then(|| {
-                    eprintln!(
-                        "STUB: memory read at {:#x} = {address:#x?}",
-                        address.physical_address()
-                    );
-                    Int::default()
-                })
-                .ok_or(BusError::UnimplementedSection(*section))?),
+            _ => {
+                eprintln!(
+                    "STUB: memory read at {:#x} = {address:#x?}",
+                    address.physical_address()
+                );
+                Ok(Int::default())
+            }
         };
         Ok(value?.into())
     }
@@ -323,108 +370,91 @@ impl BusInterface for Bus {
         }
 
         let range = address.offset..address.offset + SIZE;
-        match address.section {
-            BusSection::RdramMemory => self.rdram[range].copy_from_slice(value.as_slice()),
+        match address.section.0 {
+            Section::RdramMemory => self.rdram[range].copy_from_slice(value.as_slice()),
 
-            BusSection::RdpCommandRegisters => {
+            Section::RdpCommandRegisters => {
                 // TODO: Properly implement the RDP. This is a hack to get past rdp_detach from libdragon.
                 if address.offset == 4 {
-                    self.mi.raise_interrupt(InterruptType::RdpSync);
+                    self.mi.raise_interrupt(InterruptDevice::Rdp);
                     result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
                 }
             }
 
-            BusSection::PifRam => self
+            Section::PifRam => self
                 .si
                 .write_pif_ram(address.offset, value.as_slice())
                 .map_err(BusError::SerialInterfaceError)?,
 
-            BusSection::MipsInterface => self
+            Section::MipsInterface => self
                 .mi
                 .write(address.offset, value.try_into()?)
                 .map_err(BusError::MipsInterfaceError)?,
 
-            BusSection::RspDMemory => self
+            Section::RspDMemory => self
                 .rsp
                 .write_sp_memory::<SIZE>(RspBank::DMem, address.offset, value.as_slice())
                 .map_err(BusError::RspError)?,
 
-            BusSection::RspIMemory => self
+            Section::RspIMemory => self
                 .rsp
                 .write_sp_memory::<SIZE>(RspBank::IMem, address.offset, value.as_slice())
                 .map_err(BusError::RspError)?,
 
-            BusSection::RspRegisters => {
+            Section::RspRegisters => {
                 let side_effects = self
                     .rsp
                     .write_register(address.offset, value.try_into()?)
                     .map_err(BusError::RspError)?;
-                if let Some(mi_change) = side_effects.interrupt {
-                    if mi_change.set() && self.mi.raise_interrupt(InterruptType::Rsp) {
-                        result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
-                    } else if mi_change.clear() {
-                        self.mi.lower_interrupt(InterruptType::Rsp);
-                    }
-                }
+                self.handle(side_effects, &mut result)
             }
 
-            BusSection::VideoInterface => {
+            Section::VideoInterface => {
                 let side_effects = self
                     .vi
                     .write(address.offset, value.try_into()?)
                     .ok_or(BusError::OffsetOutOfBounds(address))?;
-                if side_effects.lower_interrupt {
-                    self.mi.lower_interrupt(InterruptType::VideoInterface);
-                }
+                self.handle(side_effects, &mut result)
             }
 
-            BusSection::SerialInterface => {
+            Section::SerialInterface => {
                 let side_effects = self
                     .si
                     .write(address.offset, value.try_into()?, self.rdram.as_mut_slice())
                     .map_err(BusError::SerialInterfaceError)?;
-                if side_effects.lower_interrupt {
-                    self.mi.lower_interrupt(InterruptType::SerialInterface);
-                }
+                self.handle(side_effects, &mut result)
             }
 
-            BusSection::PeripheralInterface => {
+            Section::PeripheralInterface => {
                 let side_effects = self
                     .pi
                     .write_register(address.offset, value.try_into()?, self.rdram.as_mut_slice())
                     .map_err(BusError::PeripheralInterfaceError)?;
-
-                // Invalidate JIT blocks if RDRAM was mutated, since code may reside there.
-                if let Some(range) = side_effects.mutated_rdram {
-                    let rdram_base = BusSection::RdramMemory.range().start;
-                    result.mutated = Some(range.start + rdram_base..range.end + rdram_base);
-                }
-
-                if side_effects.lower_interrupt {
-                    self.mi.lower_interrupt(InterruptType::PeripheralInterface);
-                }
+                self.handle(side_effects, &mut result)
             }
 
-            BusSection::CartridgeRom | BusSection::CartridgeSram => self
+            Section::CartridgeRom => self
                 .pi
-                .write_bus::<SIZE>(address.section.into(), address.offset, value.as_slice())
+                .write_bus::<SIZE>(PiDevice::CartridgeRom, address.offset, value.as_slice())
                 .map_err(BusError::PeripheralInterfaceError)?,
 
-            BusSection::DiskDriveIpl4Rom => Err(BusError::ReadOnlyRegionWrite(*address.section))?,
+            Section::CartridgeSram => self
+                .pi
+                .write_bus::<SIZE>(PiDevice::CartridgeSram, address.offset, value.as_slice())
+                .map_err(BusError::PeripheralInterfaceError)?,
 
-            BusSection::RspMemoryMirrors => {
+            Section::DiskDriveIpl4Rom => Err(BusError::ReadOnlyRegionWrite(address.section.0))?,
+
+            Section::RspMemoryMirrors => {
                 unreachable!("rsp memory mirrors should be resolved")
             }
 
-            section => section
-                .safe_to_stub()
-                .then(|| {
-                    eprintln!(
-                        "stub: memory write of {value:#x?} at {:#x} = {address:#x?}",
-                        address.physical_address()
-                    )
-                })
-                .ok_or(BusError::UnimplementedSection(*section))?,
+            _ => {
+                eprintln!(
+                    "stub: memory write of {value:#x?} at {:#x} = {address:#x?}",
+                    address.physical_address()
+                )
+            }
         };
         Ok(result)
     }
@@ -434,57 +464,30 @@ impl BusInterface for Bus {
         let mut result = BusValue::default();
         self.maybe_poll_gui_events(cycles, &mut result);
 
-        // TODO: Handle side effects in a nicer way, probably a trait impl for each device so we can `self.handle(foo.tick())`.
-        // Devices should share an interface for common functionality (`n64-common` crate?).
-
-        {
-            let vi_side_effects = self.vi.tick(cycles);
-            if vi_side_effects.vblank {
-                if let Some(fb) = self.vi.framebuffer(self.rdram.as_slice()) {
-                    self.context.send(context::Framebuffer {
-                        width: VideoInterface::SCREEN_WIDTH,
-                        height: VideoInterface::SCREEN_HEIGHT,
-                        pixels: fb.pixels,
-                    });
-                }
-
-                // TODO: only call this on PIF DMA, it will not be read until then.
-                self.update_controller()?;
+        if self.vi.vblank {
+            if let Some(fb) = self.vi.framebuffer(self.rdram.as_slice()) {
+                self.context.send(context::Framebuffer {
+                    width: VideoInterface::SCREEN_WIDTH,
+                    height: VideoInterface::SCREEN_HEIGHT,
+                    pixels: fb.pixels,
+                });
             }
 
-            if vi_side_effects.raise_interrupt
-                && self.mi.raise_interrupt(InterruptType::VideoInterface)
-            {
-                result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
-            }
+            // TODO: only call this on PIF DMA, it will not be read until then.
+            self.update_controller()?;
         }
 
-        {
-            let rsp_side_effects = self.rsp.tick(cycles, self.rdram.as_mut_slice());
-            if let Some(range) = rsp_side_effects.mutated_rdram {
-                let rdram_base = BusSection::RdramMemory.range().start;
-                result.mutated = Some(range.start + rdram_base..range.end + rdram_base);
-            }
-            if let Some((bank, range)) = rsp_side_effects.mutated_spmem {
-                let base = match bank {
-                    RspBank::DMem => BusSection::RspDMemory.range().start,
-                    RspBank::IMem => BusSection::RspIMemory.range().start,
-                };
-                result.mutated = Some(base + range.start..base + range.end);
-            }
-        }
+        let vi_side_effects = self.vi.tick(cycles);
+        self.handle(vi_side_effects, &mut result);
 
-        if self.pi.tick(cycles) == DmaStatus::Finished
-            && self.mi.raise_interrupt(InterruptType::PeripheralInterface)
-        {
-            result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
-        }
+        let rsp_side_effects = self.rsp.tick(cycles, self.rdram.as_mut_slice());
+        self.handle(rsp_side_effects, &mut result);
 
-        if self.si.tick(cycles) == n64_si::DmaStatus::Completed
-            && self.mi.raise_interrupt(InterruptType::SerialInterface)
-        {
-            result.interrupt = Some(MipsInterface::INTERRUPT_PENDING_MASK);
-        }
+        let pi_side_effects = self.pi.tick(cycles);
+        self.handle(pi_side_effects, &mut result);
+
+        let si_side_effects = self.si.tick(cycles);
+        self.handle(si_side_effects, &mut result);
 
         Ok(result)
     }

@@ -1,4 +1,4 @@
-use tartan_bitfield::bitfield;
+use n64_common::utils::tartan_bitfield::bitfield;
 
 const fn offset(index: usize) -> usize {
     index * std::mem::size_of::<u32>()

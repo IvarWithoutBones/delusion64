@@ -5,6 +5,7 @@ use self::register::{
     Origin, PixelType, StagedData, TestAddress, VerticalBurst, VerticalSync, VerticalVideo, Width,
     XScale, YScale,
 };
+use n64_common::{InterruptDevice, SideEffects};
 
 mod register;
 
@@ -21,13 +22,6 @@ pub struct FrameBuffer {
     pub width: usize,
     pub height: usize,
     pub pixels: Box<[u8]>,
-}
-
-#[derive(Debug, Default)]
-pub struct SideEffects {
-    pub lower_interrupt: bool,
-    pub raise_interrupt: bool,
-    pub vblank: bool,
 }
 
 #[derive(Debug)]
@@ -53,6 +47,7 @@ pub struct VideoInterface {
     field: bool,
     counter: u32,
     interrupt_counter: u32,
+    pub vblank: bool,
 }
 
 impl VideoInterface {
@@ -80,6 +75,7 @@ impl VideoInterface {
             field: false,
             counter: COUNTER_START,
             interrupt_counter: 0,
+            vblank: false,
         }
     }
 
@@ -136,7 +132,7 @@ impl VideoInterface {
                 self.interrupt = Interrupt::from(value);
                 self.interrupt_counter = COUNTER_START - (COUNTER_START / (525 * (value >> 1)));
             }
-            Current::OFFSET => side_effects.lower_interrupt = true,
+            Current::OFFSET => side_effects.lower_interrupt(InterruptDevice::VideoInterface),
             Burst::OFFSET => self.burst = Burst::from(value),
             VerticalSync::OFFSET => self.vertical_sync = VerticalSync::from(value),
             HorizontalSync::OFFSET => self.horizontal_sync = HorizontalSync::from(value),
@@ -163,19 +159,20 @@ impl VideoInterface {
             .checked_sub(cycles as u32)
             .unwrap_or(COUNTER_START);
 
-        let vblank = old_counter > BLANKING_DONE && self.counter <= BLANKING_DONE;
         let raise_interrupt =
             old_counter > self.interrupt_counter && self.counter <= self.interrupt_counter;
 
+        let vblank = old_counter > BLANKING_DONE && self.counter <= BLANKING_DONE;
+        self.vblank = vblank;
         if vblank {
             self.field = !self.field;
         }
 
-        SideEffects {
-            raise_interrupt,
-            vblank,
-            ..Default::default()
+        let mut side_effects = SideEffects::new();
+        if raise_interrupt {
+            side_effects.raise_interrupt(InterruptDevice::VideoInterface);
         }
+        side_effects
     }
 
     /// Returns the guest framebuffer as RGBA8888 pixels.

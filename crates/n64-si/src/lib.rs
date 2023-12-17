@@ -1,35 +1,22 @@
-use std::ops::Range;
-
 use self::register::{
     DramAddress, PifAddressRead4, PifAddressRead64, PifAddressWrite4, PifAddressWrite64, Status,
 };
+use n64_common::{utils::thiserror, InterruptDevice, SideEffects};
 use n64_pif::Pif;
+use std::ops::Range;
 
-// TODO: move the PIF out of this crate
 pub use n64_pif::{controller, Channel, PifError};
 
 mod register;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(thiserror::Error, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SiError {
+    #[error("Offset {offset} is out of bounds")]
     OffsetOutOfBounds { offset: usize },
-    PifError(PifError),
+    #[error("Pif error: {0}")]
+    PifError(#[from] PifError),
 }
-
-impl From<PifError> for SiError {
-    fn from(error: PifError) -> Self {
-        Self::PifError(error)
-    }
-}
-
 pub type SiResult<T> = Result<T, SiError>;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum DmaStatus {
-    Idle,
-    Completed,
-    Busy,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum DmaType {
@@ -52,11 +39,6 @@ impl Dma {
         self.cycles_remaining = self.cycles_remaining.saturating_sub(cycles);
         self.cycles_remaining == 0
     }
-}
-
-#[derive(Debug, Default)]
-pub struct SideEffects {
-    pub lower_interrupt: bool,
 }
 
 #[derive(Debug)]
@@ -156,26 +138,24 @@ impl SerialInterface {
             Status::OFFSET => {
                 // Writing to the status register clears the interrupt (if any).
                 self.status.set_interrupt(false);
-                side_effects.lower_interrupt = true;
+                side_effects.lower_interrupt(InterruptDevice::SerialInterface);
             }
             _ => Err(SiError::OffsetOutOfBounds { offset })?,
         }
         Ok(side_effects)
     }
 
-    pub fn tick(&mut self, cycles: usize) -> DmaStatus {
+    pub fn tick(&mut self, cycles: usize) -> SideEffects {
+        let mut side_effects = SideEffects::new();
         if let Some(dma) = &mut self.dma {
             if dma.tick(cycles) {
                 self.status.set_dma_busy(false);
                 self.status.set_interrupt(true);
                 self.dma = None;
-                DmaStatus::Completed
-            } else {
-                DmaStatus::Busy
+                side_effects.raise_interrupt(InterruptDevice::SerialInterface);
             }
-        } else {
-            DmaStatus::Idle
         }
+        side_effects
     }
 
     fn rdram_range(&self) -> Range<usize> {
