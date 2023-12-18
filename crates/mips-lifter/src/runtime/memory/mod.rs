@@ -2,7 +2,7 @@
 
 use self::tlb::AccessMode;
 use super::{
-    bus::{self, Address, BusError, Int, MemorySection},
+    bus::{self, Int},
     Environment,
 };
 use std::ops::Range;
@@ -10,17 +10,7 @@ use std::ops::Range;
 pub(crate) mod tlb;
 
 impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
-    fn find_section(&self, paddr: u32) -> Result<&'static Bus::Section, BusError<Bus::Error>> {
-        Bus::SECTIONS
-            .iter()
-            .find(|section| section.range().contains(&paddr))
-            .ok_or(BusError::AddressNotMapped { address: paddr })
-    }
-
-    pub fn read<const SIZE: usize>(
-        &mut self,
-        paddr: u32,
-    ) -> Result<Int<SIZE>, BusError<Bus::Error>> {
+    pub fn read<const SIZE: usize>(&mut self, paddr: u32) -> Result<Int<SIZE>, Bus::Error> {
         // TODO: remove these round-trip vaddr->paddr->vaddr conversions
         let vaddr = self.tlb.translate_paddr(paddr).unwrap_or_else(|e| {
             let msg = &format!("failed to convert paddr to vaddr: {e:#x?}");
@@ -28,17 +18,16 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         });
         self.debugger_signal_write(vaddr, SIZE);
 
-        self.find_section(paddr).and_then(|section| {
-            let addr = Address::new(section, paddr);
-            self.bus.read_memory(addr).map(|result| result.handle(self))
-        })
+        self.bus
+            .read_memory(paddr)
+            .map(|result| result.handle(self))
     }
 
     pub fn write<const SIZE: usize>(
         &mut self,
         paddr: u32,
         value: Int<SIZE>,
-    ) -> Result<(), BusError<Bus::Error>> {
+    ) -> Result<(), Bus::Error> {
         // TODO: remove these round-trip vaddr->paddr->vaddr conversions
         let vaddr = self.tlb.translate_paddr(paddr).unwrap_or_else(|e| {
             let msg = &format!("failed to convert paddr to vaddr: {e:#x?}");
@@ -46,16 +35,9 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         });
         self.debugger_signal_write(vaddr, SIZE);
 
-        self.find_section(paddr).and_then(|section| {
-            let addr = Address::new(section, paddr);
-            self.bus.write_memory(addr, value).map(|result| {
-                if section.auto_invalidate_written_addresses() {
-                    // Use Address here to account for mirroring
-                    let paddr = Address::new(section, paddr).physical_address();
-                    self.invalidate(paddr..(paddr + SIZE as u32));
-                }
-                result.handle(self)
-            })
+        self.bus.write_memory(paddr, value).map(|result| {
+            self.invalidate(paddr..(paddr + SIZE as u32));
+            result.handle(self)
         })
     }
 

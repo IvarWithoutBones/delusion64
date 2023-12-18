@@ -1,5 +1,7 @@
 use n64_common::utils::tartan_bitfield::bitfield;
 
+use crate::ViError;
+
 const fn offset(index: usize) -> usize {
     index * std::mem::size_of::<u32>()
 }
@@ -17,11 +19,13 @@ pub enum PixelType {
 }
 
 impl PixelType {
-    pub fn bytes_per_pixel(self) -> Option<usize> {
+    pub fn bytes_per_pixel(self) -> Result<usize, ViError> {
         match self {
-            PixelType::RGBA8888 => Some(4),
-            PixelType::RGBA5551 => Some(2),
-            PixelType::Reserved | PixelType::Blank => None,
+            PixelType::RGBA8888 => Ok(4),
+            PixelType::RGBA5551 => Ok(2),
+            PixelType::Reserved | PixelType::Blank => {
+                Err(ViError::InvalidPixelType { pixel_type: self })
+            }
         }
     }
 }

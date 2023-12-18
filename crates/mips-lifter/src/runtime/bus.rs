@@ -60,55 +60,22 @@ impl<T> From<T> for BusValue<T> {
     }
 }
 
-pub enum BusError<T> {
+#[derive(thiserror::Error, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum BusError<E: std::error::Error> {
+    // TODO: make this strongly typed
+    #[error("Internal error while JITing: {0}")]
+    Jit(String),
+    #[error("Error during memory operation: {0:#x}")]
+    Bus(#[from] E),
+}
+
+pub type BusResult<T, E> = Result<BusValue<T>, E>;
+
+#[derive(thiserror::Error, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum IntError {
+    #[error("Unexpected size: expected {expected}, but got {got}")]
     UnexpectedSize { expected: usize, got: usize },
-    AddressNotMapped { address: PhysicalAddress },
-    String(String),
-    Other(T),
 }
-
-impl<T> From<T> for BusError<T> {
-    fn from(value: T) -> Self {
-        Self::Other(value)
-    }
-}
-
-impl From<BusError<fmt::Error>> for fmt::Error {
-    fn from(value: BusError<fmt::Error>) -> Self {
-        match value {
-            BusError::Other(result) => result,
-            _ => unimplemented!(),
-        }
-    }
-}
-
-impl<T: fmt::Display> fmt::Display for BusError<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnexpectedSize { expected, got } => {
-                write!(f, "bus: unexpected size, expected {expected} but got {got}")
-            }
-            Self::AddressNotMapped { address } => write!(f, "address {address:#x} is not mapped"),
-            Self::String(message) => write!(f, "{message}"),
-            Self::Other(message) => write!(f, "{message}"),
-        }
-    }
-}
-
-impl<T: fmt::Debug> fmt::Debug for BusError<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnexpectedSize { expected, got } => {
-                write!(f, "bus: unexpected size, expected {expected} but got {got}")
-            }
-            Self::AddressNotMapped { address } => write!(f, "address {address:#x} is not mapped"),
-            Self::String(message) => write!(f, "{message}"),
-            Self::Other(message) => write!(f, "{message:?}"),
-        }
-    }
-}
-
-pub type BusResult<T, E> = Result<BusValue<T>, BusError<E>>;
 
 /// A trait for types that can be converted into an [`Int`]. Much like [`std::convert::Into`], but with a const generic size.
 pub trait IntoInt<const SIZE: usize> {
@@ -140,9 +107,7 @@ pub struct Int<const SIZE: usize>([u8; SIZE]);
 impl<const SIZE: usize> Int<SIZE> {
     /// Creates a new integer with the specified value, automatically resizing it to the expected (usually inferred) size.
     #[inline]
-    pub fn new<T, E, const EXPECTED_SIZE: usize>(
-        value: T,
-    ) -> Result<Int<EXPECTED_SIZE>, BusError<E>>
+    pub fn new<T, const EXPECTED_SIZE: usize>(value: T) -> Result<Int<EXPECTED_SIZE>, IntError>
     where
         T: IntoInt<SIZE>,
     {
@@ -151,7 +116,7 @@ impl<const SIZE: usize> Int<SIZE> {
 
     /// Converts the integer into a value of the specified (usually inferred) type, by resizing it to the expected size.
     #[inline]
-    pub fn try_into<T, E, const REQUIRED_SIZE: usize>(self) -> Result<T, BusError<E>>
+    pub fn try_into<T, const REQUIRED_SIZE: usize>(self) -> Result<T, IntError>
     where
         T: From<Int<REQUIRED_SIZE>>,
     {
@@ -159,13 +124,13 @@ impl<const SIZE: usize> Int<SIZE> {
     }
 
     #[inline]
-    pub fn resize<E, const EXPECTED_SIZE: usize>(self) -> Result<Int<EXPECTED_SIZE>, BusError<E>> {
+    pub fn resize<const EXPECTED_SIZE: usize>(self) -> Result<Int<EXPECTED_SIZE>, IntError> {
         if SIZE == EXPECTED_SIZE {
             // This is required because the compiler cannot infer the size is equal, we effectively cast the const generics.
             // When compiled with optimizations, this should be a no-op. SAFETY: we just checked the size is equal.
             Ok(unsafe { (&self as *const Self).cast::<Int<EXPECTED_SIZE>>().read() })
         } else {
-            Err(BusError::UnexpectedSize {
+            Err(IntError::UnexpectedSize {
                 expected: EXPECTED_SIZE,
                 got: SIZE,
             })
@@ -173,8 +138,8 @@ impl<const SIZE: usize> Int<SIZE> {
     }
 
     #[inline]
-    pub fn from_slice<E>(slice: &[u8]) -> Result<Self, BusError<E>> {
-        let slice = slice.get(..SIZE).ok_or(BusError::UnexpectedSize {
+    pub fn from_slice(slice: &[u8]) -> Result<Self, IntError> {
+        let slice = slice.get(..SIZE).ok_or(IntError::UnexpectedSize {
             expected: SIZE,
             got: slice.len(),
         })?;
@@ -231,16 +196,16 @@ macro_rules! format_int {
             impl<const SIZE: usize> $trait for Int<SIZE> {
                 fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                     if SIZE == size_of::<u8>() {
-                        let value: u8 = self.resize()?.into();
+                        let value: u8 = self.resize().unwrap().into();
                         write!(f, concat!("{:", $fmt, "}_u8"), value)
                     } else if SIZE == size_of::<u16>() {
-                        let value: u16 = self.resize()?.into();
+                        let value: u16 = self.resize().unwrap().into();
                         write!(f, concat!("{:", $fmt, "}_u16"), value)
                     } else if SIZE == size_of::<u32>() {
-                        let value: u32 = self.resize()?.into();
+                        let value: u32 = self.resize().unwrap().into();
                         write!(f, concat!("{:", $fmt, "}_u32"), value)
                     } else if SIZE == size_of::<u64>() {
-                        let value: u64 = self.resize()?.into();
+                        let value: u64 = self.resize().unwrap().into();
                         write!(f, concat!("{:", $fmt, "}_u64"), value)
                     } else {
                         write!(f, concat!("{:", $fmt, "?}"), self.0)
@@ -258,81 +223,6 @@ format_int!(
     (fmt::UpperHex, "X")
 );
 
-/// A mirroring configuration for a memory section.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Mirroring<Section: MemorySection + 'static> {
-    /// Mirror the section at the specified offset.
-    AtOffset(u32),
-    /// The section is mirrored at the specified offset, spanning across multiple sections.
-    /// The two sections must be adjacent.
-    AcrossSections {
-        start: &'static Section,
-        end: &'static Section,
-    },
-    /// No mirroring is used.
-    None,
-}
-
-impl<Section: MemorySection> Mirroring<Section> {
-    pub fn resolve(&self, section: &'static Section, paddr: PhysicalAddress) -> Address<Section> {
-        let (section, offset) = match self {
-            Self::AtOffset(offset) => (section, paddr % offset),
-            Self::AcrossSections { start, end } => {
-                let offset = paddr % (end.range().end - start.range().start);
-                let addr = start.range().start + offset;
-                start
-                    .range()
-                    .contains(&addr)
-                    .then_some((*start, offset))
-                    .or_else(|| end.range().contains(&addr).then_some((*end, offset)))
-                    .unwrap_or_else(|| {
-                        panic!("address {paddr:#x} is not mapped to any of the specified sections")
-                    })
-            }
-            Self::None => (section, paddr - section.range().start),
-        };
-        Address {
-            offset: offset as usize,
-            section,
-        }
-    }
-}
-
-/// A section of memory that can be accessed by a bus. This is meant to be implemented on an enum.
-pub trait MemorySection: fmt::Debug {
-    /// The range of physical addresses that this section occupies.
-    fn range(&self) -> Range<PhysicalAddress>;
-
-    /// The mirroring configuration for this section.
-    fn mirroring(&self) -> Mirroring<Self>
-    where
-        Self: Sized;
-
-    /// Whether the range of written bytes should be invalidated when writing to this section.
-    /// If this returns false, the physical addresses (if any) must be invalidated manually.
-    fn auto_invalidate_written_addresses(&self) -> bool;
-}
-
-/// A physical address in memory, mapped to a specific section.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Address<Section: MemorySection + 'static> {
-    /// The offset from the start of the section.
-    pub offset: usize,
-    /// The section that this address is mapped to.
-    /// This can optionally specify mirroring, which the offset will be adjusted for.
-    pub section: &'static Section,
-}
-
-impl<Section: MemorySection> Address<Section> {
-    pub fn new(section: &'static Section, paddr: PhysicalAddress) -> Self {
-        section.mirroring().resolve(section, paddr)
-    }
-
-    pub fn physical_address(&self) -> PhysicalAddress {
-        self.section.range().start + self.offset as PhysicalAddress
-    }
-}
-
 /// Decides whom will kill the thread when an unrecoverable error occurs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PanicAction {
@@ -346,24 +236,18 @@ pub enum PanicAction {
 /// A bus that can be used to read and write memory.
 pub trait Bus {
     /// The error type that can be returned by the bus.
-    type Error: fmt::Debug;
-
-    /// The type of memory sections that the bus can access.
-    type Section: MemorySection + 'static;
-
-    /// The sections of memory that the bus can access.
-    const SECTIONS: &'static [Self::Section];
+    type Error: std::error::Error;
 
     /// Reads a value from memory.
     fn read_memory<const SIZE: usize>(
         &mut self,
-        address: Address<Self::Section>,
+        address: PhysicalAddress,
     ) -> BusResult<Int<SIZE>, Self::Error>;
 
     /// Writes a value to memory.
     fn write_memory<const SIZE: usize>(
         &mut self,
-        address: Address<Self::Section>,
+        address: PhysicalAddress,
         value: Int<SIZE>,
     ) -> BusResult<(), Self::Error>;
 
@@ -379,20 +263,9 @@ pub trait Bus {
 }
 
 pub(crate) fn u32_iter<T: Bus>(bus: &mut T, mut paddr: u32) -> impl Iterator<Item = u32> + '_ {
-    let find_section = |paddr| {
-        T::SECTIONS
-            .iter()
-            .find(|section| section.range().contains(&paddr))
-            .unwrap()
-    };
-
-    let mut section = find_section(paddr);
     std::iter::from_fn(move || {
-        if !section.range().contains(&paddr) {
-            section = find_section(paddr);
-        }
-        let addr = Address::new(section, paddr);
+        let value = bus.read_memory(paddr).unwrap().inner.into();
         paddr += 4;
-        Some(bus.read_memory(addr).unwrap().inner.into())
+        Some(value)
     })
 }

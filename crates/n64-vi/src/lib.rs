@@ -5,7 +5,7 @@ use self::register::{
     Origin, PixelType, StagedData, TestAddress, VerticalBurst, VerticalSync, VerticalVideo, Width,
     XScale, YScale,
 };
-use n64_common::{InterruptDevice, SideEffects};
+use n64_common::{utils::thiserror, InterruptDevice, SideEffects};
 
 mod register;
 
@@ -15,6 +15,14 @@ const BLANKING_DONE: u32 = (COUNTER_START as f32 - (COUNTER_START as f32 / (525.
 const fn rgba5551_to_rgba8888_color(mut color: u16) -> u8 {
     color &= 0b1_1111;
     (color | (color << 3)) as u8
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum ViError {
+    #[error("Register offset out of bounds: {offset}")]
+    RegisterOffsetOutOfBounds { offset: usize },
+    #[error("Could not display pixel type: {pixel_type:?}")]
+    InvalidPixelType { pixel_type: PixelType },
 }
 
 #[derive(Debug)]
@@ -88,7 +96,7 @@ impl VideoInterface {
         ((COUNTER_START - self.counter) / vsync_lines) as u16
     }
 
-    pub fn read(&mut self, offset: usize) -> Option<u32> {
+    pub fn read(&mut self, offset: usize) -> Result<u32, ViError> {
         if self.vertical_sync.scanlines() != 0 {
             let mut current = Current::default().with_halfline(self.current_halfline());
             if !self.vertical_sync.field() {
@@ -117,12 +125,12 @@ impl VideoInterface {
             YScale::OFFSET => self.yscale.into(),
             TestAddress::OFFSET => self.test_address.into(),
             StagedData::OFFSET => self.staged_data.into(),
-            _ => unreachable!(),
+            _ => Err(ViError::RegisterOffsetOutOfBounds { offset })?,
         };
-        Some(value)
+        Ok(value)
     }
 
-    pub fn write(&mut self, offset: usize, value: u32) -> Option<SideEffects> {
+    pub fn write(&mut self, offset: usize, value: u32) -> Result<SideEffects, ViError> {
         let mut side_effects = SideEffects::default();
         match Self::normalise_offset(offset) {
             Control::OFFSET => self.control = Control::from(value),
@@ -146,9 +154,9 @@ impl VideoInterface {
             YScale::OFFSET => self.yscale = YScale::from(value),
             TestAddress::OFFSET => self.test_address = TestAddress::from(value),
             StagedData::OFFSET => self.staged_data = StagedData::from(value),
-            _ => unreachable!(),
+            _ => Err(ViError::RegisterOffsetOutOfBounds { offset })?,
         }
-        Some(side_effects)
+        Ok(side_effects)
     }
 
     #[must_use]
@@ -176,7 +184,7 @@ impl VideoInterface {
     }
 
     /// Returns the guest framebuffer as RGBA8888 pixels.
-    pub fn framebuffer(&self, rdram: &[u8]) -> Option<FrameBuffer> {
+    pub fn framebuffer(&self, rdram: &[u8]) -> Result<FrameBuffer, ViError> {
         let (src_x_offset, dst_x_offset, dst_width) = {
             const HSCAN_MIN: usize = 108;
             const HSCAN_MAX: usize = HSCAN_MIN + VideoInterface::SCREEN_WIDTH;
@@ -234,7 +242,9 @@ impl VideoInterface {
                             let a = u8::MAX;
                             pixel_chunk.copy_from_slice(&[r, g, b, a]);
                         }
-                        PixelType::Reserved | PixelType::Blank => return None,
+                        PixelType::Reserved | PixelType::Blank => {
+                            Err(ViError::InvalidPixelType { pixel_type })?
+                        }
                     }
                     src_x += xscale;
                 }
@@ -242,7 +252,7 @@ impl VideoInterface {
             }
         }
 
-        Some(FrameBuffer {
+        Ok(FrameBuffer {
             width: dst_width,
             height: dst_height,
             pixels,

@@ -8,6 +8,7 @@ gdbstub = "0.6.6"
 gdbstub_arch = "0.2.4"
 strum = { version = "0.25.0", features = ["derive"] }
 tartan-bitfield = "1.2.0"
+thiserror = "1.0.51"
 mips-decomp = { path = "../mips-decomp" }
 
 [dependencies.inkwell]
