@@ -12,7 +12,7 @@ use crate::{
 };
 use inkwell::{context::Context, execution_engine::ExecutionEngine, module::Module};
 use mips_decomp::{instruction::ParsedInstruction, register, Exception, INSTRUCTION_SIZE};
-use std::pin::Pin;
+use std::{collections::HashMap, pin::Pin};
 use strum::IntoEnumIterator;
 
 pub(crate) use self::function::RuntimeFunction;
@@ -84,6 +84,7 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
         let registers = self.registers.map_into(&context, module, execution_engine);
 
         // Map the runtime functions
+        let mut functions = HashMap::new();
         for func in RuntimeFunction::iter() {
             let ptr: *const u8 = match func {
                 RuntimeFunction::Panic => Self::panic as _,
@@ -117,10 +118,15 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
                 RuntimeFunction::WritePhysicalI64 => Self::write_physical_u64 as _,
             };
 
-            func.map_into(&context, module, execution_engine, ptr);
+            let value = func.map_into(&context, module, execution_engine, ptr);
+            functions.entry(func).or_insert(value);
         }
 
-        codegen::Globals { env_ptr, registers }
+        codegen::Globals {
+            env_ptr,
+            registers,
+            functions,
+        }
     }
 
     fn virtual_to_physical_address(&mut self, vaddr: u64, mode: AccessMode) -> u32 {
@@ -268,9 +274,11 @@ impl<'ctx, Bus: bus::Bus> Environment<'ctx, Bus> {
             labels
         };
 
+        let module = self.codegen.context.create_module("tmp");
+        let globals = self.map_into(&module, &self.codegen.execution_engine);
         let lab = self
             .codegen
-            .add_dynamic_function(|codegen, module| {
+            .add_dynamic_function(module, globals, |codegen, module| {
                 let mut lab = {
                     let mut labels = generate_label_functions(label_list, codegen.context, module);
                     labels.pop().ok_or_else(|| {

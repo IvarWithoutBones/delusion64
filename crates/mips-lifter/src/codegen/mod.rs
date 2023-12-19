@@ -15,6 +15,7 @@ use inkwell::{
     values::{CallSiteValue, FunctionValue, GlobalValue, IntValue},
 };
 use mips_decomp::{instruction::ParsedInstruction, Exception};
+use std::collections::HashMap;
 
 #[macro_use]
 mod comparison;
@@ -30,9 +31,11 @@ macro_rules! env_call {
         // Type-check the arguments.
         let codegen: &$crate::codegen::CodeGen = $codegen;
         let func: &$crate::runtime::RuntimeFunction = &$func;
-        let args = &[codegen.globals().env_ptr.as_pointer_value().into(), $($args.into()),*];
-        let func = codegen.module.get_function(func.name()).unwrap();
-        codegen.builder.build_call(func, args, "env_call")
+
+        let globals = codegen.globals();
+        let args = &[globals.env_ptr.as_pointer_value().into(), $($args.into()),*];
+        let func = *globals.functions.get(func).expect("runtime functions not initialised");
+        codegen.builder.build_call(func, args, concat!("env_call_", stringify!($func)))
     }};
 }
 
@@ -64,6 +67,7 @@ pub struct RegisterGlobals<'ctx> {
 pub struct Globals<'ctx> {
     pub env_ptr: GlobalValue<'ctx>,
     pub registers: RegisterGlobals<'ctx>,
+    pub functions: HashMap<RuntimeFunction, FunctionValue<'ctx>>,
 }
 
 #[derive(Debug)]
@@ -79,7 +83,7 @@ pub struct CodeGen<'ctx> {
     pub builder: Builder<'ctx>,
     pub execution_engine: ExecutionEngine<'ctx>,
     pub labels: VirtualAddressMap<'ctx>,
-    globals: Option<Globals<'ctx>>,
+    pub globals: Option<Globals<'ctx>>,
     helpers: Helpers<'ctx>,
     /// Every single module we compiled. We need to keep these around to cleanly shut down LLVM.
     pub modules: Vec<Module<'ctx>>,
@@ -126,8 +130,7 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     pub(crate) fn globals(&self) -> &Globals<'ctx> {
-        // SAFETY: this only gets initialised by the runtime, which will call `initialise` before anything else.
-        unsafe { self.globals.as_ref().unwrap_unchecked() }
+        self.globals.as_ref().expect("globals are not initialised")
     }
 
     pub fn fallthrough_function(&self, amount: FallthroughAmount) -> FunctionValue<'ctx> {
@@ -186,13 +189,22 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(())
     }
 
-    pub fn add_dynamic_function<F>(&mut self, f: F) -> Result<LabelWithContext<'ctx>, String>
+    pub fn add_dynamic_function<F>(
+        &mut self,
+        module: Module<'ctx>,
+        globals: Globals<'ctx>,
+        f: F,
+    ) -> Result<LabelWithContext<'ctx>, String>
     where
         F: FnOnce(&CodeGen<'ctx>, &Module<'ctx>) -> Result<LabelWithContext<'ctx>, String>,
     {
-        let new_module = self.context.create_module("tmp_dynamic_module");
-        let mut lab = f(self, &new_module)?;
-        self.link_in_module(new_module, &mut lab)?;
+        self.globals = Some(globals);
+        self.helpers.map_into(&module);
+        let mut lab = f(self, &module)?;
+        self.link_in_module(module, &mut lab)?;
+        if let Err(e) = self.verify() {
+            panic!("failed to verify generated code: {e}");
+        }
         Ok(lab)
     }
 

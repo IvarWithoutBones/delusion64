@@ -1,11 +1,11 @@
 //! Functions that are called by the generated code, calling into the `Environment` struct.
 
 use inkwell::{
-    context::ContextRef, execution_engine::ExecutionEngine, module::Module, types::FunctionType,
+    context::ContextRef, execution_engine::ExecutionEngine, module::Module, types::FunctionType, values::FunctionValue,
 };
 use strum::{EnumIter, EnumVariantNames, VariantNames};
 
-#[derive(EnumVariantNames, EnumIter, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(EnumVariantNames, EnumIter, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[strum(serialize_all = "snake_case")]
 pub enum RuntimeFunction {
     Panic,
@@ -144,9 +144,10 @@ impl RuntimeFunction {
         module: &Module<'ctx>,
         execution_engine: &ExecutionEngine<'ctx>,
         ptr: *const u8,
-    ) {
+    ) -> FunctionValue<'ctx> {
         let sig = self.signature(context, execution_engine);
         let func = module.add_function(self.name(), sig, None);
         execution_engine.add_global_mapping(&func, ptr as usize);
+        func
     }
 }

@@ -29,6 +29,19 @@ impl<'ctx> Helpers<'ctx> {
         self.fallthrough_two
             .expect("fallthrough_two helper function not initialized")
     }
+
+    pub fn map_into(&mut self, module: &inkwell::module::Module<'ctx>) {
+        let declare = |func: Option<FunctionValue<'ctx>>| {
+            let func = func.expect("helper function not initialized");
+            let name = func.get_name().to_str().expect("invalid function name");
+            module.add_function(name, func.get_type(), None)
+        };
+
+        self.main = Some(declare(self.main));
+        self.jump = Some(declare(self.jump));
+        self.fallthrough_one = Some(declare(self.fallthrough_one));
+        self.fallthrough_two = Some(declare(self.fallthrough_two));
+    }
 }
 
 impl<'ctx> CodeGen<'ctx> {
