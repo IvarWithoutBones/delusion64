@@ -6,3 +6,4 @@ edition = "2021"
 
 [dependencies]
 n64-common = { path = "../n64-common" }
+mips-lifter = { path = "../mips-lifter" }

@@ -94,10 +94,10 @@ impl Emulator {
         // It will also write the size of RDRAM.
         let bus = Bus::new(ctx, cart, false);
 
-        JitBuilder::new(bus)
+        JitBuilder::new_cpu(bus)
             .maybe_with_gdb(gdb)
             .with_trace(args.trace)
-            .with_registers(&regs)
+            .with_cpu_registers(regs.into())
             .run()
             .context
     }

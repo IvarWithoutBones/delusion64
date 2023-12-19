@@ -2,6 +2,7 @@ use self::{address_map::VirtualAddressMap, init::Helpers, register::BitWidth};
 use crate::{
     label::{JitFunctionPointer, LabelWithContext},
     runtime::RuntimeFunction,
+    target::{Cpu, Globals as _, RegisterStorage, Target},
     LLVM_CALLING_CONVENTION_TAILCC,
 };
 use inkwell::{
@@ -29,7 +30,7 @@ pub(crate) use register::{INSIDE_DELAY_SLOT_STORAGE, RESERVED_CP0_REGISTER_LATCH
 macro_rules! env_call {
     ($codegen:expr, $func:expr, [$($args:expr),*]) => {{
         // Type-check the arguments.
-        let codegen: &$crate::codegen::CodeGen = $codegen;
+        let codegen: &$crate::codegen::CodeGen<_> = $codegen;
         let func: &$crate::runtime::RuntimeFunction = &$func;
 
         let globals = codegen.globals();
@@ -64,9 +65,9 @@ pub struct RegisterGlobals<'ctx> {
 /// Mappings to the runtime environment.
 #[derive(Debug)]
 #[repr(C)]
-pub struct Globals<'ctx> {
+pub struct Globals<'ctx, T: Target> {
     pub env_ptr: GlobalValue<'ctx>,
-    pub registers: RegisterGlobals<'ctx>,
+    pub registers: <T::Registers as RegisterStorage>::Globals<'ctx>,
     pub functions: HashMap<RuntimeFunction, FunctionValue<'ctx>>,
 }
 
@@ -77,19 +78,19 @@ pub enum FallthroughAmount {
 }
 
 #[derive(Debug)]
-pub struct CodeGen<'ctx> {
+pub struct CodeGen<'ctx, T: Target> {
     pub context: &'ctx Context,
     pub module: Module<'ctx>,
     pub builder: Builder<'ctx>,
     pub execution_engine: ExecutionEngine<'ctx>,
-    pub labels: VirtualAddressMap<'ctx>,
-    pub globals: Option<Globals<'ctx>>,
+    pub labels: VirtualAddressMap<'ctx, T>,
+    pub globals: Option<Globals<'ctx, T>>,
     helpers: Helpers<'ctx>,
     /// Every single module we compiled. We need to keep these around to cleanly shut down LLVM.
     pub modules: Vec<Module<'ctx>>,
 }
 
-impl<'ctx> CodeGen<'ctx> {
+impl<'ctx, T: Target> CodeGen<'ctx, T> {
     pub(crate) fn new(
         context: &'ctx Context,
         module: Module<'ctx>,
@@ -107,30 +108,86 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
-    /// Get a host pointer to a function which simply returns.
-    /// Calling this inside of a JIT'ed block will return to the callee of [`JitBuilder::run`].
-    pub(crate) fn return_from_jit_ptr(&self) -> JitFunctionPointer {
-        const NAME: &str = "return_from_jit_helper";
-        let module = self.context.create_module("return_from_jit_helper_module");
-        let func = self.set_func_attrs(module.add_function(
-            NAME,
-            self.context.void_type().fn_type(&[], false),
-            None,
-        ));
-
-        let block = self.context.append_basic_block(func, "entry");
-        self.builder.position_at_end(block);
-        {
-            // Since every function we call uses tail calls, this should immediately return to the caller.
-            self.builder.build_return(None);
-        }
-
-        self.execution_engine.add_module(&module).unwrap();
-        self.execution_engine.get_function_address(NAME).unwrap() as JitFunctionPointer
+    /// Verify our module is valid.
+    pub fn verify(&self) -> Result<(), String> {
+        self.module.verify().map_err(|e| {
+            self.module.print_to_file("./test/a.ll").unwrap();
+            e.to_string()
+        })
     }
 
-    pub(crate) fn globals(&self) -> &Globals<'ctx> {
+    fn set_func_attrs(&self, func: FunctionValue<'ctx>) -> FunctionValue<'ctx> {
+        func.set_call_conventions(LLVM_CALLING_CONVENTION_TAILCC);
+        for attr in function_attributes(self.context) {
+            func.add_attribute(AttributeLoc::Function, attr);
+        }
+        func
+    }
+
+    fn set_call_attrs(&self, callsite_value: CallSiteValue<'ctx>) -> CallSiteValue<'ctx> {
+        callsite_value.set_tail_call(true);
+        callsite_value.set_call_convention(LLVM_CALLING_CONVENTION_TAILCC);
+        for attr in function_attributes(self.context) {
+            callsite_value.add_attribute(AttributeLoc::Function, attr);
+        }
+        callsite_value
+    }
+
+    pub(crate) fn globals(&self) -> &Globals<'ctx, T> {
         self.globals.as_ref().expect("globals are not initialised")
+    }
+
+    fn build_jump(&self, address: IntValue<'ctx>) {
+        self.set_call_attrs(self.builder.build_call(
+            self.helpers.jump(),
+            &[address.into()],
+            "build_jump",
+        ));
+        self.builder.build_return(None);
+    }
+
+    pub(crate) fn build_jump_to_jit_func_ptr(&self, host_ptr: IntValue<'ctx>, name: &str) {
+        let func_type = self.context.void_type().fn_type(&[], false);
+        let ptr_type = func_type.ptr_type(Default::default());
+        let ptr = self.builder.build_int_to_ptr(host_ptr, ptr_type, name);
+
+        self.set_call_attrs(self.builder.build_indirect_call(func_type, ptr, &[], name));
+        self.builder.build_return(None);
+    }
+
+    /// Generate a dynamic jump to the given dynamic virtual address, ending the current basic block.
+    pub fn build_dynamic_jump(&self, address: IntValue<'ctx>) {
+        self.build_jump(self.zero_extend_to(self.context.i64_type(), address));
+    }
+
+    /// Generate a jump to the given constant virtual address, ending the current basic block.
+    pub fn build_constant_jump(&self, address: u64) {
+        if let Ok(lab) = self.labels.get(address) {
+            // Check if we have previously compiled this function.
+            self.set_call_attrs(self.builder.build_call(lab.function, &[], "constant_jump"));
+            self.builder.build_return(None);
+        } else {
+            // Let the runtime environment JIT it, then jump to it.
+            self.build_dynamic_jump(self.context.i64_type().const_int(address, false));
+        };
+    }
+
+    /// Sign-extends the given value to the given type.
+    pub fn sign_extend_to(&self, ty: IntType<'ctx>, value: IntValue<'ctx>) -> IntValue<'ctx> {
+        let name = format!("sign_ext_to_i{}", ty.get_bit_width());
+        self.builder.build_int_s_extend(value, ty, &name)
+    }
+
+    /// Zero-extends the given value to the given type.
+    pub fn zero_extend_to(&self, ty: IntType<'ctx>, value: IntValue<'ctx>) -> IntValue<'ctx> {
+        let name = format!("zero_ext_to_i{}", ty.get_bit_width());
+        self.builder.build_int_z_extend(value, ty, &name)
+    }
+
+    /// Truncates the given value to the given type.
+    pub fn truncate_to(&self, ty: IntType<'ctx>, value: IntValue<'ctx>) -> IntValue<'ctx> {
+        let name = format!("trunc_to_i{}", ty.get_bit_width());
+        self.builder.build_int_truncate(value, ty, &name)
     }
 
     pub fn fallthrough_function(&self, amount: FallthroughAmount) -> FunctionValue<'ctx> {
@@ -140,24 +197,28 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
-    pub fn set_inside_delay_slot(&self, inside: bool) {
-        let new = self.context.i64_type().const_int(inside as u64, false);
-        let ptr = self.register_pointer(register::INSIDE_DELAY_SLOT_STORAGE);
-        self.builder.build_store(ptr, new);
+    pub fn get_insert_block(&self) -> BasicBlock<'ctx> {
+        self.builder.get_insert_block().unwrap()
     }
 
-    /// Verify our module is valid.
-    pub fn verify(&self) -> Result<(), String> {
-        self.module.verify().map_err(|e| {
-            self.module.print_to_file("./test/a.ll").unwrap();
-            e.to_string()
-        })
+    fn current_block_terminated(&self) -> bool {
+        self.get_insert_block().get_terminator().is_some()
+    }
+
+    fn append_basic_block(&self, name: &str) -> BasicBlock<'ctx> {
+        let current_func = self.get_insert_block().get_parent().unwrap();
+        self.context.append_basic_block(current_func, name)
+    }
+
+    pub fn call_function(&self, func: FunctionValue<'ctx>) {
+        self.set_call_attrs(self.builder.build_call(func, &[], "call_fn"));
+        self.builder.build_return(None);
     }
 
     pub fn link_in_module(
         &mut self,
         module: Module<'ctx>,
-        lab: &mut LabelWithContext,
+        lab: &mut LabelWithContext<T>,
     ) -> Result<(), String> {
         // Map all functions from the new module into our execution engine, and add them to our main module.
         self.execution_engine.add_module(&module).unwrap();
@@ -192,11 +253,11 @@ impl<'ctx> CodeGen<'ctx> {
     pub fn add_dynamic_function<F>(
         &mut self,
         module: Module<'ctx>,
-        globals: Globals<'ctx>,
+        globals: Globals<'ctx, T>,
         f: F,
-    ) -> Result<LabelWithContext<'ctx>, String>
+    ) -> Result<LabelWithContext<'ctx, T>, String>
     where
-        F: FnOnce(&CodeGen<'ctx>, &Module<'ctx>) -> Result<LabelWithContext<'ctx>, String>,
+        F: FnOnce(&CodeGen<'ctx, T>, &Module<'ctx>) -> Result<LabelWithContext<'ctx, T>, String>,
     {
         self.globals = Some(globals);
         self.helpers.map_into(&module);
@@ -206,71 +267,6 @@ impl<'ctx> CodeGen<'ctx> {
             panic!("failed to verify generated code: {e}");
         }
         Ok(lab)
-    }
-
-    fn set_call_attrs(&self, callsite_value: CallSiteValue<'ctx>) -> CallSiteValue<'ctx> {
-        callsite_value.set_tail_call(true);
-        callsite_value.set_call_convention(LLVM_CALLING_CONVENTION_TAILCC);
-        for attr in function_attributes(self.context) {
-            callsite_value.add_attribute(AttributeLoc::Function, attr);
-        }
-        callsite_value
-    }
-
-    fn set_func_attrs(&self, func: FunctionValue<'ctx>) -> FunctionValue<'ctx> {
-        func.set_call_conventions(LLVM_CALLING_CONVENTION_TAILCC);
-        for attr in function_attributes(self.context) {
-            func.add_attribute(AttributeLoc::Function, attr);
-        }
-        func
-    }
-
-    pub fn get_insert_block(&self) -> BasicBlock<'ctx> {
-        self.builder.get_insert_block().unwrap()
-    }
-
-    fn append_basic_block(&self, name: &str) -> BasicBlock<'ctx> {
-        let current_func = self.get_insert_block().get_parent().unwrap();
-        self.context.append_basic_block(current_func, name)
-    }
-
-    fn current_block_terminated(&self) -> bool {
-        self.builder
-            .get_insert_block()
-            .unwrap()
-            .get_terminator()
-            .is_some()
-    }
-
-    fn build_jump(&self, address: IntValue<'ctx>) {
-        self.set_call_attrs(self.builder.build_call(
-            self.helpers.jump(),
-            &[address.into()],
-            "build_jump",
-        ));
-        self.builder.build_return(None);
-    }
-
-    /// Generate a dynamic jump to the given dynamic virtual address, ending the current basic block.
-    pub fn build_dynamic_jump(&self, address: IntValue<'ctx>) {
-        self.build_jump(self.zero_extend_to(self.context.i64_type(), address));
-    }
-
-    /// Generate a jump to the given constant virtual address, ending the current basic block.
-    pub fn build_constant_jump(&self, address: u64) {
-        if let Ok(lab) = self.labels.get(address) {
-            // Check if we have previously compiled this function.
-            self.set_call_attrs(self.builder.build_call(lab.function, &[], "constant_jump"));
-            self.builder.build_return(None);
-        } else {
-            // Let the runtime environment JIT it, then jump to it.
-            self.build_dynamic_jump(self.context.i64_type().const_int(address, false));
-        };
-    }
-
-    pub fn call_function(&self, func: FunctionValue<'ctx>) {
-        self.set_call_attrs(self.builder.build_call(func, &[], "call_fn"));
-        self.builder.build_return(None);
     }
 
     pub fn build_panic(&self, string: &str, storage_name: &str) {
@@ -338,24 +334,6 @@ impl<'ctx> CodeGen<'ctx> {
         (then_block, else_block)
     }
 
-    /// Sign-extends the given value to the given type.
-    pub fn sign_extend_to(&self, ty: IntType<'ctx>, value: IntValue<'ctx>) -> IntValue<'ctx> {
-        let name = format!("sign_ext_to_i{}", ty.get_bit_width());
-        self.builder.build_int_s_extend(value, ty, &name)
-    }
-
-    /// Zero-extends the given value to the given type.
-    pub fn zero_extend_to(&self, ty: IntType<'ctx>, value: IntValue<'ctx>) -> IntValue<'ctx> {
-        let name = format!("zero_ext_to_i{}", ty.get_bit_width());
-        self.builder.build_int_z_extend(value, ty, &name)
-    }
-
-    /// Truncates the given value to the given type.
-    pub fn truncate_to(&self, ty: IntType<'ctx>, value: IntValue<'ctx>) -> IntValue<'ctx> {
-        let name = format!("trunc_to_i{}", ty.get_bit_width());
-        self.builder.build_int_truncate(value, ty, &name)
-    }
-
     /// Splits the given integer in two, returning the high and low order bits in that order.
     /// The resulting integers will be half the size of the original.
     pub fn split(&self, value: IntValue<'ctx>) -> (IntValue<'ctx>, IntValue<'ctx>) {
@@ -379,6 +357,15 @@ impl<'ctx> CodeGen<'ctx> {
         (hi, lo)
     }
 
+    pub fn write_program_counter(&self, value: u64) {
+        // TODO: handle atomicity
+        let value = self.context.i64_type().const_int(value, false);
+        let ptr = self.globals().registers.program_counter_ptr(self);
+        self.builder.build_store(ptr, value);
+    }
+}
+
+impl<'ctx> CodeGen<'ctx, Cpu> {
     pub fn base_plus_offset(&self, instr: &ParsedInstruction, add_name: &str) -> IntValue<'ctx> {
         let i16_type = self.context.i16_type();
         let i64_type = self.context.i64_type();
@@ -387,6 +374,33 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.build_int_add(base, offset, add_name)
     }
 
+    /// Get a host pointer to a function which simply returns.
+    /// Calling this inside of a JIT'ed block will return to the callee of [`JitBuilder::run`].
+    pub(crate) fn return_from_jit_ptr(&self) -> JitFunctionPointer {
+        const NAME: &str = "return_from_jit_helper";
+        let module = self.context.create_module("return_from_jit_helper_module");
+        let func = self.set_func_attrs(module.add_function(
+            NAME,
+            self.context.void_type().fn_type(&[], false),
+            None,
+        ));
+
+        let block = self.context.append_basic_block(func, "entry");
+        self.builder.position_at_end(block);
+        {
+            // Since every function we call uses tail calls, this should immediately return to the caller.
+            self.builder.build_return(None);
+        }
+
+        self.execution_engine.add_module(&module).unwrap();
+        self.execution_engine.get_function_address(NAME).unwrap() as JitFunctionPointer
+    }
+
+    pub fn set_inside_delay_slot(&self, inside: bool) {
+        let new = self.context.i64_type().const_int(inside as u64, false);
+        let ptr = self.register_pointer(register::INSIDE_DELAY_SLOT_STORAGE);
+        self.builder.build_store(ptr, new);
+    }
     pub fn throw_exception(
         &self,
         exception: Exception,
@@ -430,15 +444,6 @@ impl<'ctx> CodeGen<'ctx> {
         .unwrap()
         .into_int_value();
         self.build_jump_to_jit_func_ptr(exception_vec_ptr, "exception_vector");
-    }
-
-    pub(crate) fn build_jump_to_jit_func_ptr(&self, host_ptr: IntValue<'ctx>, name: &str) {
-        let func_type = self.context.void_type().fn_type(&[], false);
-        let ptr_type = func_type.ptr_type(Default::default());
-        let ptr = self.builder.build_int_to_ptr(host_ptr, ptr_type, name);
-
-        self.set_call_attrs(self.builder.build_indirect_call(func_type, ptr, &[], name));
-        self.builder.build_return(None);
     }
 
     pub fn build_mask(&self, to_mask: IntValue<'ctx>, mask: u64, name: &str) -> IntValue<'ctx> {
@@ -587,16 +592,16 @@ impl<'ctx> CodeGen<'ctx> {
     }
 }
 
-impl Drop for CodeGen<'_> {
-    fn drop(&mut self) {
-        // Without manually removing the modules from the execution engine LLVM segfaults.
-        // We use drain here to run their Drop implementation prior to anything else, which prevents out of bounds reads/writes according to valgrind.
-        for module in self.modules.drain(..) {
-            self.execution_engine.remove_module(&module).unwrap();
-        }
-        self.execution_engine.remove_module(&self.module).unwrap();
-    }
-}
+// impl Drop for CodeGen<'_, Cpu> {
+//     fn drop(&mut self) {
+//         // Without manually removing the modules from the execution engine LLVM segfaults.
+//         // We use drain here to run their Drop implementation prior to anything else, which prevents out of bounds reads/writes according to valgrind.
+//         for module in self.modules.drain(..) {
+//             self.execution_engine.remove_module(&module).unwrap();
+//         }
+//         self.execution_engine.remove_module(&self.module).unwrap();
+//     }
+// }
 
 pub enum Overflow {
     Subtract,

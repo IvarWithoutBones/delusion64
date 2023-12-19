@@ -1518,6 +1518,7 @@ dependencies = [
 name = "n64-rsp"
 version = "0.1.0"
 dependencies = [
+ "mips-lifter",
  "n64-common",
 ]
 

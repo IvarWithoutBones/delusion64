@@ -1,20 +1,23 @@
-use crate::{gdb, run, runtime};
-use mips_decomp::register;
+#![allow(private_bounds)] // TODO: Fix this somehow?
 
-pub type InitialRegisters<'a> = &'a [(register::Register, u64)];
+use crate::{
+    gdb, run,
+    runtime::{self, bus::Bus},
+    target::{Cpu, Target},
+};
 
-pub struct JitBuilder<'a, const READY: bool, Bus: runtime::bus::Bus> {
-    pub(crate) bus: Bus,
-    pub(crate) registers: Option<InitialRegisters<'a>>,
-    pub(crate) gdb: Option<gdb::Connection<Bus>>,
+pub struct JitBuilder<const READY: bool, T: Target, B: Bus>
+where
+    for<'a> runtime::Environment<'a, T, B>: runtime::ValidRuntime,
+{
+    pub(crate) bus: B,
+    pub(crate) registers: Option<T::Registers>,
+    pub(crate) gdb: Option<gdb::Connection<B>>,
     pub(crate) trace: bool,
 }
 
-impl<'a, Bus> JitBuilder<'a, false, Bus>
-where
-    Bus: runtime::bus::Bus,
-{
-    pub fn new(bus: Bus) -> Self {
+impl<B: Bus> JitBuilder<false, Cpu, B> {
+    pub fn new_cpu(bus: B) -> Self {
         Self {
             bus,
             registers: None,
@@ -24,9 +27,9 @@ where
     }
 }
 
-impl<'a, const READY: bool, Bus> JitBuilder<'a, READY, Bus>
+impl<const READY: bool, T: Target, B: Bus> JitBuilder<READY, T, B>
 where
-    Bus: runtime::bus::Bus,
+    for<'a> runtime::Environment<'a, T, B>: runtime::ValidRuntime,
 {
     pub fn maybe_with_trace(self, trace: Option<bool>) -> Self {
         let trace = trace.unwrap_or(self.trace);
@@ -37,17 +40,17 @@ where
         self.maybe_with_trace(Some(trace))
     }
 
-    pub fn maybe_with_gdb(self, gdb: Option<gdb::Connection<Bus>>) -> Self {
+    pub fn maybe_with_gdb(self, gdb: Option<gdb::Connection<B>>) -> Self {
         Self { gdb, ..self }
     }
 
-    pub fn with_gdb(self, gdb: gdb::Connection<Bus>) -> Self {
+    pub fn with_gdb(self, gdb: gdb::Connection<B>) -> Self {
         self.maybe_with_gdb(Some(gdb))
     }
 }
 
-impl<'a, Bus: runtime::bus::Bus> JitBuilder<'a, false, Bus> {
-    pub fn with_registers(self, registers: InitialRegisters<'a>) -> JitBuilder<'a, true, Bus> {
+impl<B: Bus> JitBuilder<false, Cpu, B> {
+    pub fn with_cpu_registers(self, registers: crate::Registers) -> JitBuilder<true, Cpu, B> {
         JitBuilder {
             registers: Some(registers),
             trace: self.trace,
@@ -57,13 +60,17 @@ impl<'a, Bus: runtime::bus::Bus> JitBuilder<'a, false, Bus> {
     }
 }
 
-impl<'a, Bus: runtime::bus::Bus> JitBuilder<'a, true, Bus> {
-    pub fn run(self) -> Bus {
+impl<T: Target, B: Bus> JitBuilder<true, T, B>
+where
+    for<'a> runtime::Environment<'a, T, B>: runtime::ValidRuntime,
+{
+    pub fn run(self) -> B {
         run(self)
     }
 
-    pub(crate) fn registers(&self) -> InitialRegisters<'a> {
-        // SAFETY: the const generics ensure this is always Some
-        unsafe { self.registers.unwrap_unchecked() }
+    pub(crate) fn registers(&mut self) -> T::Registers {
+        self.registers
+            .take()
+            .expect("attempted to use registers after they were taken")
     }
 }

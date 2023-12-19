@@ -1,17 +1,26 @@
-use crate::runtime::{bus, memory::tlb::AccessMode, Environment};
+use crate::{
+    runtime::{memory::tlb::AccessMode, Bus, Environment, GdbIntegration, ValidRuntime},
+    target::Target,
+};
 use gdbstub::outputln;
 use std::{collections::HashMap, num::ParseIntError};
 
-pub type MonitorCommandMap<'ctx, Mem> = HashMap<&'static str, Command<'ctx, Mem>>;
+pub type MonitorCommandMap<'ctx, T, B> = HashMap<&'static str, Command<'ctx, T, B>>;
 
-pub enum Command<'ctx, Bus: bus::Bus> {
-    Internal(MonitorCommand<Environment<'ctx, Bus>>),
-    External(MonitorCommand<Bus>),
+pub enum Command<'ctx, T: Target, B: Bus>
+where
+    for<'a> Environment<'a, T, B>: ValidRuntime,
+{
+    Internal(MonitorCommand<Environment<'ctx, T, B>>),
+    External(MonitorCommand<B>),
 }
 
-impl<'ctx, Bus: bus::Bus> Command<'ctx, Bus> {
+impl<'ctx, T: Target, B: Bus> Command<'ctx, T, B>
+where
+    for<'a> Environment<'a, T, B>: ValidRuntime,
+{
     /// Merges internal and external monitor commands into a single map.
-    pub fn monitor_command_map(external: Vec<MonitorCommand<Bus>>) -> MonitorCommandMap<'ctx, Bus> {
+    pub fn monitor_command_map(external: Vec<MonitorCommand<B>>) -> MonitorCommandMap<'ctx, T, B> {
         Environment::monitor_commands()
             .into_iter()
             .map(|cmd| (cmd.name, Command::Internal(cmd)))
@@ -39,7 +48,7 @@ impl<'ctx, Bus: bus::Bus> Command<'ctx, Bus> {
 
     pub fn handle(
         &mut self,
-        env: &mut Environment<'ctx, Bus>,
+        env: &mut Environment<'ctx, T, B>,
         output: &mut dyn std::fmt::Write,
         args: &mut dyn Iterator<Item = &str>,
     ) -> Result<(), MonitorCommandHandlerError> {
@@ -104,10 +113,13 @@ pub struct MonitorCommand<This> {
     pub handler: Box<MonitorCommandHandler<This>>,
 }
 
-impl<Bus: bus::Bus> Environment<'_, Bus> {
+impl<T: Target, B: Bus> Environment<'_, T, B>
+where
+    for<'a> Environment<'a, T, B>: ValidRuntime,
+{
     /// The internal monitor commands, related to the CPU state.
     pub(crate) fn monitor_commands() -> Vec<MonitorCommand<Self>> {
-        vec![
+        let mut result: Vec<MonitorCommand<Self>> = vec![
             MonitorCommand {
                 name: "help",
                 description: "print this help message",
@@ -123,8 +135,7 @@ impl<Bus: bus::Bus> Environment<'_, Bus> {
                         writeln!(out, "{}", cmd.description())?;
                     } else {
                         for cmd in env.debugger.as_ref().unwrap().monitor_commands.values() {
-                            let name = format!("{}:", cmd.name());
-                            writeln!(out, "{name: <12} {}", cmd.description())?;
+                            writeln!(out, "{: <12} {}", cmd.name(), cmd.description())?;
                         }
                     }
                     Ok(())
@@ -135,38 +146,6 @@ impl<Bus: bus::Bus> Environment<'_, Bus> {
                 description: "print all the CPU registers",
                 handler: Box::new(|env, out, _args| {
                     writeln!(out, "{:#?}", env.registers)?;
-                    Ok(())
-                }),
-            },
-            MonitorCommand {
-                name: "status",
-                description: "print the coprocessor 0 status register",
-                handler: Box::new(|env, out, _args| {
-                    writeln!(out, "{:#?}", env.registers.status())?;
-                    Ok(())
-                }),
-            },
-            MonitorCommand {
-                name: "cause",
-                description: "print the coprocessor 0 cause register",
-                handler: Box::new(|env, out, _args| {
-                    writeln!(out, "{:#?}", env.registers.cause())?;
-                    Ok(())
-                }),
-            },
-            MonitorCommand {
-                name: "fpu-status",
-                description: "print the FPU control and status register",
-                handler: Box::new(|env, out, _args| {
-                    writeln!(out, "{:#?}", env.registers.fpu_control_status())?;
-                    Ok(())
-                }),
-            },
-            MonitorCommand {
-                name: "tlb",
-                description: "print every entry in the TLB",
-                handler: Box::new(|env, out, _args| {
-                    writeln!(out, "{:#?}", env.tlb)?;
                     Ok(())
                 }),
             },
@@ -195,12 +174,7 @@ impl<Bus: bus::Bus> Environment<'_, Bus> {
                 handler: Box::new(|env, out, args| {
                     let vaddr = str_to_u64(args.next().ok_or("expected virtual address")?)
                         .map_err(|err| format!("invalid virtual address: {err}"))?;
-                    let paddr = env
-                        .tlb
-                        .translate_vaddr(vaddr, AccessMode::Read, &env.registers)
-                        .map_err(|err| {
-                            format!("virtual address {vaddr:#x} is not mapped: {err:#?}")
-                        })?;
+                    let paddr = env.virtual_to_physical_address(vaddr, AccessMode::Read);
                     outputln!(out, "{paddr:#x}");
                     Ok(())
                 }),
@@ -211,21 +185,21 @@ impl<Bus: bus::Bus> Environment<'_, Bus> {
                 handler: Box::new(|env, out, args| {
                     let paddr = str_to_u64(args.next().ok_or("expected a physical address")?)
                         .map_err(|err| format!("invalid physical address: {err}"))?;
-                    let vaddr = env
-                        .tlb
-                        .translate_paddr(paddr as u32)
-                        .map_err(|err| {
-                            format!("physical address {paddr:#x} is not mapped: {err:#?}")
-                        })?;
+                    let vaddr = env.physical_to_virtual_address(paddr as u32, AccessMode::Read);
                     outputln!(out, "{vaddr:#x}");
                     Ok(())
                 }),
             },
-        ]
+        ];
+        result.extend(GdbIntegration::extra_monitor_commands());
+        result
     }
 }
 
-impl<Bus: bus::Bus> gdbstub::target::ext::monitor_cmd::MonitorCmd for Environment<'_, Bus> {
+impl<T: Target, B: Bus> gdbstub::target::ext::monitor_cmd::MonitorCmd for Environment<'_, T, B>
+where
+    for<'a> Environment<'a, T, B>: ValidRuntime,
+{
     fn handle_monitor_cmd(
         &mut self,
         cmd: &[u8],

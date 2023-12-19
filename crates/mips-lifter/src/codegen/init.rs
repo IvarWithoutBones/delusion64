@@ -1,7 +1,14 @@
 use super::{CodeGen, Globals};
-use crate::{env_call, runtime::RuntimeFunction};
-use inkwell::{execution_engine::JitFunction, values::FunctionValue};
-use mips_decomp::{register, INSTRUCTION_SIZE};
+use crate::{
+    env_call,
+    runtime::RuntimeFunction,
+    target::{Globals as _, Target},
+};
+use inkwell::{
+    execution_engine::JitFunction,
+    values::{FunctionValue, IntValue},
+};
+use mips_decomp::INSTRUCTION_SIZE;
 
 #[derive(Default, Debug)]
 pub struct Helpers<'ctx> {
@@ -44,7 +51,7 @@ impl<'ctx> Helpers<'ctx> {
     }
 }
 
-impl<'ctx> CodeGen<'ctx> {
+impl<'ctx, T: Target> CodeGen<'ctx, T> {
     pub fn main(&self) -> JitFunction<unsafe extern "C" fn()> {
         let func_val = self.helpers.main.expect("main function not initialized");
         let func_name = func_val.get_name().to_str().expect("invalid function name");
@@ -52,7 +59,7 @@ impl<'ctx> CodeGen<'ctx> {
         func.expect("LLVM target is not initialized")
     }
 
-    pub fn initialise(&mut self, globals: Globals<'ctx>) {
+    pub fn initialise(&mut self, globals: Globals<'ctx, T>) {
         debug_assert!(
             self.helpers.main.is_none(),
             "codegen should only be initialised once"
@@ -69,16 +76,23 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
-    fn build_main(&mut self) {
+    fn pc(&self) -> IntValue<'ctx> {
+        // TODO dont hardcode i64
         let i64_type = self.context.i64_type();
+        let pc_ptr = self.globals().registers.program_counter_ptr(self);
+        self.builder
+            .build_load(i64_type, pc_ptr, "pc")
+            .into_int_value()
+    }
+
+    fn build_main(&mut self) {
         let fn_type = self.context.void_type().fn_type(&[], false);
         let main_fn = self.module.add_function("main", fn_type, None);
 
         let entry_block = self.context.append_basic_block(main_fn, "entry");
         self.builder.position_at_end(entry_block);
         {
-            let pc = self.read_register(i64_type, register::Special::Pc);
-            self.build_dynamic_jump(pc);
+            self.build_dynamic_jump(self.pc());
         }
 
         self.helpers.main = Some(main_fn);
@@ -112,6 +126,7 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     fn build_fallthrough_helpers(&mut self) {
+        let i64_type = self.context.i64_type();
         let make_func = |codegen: &Self, amount: u64, name: &str| -> FunctionValue<'ctx> {
             // Generate the function declaration.
             let func = codegen.set_func_attrs(codegen.module.add_function(
@@ -124,8 +139,7 @@ impl<'ctx> CodeGen<'ctx> {
             let block = codegen.context.append_basic_block(func, "entry");
             codegen.builder.position_at_end(block);
             {
-                let i64_type = codegen.context.i64_type();
-                let pc = codegen.read_register(i64_type, register::Special::Pc);
+                let pc = codegen.pc();
                 let offset = i64_type.const_int(amount * INSTRUCTION_SIZE as u64, false);
                 let new_pc = codegen.builder.build_int_add(pc, offset, "new_pc");
                 codegen.build_dynamic_jump(new_pc);

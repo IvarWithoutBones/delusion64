@@ -46,7 +46,7 @@ macro_rules! cmp_macro {
 
             (impl $codegen:ident, ($left:expr) $cond:tt ($right:expr)) => {{
                 // Type check the arguments.
-                let codegen: &$crate::codegen::CodeGen = &$codegen;
+                let codegen: &$crate::codegen::CodeGen<_> = &$codegen;
                 let left: inkwell::values::IntValue = $left;
                 let right: inkwell::values::IntValue = $right;
 

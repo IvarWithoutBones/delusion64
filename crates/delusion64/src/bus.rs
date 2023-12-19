@@ -220,11 +220,11 @@ impl BusInterface for Bus {
             Section::RdramInterface => Int::from_slice(&u32::MAX.to_be_bytes())?,
 
             Section::RspDMemory => {
-                Int::from_slice(self.rsp.read_sp_memory::<SIZE>(RspBank::DMem, offset)?)?
+                Int::from_slice(&self.rsp.read_sp_memory::<SIZE>(RspBank::DMem, offset)?)?
             }
 
             Section::RspIMemory => {
-                Int::from_slice(self.rsp.read_sp_memory::<SIZE>(RspBank::IMem, offset)?)?
+                Int::from_slice(&self.rsp.read_sp_memory::<SIZE>(RspBank::IMem, offset)?)?
             }
 
             Section::CartridgeRom => {

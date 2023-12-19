@@ -1,7 +1,10 @@
 use inkwell::{context::Context, OptimizationLevel};
 use std::pin::Pin;
 
-pub use self::builder::JitBuilder;
+pub use self::{
+    builder::JitBuilder,
+    runtime::registers::{RegisterBank, Registers},
+};
 pub use mips_decomp::register;
 
 pub mod gdb {
@@ -22,6 +25,7 @@ mod builder;
 mod label;
 mod recompiler;
 pub mod runtime;
+pub mod target;
 
 /// The "tailcc" calling convention, as defined by LLVM. It is described as follows:
 ///
@@ -35,9 +39,11 @@ pub mod runtime;
 // TODO: Upstream this enum to inkwell.
 const LLVM_CALLING_CONVENTION_TAILCC: u32 = 18;
 
-pub(crate) fn run<Bus>(builder: JitBuilder<true, Bus>) -> Bus
+pub(crate) fn run<T, B>(builder: JitBuilder<true, T, B>) -> B
 where
-    Bus: runtime::bus::Bus,
+    B: runtime::bus::Bus,
+    T: target::Target,
+    for<'a> runtime::Environment<'a, T, B>: runtime::ValidRuntime,
 {
     // Without calling this, the JIT will get optimised out when building with LTO.
     inkwell::execution_engine::ExecutionEngine::link_in_mc_jit();

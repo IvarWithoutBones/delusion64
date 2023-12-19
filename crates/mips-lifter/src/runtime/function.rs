@@ -1,7 +1,8 @@
 //! Functions that are called by the generated code, calling into the `Environment` struct.
 
 use inkwell::{
-    context::ContextRef, execution_engine::ExecutionEngine, module::Module, types::FunctionType, values::FunctionValue,
+    context::ContextRef, execution_engine::ExecutionEngine, module::Module, types::FunctionType,
+    values::FunctionValue,
 };
 use strum::{EnumIter, EnumVariantNames, VariantNames};
 

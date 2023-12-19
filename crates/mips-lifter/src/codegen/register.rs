@@ -1,3 +1,5 @@
+use crate::target::Cpu;
+
 use super::CodeGen;
 use inkwell::{
     context::Context,
@@ -71,7 +73,7 @@ impl<'ctx> NumericValue<'ctx> for FloatValue<'ctx> {
     }
 }
 
-impl<'ctx> CodeGen<'ctx> {
+impl<'ctx> CodeGen<'ctx, Cpu> {
     fn fpu_general_register_pointer(
         &self,
         bit_width: &impl BitWidth,

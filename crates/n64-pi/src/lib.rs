@@ -6,7 +6,7 @@ use self::register::{
     WriteLength,
 };
 use n64_common::{memory::Section, utils::thiserror, InterruptDevice, SideEffects};
-use std::ops::Range;
+use std::{fmt, ops::Range};
 
 mod register;
 
@@ -99,7 +99,7 @@ impl BusDevice {
 
 /// The Peripheral Interface (PI), used for communication with the cartridge and disk drive.
 /// See [n64brew](https://n64brew.dev/wiki/Peripheral_Interface).
-#[derive(Default, Debug, PartialEq, Eq)]
+#[derive(Default, PartialEq, Eq)]
 pub struct PeripheralInterface {
     cartridge: Box<[u8]>,
     latch: Option<u32>,
@@ -390,5 +390,29 @@ impl PeripheralInterface {
                 domain: region.domain(),
             }),
         }
+    }
+}
+
+impl fmt::Debug for PeripheralInterface {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Skips the cartridge
+        f.debug_struct("PeripheralInterface")
+            .field("latch", &self.latch)
+            .field("latch_cycles_remaining", &self.latch_cycles_remaining)
+            .field("dma_cycles_remaining", &self.dma_cycles_remaining)
+            .field("dram_address", &self.dram_address)
+            .field("cart_address", &self.cart_address)
+            .field("read_length", &self.read_length)
+            .field("write_length", &self.write_length)
+            .field("status", &self.status)
+            .field("domain_1_latch", &self.domain_1_latch)
+            .field("domain_2_latch", &self.domain_2_latch)
+            .field("domain_1_pulse_width", &self.domain_1_pulse_width)
+            .field("domain_2_pulse_width", &self.domain_2_pulse_width)
+            .field("domain_1_page_size", &self.domain_1_page_size)
+            .field("domain_2_page_size", &self.domain_2_page_size)
+            .field("domain_1_release", &self.domain_1_release)
+            .field("domain_2_release", &self.domain_2_release)
+            .finish_non_exhaustive()
     }
 }

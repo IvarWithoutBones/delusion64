@@ -1,4 +1,5 @@
-use super::Environment;
+use super::{memory::tlb::AccessMode, Environment, InterruptHandler, ValidRuntime};
+use crate::target::{Memory, Target};
 use std::{fmt, mem::size_of, ops::Range};
 
 // TODO: Returning a BusValue for every single tick/memory access seems wasteful.
@@ -10,7 +11,7 @@ pub type PhysicalAddress = u32;
 #[derive(Debug, Default)]
 pub struct BusValue<T> {
     /// The value returned by the memory operation.
-    pub inner: T,
+    inner: T,
     /// The range of physical addresses that were mutated by this operation.
     /// When modifying memory this *must* be set so that the relevant JIT blocks can be invalidated.
     pub mutated: Option<Range<PhysicalAddress>>,
@@ -21,8 +22,8 @@ pub struct BusValue<T> {
     pub request_exit: bool,
 }
 
-impl<T> BusValue<T> {
-    pub fn new(value: T) -> Self {
+impl<V> BusValue<V> {
+    pub fn new(value: V) -> Self {
         Self {
             inner: value,
             mutated: None,
@@ -31,19 +32,22 @@ impl<T> BusValue<T> {
         }
     }
 
-    pub(crate) fn handle<B: Bus>(self, env: &mut Environment<B>) -> T {
+    pub(crate) fn handle<T: Target, B: Bus>(self, env: &mut Environment<T, B>) -> V
+    where
+        for<'a> Environment<'a, T, B>: ValidRuntime,
+    {
         if let Some(paddrs) = self.mutated {
-            env.invalidate(paddrs);
+            let vaddr_start = env
+                .memory
+                .physical_to_virtual_address(paddrs.start, AccessMode::Write, &env.registers)
+                .expect("invalid physical address");
+            let len = (paddrs.end - paddrs.start) as u64;
+            let vaddr_range = vaddr_start..vaddr_start + len;
+            env.codegen.labels.remove_within_range(vaddr_range);
         }
 
         if let Some(interrupt_mask) = self.interrupt {
-            let cause = env.registers.cause();
-            let pending = cause.interrupt_pending().raw() | interrupt_mask;
-            env.registers
-                .set_cause(cause.with_interrupt_pending(pending.into()));
-            if env.registers.trigger_interrupt() {
-                env.interrupt_pending = true;
-            }
+            env.handle_interrupt(interrupt_mask);
         }
 
         if self.request_exit {
@@ -155,8 +159,23 @@ impl<const SIZE: usize> Int<SIZE> {
 }
 
 impl<const SIZE: usize> Default for Int<SIZE> {
+    #[inline]
     fn default() -> Self {
         Self([0_u8; SIZE])
+    }
+}
+
+impl<const SIZE: usize> From<Int<SIZE>> for [u8; SIZE] {
+    #[inline]
+    fn from(value: Int<SIZE>) -> Self {
+        value.0
+    }
+}
+
+impl<const SIZE: usize> From<[u8; SIZE]> for Int<SIZE> {
+    #[inline]
+    fn from(value: [u8; SIZE]) -> Self {
+        Self(value)
     }
 }
 

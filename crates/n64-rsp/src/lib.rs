@@ -1,4 +1,5 @@
 #![warn(clippy::all, clippy::pedantic)]
+#![allow(clippy::missing_panics_doc)] // TODO remove
 
 use self::register::Registers;
 use n64_common::{
@@ -6,12 +7,16 @@ use n64_common::{
     utils::{boxed_array, thiserror::Error},
     SideEffects,
 };
-use std::{fmt, ops::Range};
+use std::{
+    fmt,
+    ops::Range,
+    sync::{Arc, RwLock},
+};
 
+mod cpu;
 mod dma;
 mod register;
 
-/// Errors which can occur when interacting with the RSP
 #[derive(Error, Debug)]
 pub enum RspError {
     #[error("Out of bounds register offset: {offset:#x}")]
@@ -51,21 +56,30 @@ impl MemoryBank {
 
 pub struct Rsp {
     registers: Registers,
-    dmem: Box<[u8; MemoryBank::DMem.len()]>,
-    imem: Box<[u8; MemoryBank::IMem.len()]>,
+    cpu: cpu::Handle,
+    // TODO: remove the Box here, Arc is already heap-allocated
+    dmem: Arc<RwLock<Box<[u8; MemoryBank::DMem.len()]>>>,
+    imem: Arc<RwLock<Box<[u8; MemoryBank::IMem.len()]>>>,
 }
 
 impl Rsp {
     /// This copies the first 0x1000 bytes of the PIF ROM to the RSP DMEM, simulating IPL2.
+    #[allow(clippy::similar_names)]
     #[must_use]
     pub fn new(pif_rom: &[u8]) -> Self {
-        let mut dmem = boxed_array();
-        let len = dmem.len().min(pif_rom.len()).min(0x1000);
-        dmem[..len].copy_from_slice(&pif_rom[..len]);
+        let dmem: Arc<_> = {
+            let mut dmem = boxed_array();
+            let len = dmem.len().min(pif_rom.len()).min(0x1000);
+            dmem[..len].copy_from_slice(&pif_rom[..len]);
+            RwLock::new(dmem).into()
+        };
+        let imem: Arc<_> = RwLock::new(boxed_array()).into();
+        let cpu = cpu::Handle::new(dmem.clone(), imem.clone());
 
         Self {
             registers: Registers::new(),
-            imem: boxed_array(),
+            cpu,
+            imem,
             dmem,
         }
     }
@@ -75,7 +89,19 @@ impl Rsp {
     /// # Errors
     /// Returns an error if the given offset is out of bounds
     pub fn read_register(&mut self, offset: usize) -> RspResult<u32> {
-        self.registers.read(offset)
+        if offset == 0x10 {
+            // TODO: actual impl
+            static mut FIRST: bool = true;
+            unsafe {
+                if FIRST {
+                    FIRST = false;
+                    self.cpu.set_sp_status(1);
+                }
+            }
+            Ok(self.cpu.sp_status())
+        } else {
+            self.registers.read(offset)
+        }
     }
 
     /// Write a 32-bit integer to the RSP's memory-mapped COP0 registers
@@ -83,7 +109,15 @@ impl Rsp {
     /// # Errors
     /// Returns an error if the given offset is out of bounds
     pub fn write_register(&mut self, offset: usize, value: u32) -> RspResult<SideEffects> {
-        self.registers.write(offset, value)
+        if offset == 0x10 {
+            // TODO: actual impl
+            let mut sp_status = register::definitions::SpStatus::from(self.cpu.sp_status());
+            sp_status.write(value);
+            self.cpu.set_sp_status(sp_status.into());
+            Ok(SideEffects::default())
+        } else {
+            self.registers.write(offset, value)
+        }
     }
 
     /// Read `SIZE` bytes from the RSP's memory at the given bank and offset within said bank
@@ -94,16 +128,19 @@ impl Rsp {
         &mut self,
         bank: MemoryBank,
         offset: usize,
-    ) -> RspResult<&[u8; SIZE]> {
+    ) -> RspResult<[u8; SIZE]> {
         let range = offset..offset + SIZE;
-        match bank {
+        let slice = match bank {
             MemoryBank::IMem => &self.imem,
             MemoryBank::DMem => &self.dmem,
         }
-        .get(range.clone())
-        .ok_or(RspError::MemoryRangeOutOfBounds { range, bank })
-        // SAFETY: `slice.get()` returns a slice with the correct length
-        .map(|slice| unsafe { slice.try_into().unwrap_unchecked() })
+        .read()
+        .unwrap();
+        slice
+            .get(range.clone())
+            .ok_or(RspError::MemoryRangeOutOfBounds { range, bank })
+            // SAFETY: `slice.get()` returns a slice with the correct length
+            .map(|slice| unsafe { slice.try_into().unwrap_unchecked() })
     }
 
     /// Write `SIZE.min(4).max(4)` bytes into the RSP's memory, at the given bank and offset within said bank
@@ -129,6 +166,8 @@ impl Rsp {
             MemoryBank::IMem => &mut self.imem,
             MemoryBank::DMem => &mut self.dmem,
         }
+        .write()
+        .unwrap()
         .get_mut(range.clone())
         .ok_or(RspError::MemoryRangeOutOfBounds { range, bank })?
         .copy_from_slice(&value);
@@ -137,11 +176,16 @@ impl Rsp {
     }
 
     pub fn tick(&mut self, cycles: usize, rdram: &mut [u8]) -> SideEffects {
+        if (self.cpu.sp_status() & 1) != 1 {
+            // if !self.registers.halted() {
+            self.cpu.tick(cycles);
+        }
+
         self.registers.tick(&mut dma::TickContext {
             cycles,
             rdram,
-            dmem: self.dmem.as_mut_slice(),
-            imem: self.imem.as_mut_slice(),
+            dmem: self.dmem.write().unwrap().as_mut_slice(),
+            imem: self.imem.write().unwrap().as_mut_slice(),
         })
     }
 }

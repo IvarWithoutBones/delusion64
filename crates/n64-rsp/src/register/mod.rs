@@ -6,7 +6,7 @@ use self::definitions::{
 };
 use crate::{dma, MemoryBank, RspError, RspResult, SideEffects};
 
-mod definitions;
+pub(crate) mod definitions;
 
 #[derive(Debug)]
 struct DoubleBuffered<T> {

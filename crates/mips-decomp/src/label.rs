@@ -94,7 +94,7 @@ impl Label {
 
     #[inline]
     pub const fn end(&self) -> usize {
-        self.range.start + self.len()
+        self.range.end
     }
 
     #[inline]
@@ -110,11 +110,11 @@ impl Label {
 
 impl fmt::Debug for Label {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut pos = self.range.start * INSTRUCTION_SIZE;
+        let mut pos = self.range.start;
 
         write!(f, "label_{pos:06x}:\t\t")?;
         for ref_ in &self.referenced_from_offsets {
-            write!(f, " <- {:06x}", ref_ * INSTRUCTION_SIZE)?;
+            write!(f, " <- {:06x}", ref_)?;
         }
         writeln!(f)?;
 
@@ -129,7 +129,7 @@ impl fmt::Debug for Label {
         }
 
         if let Some(fallthrough) = self.fallthrough_offset {
-            write!(f, "  -> label_{:06x}", fallthrough * INSTRUCTION_SIZE)?;
+            write!(f, "  -> label_{:06x}", fallthrough)?;
         }
 
         Ok(())
@@ -221,7 +221,7 @@ impl LabelList {
         Self { labels }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &Label> {
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &Label> {
         self.labels.iter()
     }
 
@@ -246,15 +246,15 @@ impl LabelList {
         self.labels.iter().find(|l| l.start() == offset)
     }
 
-    pub fn set_start(&mut self, offset: usize) {
+    pub fn set_start(&mut self, addr: usize) {
         for label in self.iter_mut() {
-            label.set_start_address(offset + label.start());
+            label.set_start_address(addr + label.start());
             for reference in label.referenced_from_offsets.iter_mut() {
-                *reference += offset;
+                *reference += addr;
             }
 
             if let Some(fallthrough) = label.fallthrough_offset.as_mut() {
-                *fallthrough += offset;
+                *fallthrough += addr;
             }
         }
     }
