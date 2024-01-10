@@ -1,13 +1,8 @@
-use crate::codegen::{INSIDE_DELAY_SLOT_STORAGE, RESERVED_CP0_REGISTER_LATCH};
 use inkwell::{
     context::ContextRef, execution_engine::ExecutionEngine, module::Module, types::IntType,
     values::GlobalValue,
 };
-use mips_decomp::register;
-use std::{
-    fmt,
-    sync::{atomic, Arc},
-};
+use std::sync::{atomic, Arc};
 
 pub trait Integer: Default + Copy + Clone {
     type Atomic: AtomicInteger<Data = Self>;
@@ -212,180 +207,12 @@ impl<T: Integer, const LEN: usize> Default for RegisterBank<T, LEN> {
     }
 }
 
-#[derive(Default)]
-#[repr(C)]
-pub struct Registers {
-    // TODO: Separate target-dependant registers, e.g. CP0 is 32-bit on the RSP
-    pub general_purpose: RegisterBank<u64, { register::GeneralPurpose::count() }>,
-    pub cp0: RegisterBank<u64, { register::Cp0::count() }>,
-    pub fpu: RegisterBank<u64, { register::Fpu::count() }>,
-    pub fpu_control: RegisterBank<u64, { register::FpuControl::count() }>,
-    pub special: RegisterBank<u64, { register::Special::count() }>,
-}
-
-impl Registers {
-    pub(crate) fn status(&self) -> register::cp0::Status {
-        let value = self.read(register::Cp0::Status) as u32;
-        register::cp0::Status::new(value)
-    }
-
-    pub(crate) fn cause(&self) -> register::cp0::Cause {
-        let value = self.read(register::Cp0::Cause) as u32;
-        register::cp0::Cause::new(value)
-    }
-
-    pub(crate) fn set_cause(&mut self, cause: register::cp0::Cause) {
-        let raw: u32 = cause.into();
-        self.write(register::Cp0::Cause, raw as u64);
-    }
-
-    pub(crate) fn fpu_control_status(&self) -> register::fpu::ControlStatus {
-        let value = self.read(register::FpuControl::ControlStatus) as u32;
-        register::fpu::ControlStatus::new(value)
-    }
-
-    pub(crate) fn page_mask(&self) -> register::cp0::PageMask {
-        let value = self.read(register::Cp0::PageMask) as u32;
-        register::cp0::PageMask::new(value)
-    }
-
-    pub(crate) fn context(&self) -> register::cp0::Context {
-        let value = self.read(register::Cp0::Context);
-        register::cp0::Context::new(value)
-    }
-
-    pub(crate) fn xcontext(&self) -> register::cp0::XContext {
-        let value = self.read(register::Cp0::XContext);
-        register::cp0::XContext::new(value)
-    }
-
-    pub(crate) fn trigger_interrupt(&self) -> bool {
-        let status = self.status();
-        let cause = self.cause();
-        status.interrupts_enabled()
-            && !status.exception_level()
-            && !status.error_level()
-            && cause
-                .interrupt_pending()
-                .check_mask(status.interrupt_mask())
-    }
-}
-
-impl<T> From<T> for Registers
-where
-    T: IntoIterator<Item = (mips_decomp::register::Register, u64)>,
-{
-    fn from(value: T) -> Self {
-        let mut registers = Self::default();
-        for (reg, val) in value {
-            registers.write(reg, val);
-        }
-        registers
-    }
-}
-
+// We cannot use [`std::ops::Index`] and its mutable counterpart,
+// since it is not safe to return a (potentially exclusive) reference to a shared value.
 pub trait RegIndex<T> {
     type Output;
 
     fn read(&self, index: T) -> Self::Output;
 
     fn write(&mut self, index: T, value: Self::Output);
-}
-
-macro_rules! impl_reg_index {
-    ($(($ty:ty, $output:ty, $field:ident)),*) => {
-        $(
-            impl RegIndex<$ty> for Registers {
-                type Output = $output;
-
-                fn read(&self, index: $ty) -> Self::Output {
-                    self.$field.read_relaxed(index.into()).unwrap()
-                }
-
-                fn write(&mut self, index: $ty, value: Self::Output) {
-                    self.$field.write_relaxed(index.into(), value).unwrap()
-                }
-            }
-        )*
-    };
-}
-
-impl_reg_index!(
-    (register::GeneralPurpose, u64, general_purpose),
-    (register::Cp0, u64, cp0),
-    (register::Fpu, u64, fpu),
-    (register::FpuControl, u64, fpu_control),
-    (register::Special, u64, special)
-);
-
-impl RegIndex<mips_decomp::register::Register> for Registers {
-    type Output = u64;
-
-    fn read(&self, index: mips_decomp::register::Register) -> Self::Output {
-        use mips_decomp::register::Register::*;
-        match index {
-            GeneralPurpose(r) => self.read(r),
-            Fpu(r) => self.read(r),
-            FpuControl(r) => self.read(r),
-            Special(r) => self.read(r),
-            Cp0(r) => self.read(r),
-        }
-    }
-
-    fn write(&mut self, index: mips_decomp::register::Register, value: Self::Output) {
-        use mips_decomp::register::Register::*;
-        match index {
-            GeneralPurpose(r) => self.write(r, value),
-            Fpu(r) => self.write(r, value),
-            FpuControl(r) => self.write(r, value),
-            Special(r) => self.write(r, value),
-            Cp0(r) => self.write(r, value),
-        }
-    }
-}
-
-impl fmt::Debug for Registers {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let write_reg = |f: &mut fmt::Formatter<'_>, name: &str, reg: u64| -> fmt::Result {
-            writeln!(f, "{name: <10} = {reg:#x}")
-        };
-
-        writeln!(f, "\ngeneral purpose registers:")?;
-        for (i, reg) in self.general_purpose.iter_relaxed().enumerate() {
-            let name = register::GeneralPurpose::name_from_index(i);
-            write_reg(f, name, reg)?;
-        }
-
-        writeln!(f, "\ncoprocessor 0 registers:")?;
-        for (i, reg) in self.cp0.iter_relaxed().enumerate() {
-            let register = register::Cp0::from_repr(i).unwrap();
-            if !register.is_reserved() {
-                write_reg(f, register.name(), reg)?;
-            }
-        }
-        write_reg(f, "Reserved", self.read(RESERVED_CP0_REGISTER_LATCH))?;
-
-        writeln!(f, "\nfpu general purpose registers:")?;
-        for (i, reg) in self.fpu.iter_relaxed().enumerate() {
-            let name = register::Fpu::name_from_index(i);
-            write_reg(f, name, reg)?;
-        }
-
-        writeln!(f, "\nfpu control registers:")?;
-        for (i, reg) in self.fpu_control.iter_relaxed().enumerate() {
-            let register = register::FpuControl::from_repr(i).unwrap();
-            if !register.is_reserved() {
-                write_reg(f, register.name(), reg)?;
-            }
-        }
-
-        writeln!(f, "\nspecial registers:")?;
-        for (i, reg) in self.special.iter_relaxed().enumerate() {
-            let name = register::Special::name_from_index(i);
-            write_reg(f, name, reg)?;
-        }
-        write_reg(f, "delay_slot", self.read(INSIDE_DELAY_SLOT_STORAGE))?;
-
-        Ok(())
-    }
 }

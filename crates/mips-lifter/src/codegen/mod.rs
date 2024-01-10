@@ -53,15 +53,6 @@ pub fn function_attributes(context: &Context) -> [Attribute; ATTRIBUTE_NAMES.len
     attributes.map(|a| unsafe { a.unwrap_unchecked() })
 }
 
-#[derive(Debug)]
-pub struct RegisterGlobals<'ctx> {
-    pub general_purpose: GlobalValue<'ctx>,
-    pub cp0: GlobalValue<'ctx>,
-    pub special: GlobalValue<'ctx>,
-    pub fpu: GlobalValue<'ctx>,
-    pub fpu_control: GlobalValue<'ctx>,
-}
-
 /// Mappings to the runtime environment.
 #[derive(Debug)]
 #[repr(C)]

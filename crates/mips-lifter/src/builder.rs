@@ -50,7 +50,10 @@ where
 }
 
 impl<B: Bus> JitBuilder<false, Cpu, B> {
-    pub fn with_cpu_registers(self, registers: crate::Registers) -> JitBuilder<true, Cpu, B> {
+    pub fn with_cpu_registers(
+        self,
+        registers: crate::target::cpu::Registers,
+    ) -> JitBuilder<true, Cpu, B> {
         JitBuilder {
             registers: Some(registers),
             trace: self.trace,

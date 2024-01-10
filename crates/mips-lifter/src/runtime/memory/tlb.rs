@@ -1,4 +1,4 @@
-use crate::runtime::{registers::RegIndex, Registers};
+use crate::{runtime::registers::RegIndex, target};
 use mips_decomp::register::{
     self,
     cp0::{Bits, EntryHi, EntryLo, Index, OperatingMode, PageMask},
@@ -26,8 +26,8 @@ pub enum AccessMode {
     Write,
 }
 
-impl<'a> From<&'a Registers> for Bits {
-    fn from(regs: &'a Registers) -> Self {
+impl<'a> From<&'a target::cpu::Registers> for Bits {
+    fn from(regs: &'a target::cpu::Registers) -> Self {
         match regs.status().is_64_bits() {
             true => Bits::Bits64,
             false => Bits::Bits32,
@@ -159,7 +159,7 @@ impl TranslationLookasideBuffer {
         &self,
         vaddr: u64,
         mode: AccessMode,
-        regs: &Registers,
+        regs: &target::cpu::Registers,
     ) -> Result<u32, TranslationError> {
         if let Some(paddr) = Self::translate_unmapped_vaddr(vaddr) {
             return Ok(paddr);
@@ -183,7 +183,7 @@ impl TranslationLookasideBuffer {
             .and_then(|pte| pte.physical_address(vaddr, bits, mode))
     }
 
-    pub fn probe(&mut self, regs: &Registers) -> Index {
+    pub fn probe(&mut self, regs: &target::cpu::Registers) -> Index {
         let bits = Bits::from(regs);
         let hi = EntryHi::new(regs.read(register::Cp0::EntryHi));
 
@@ -204,7 +204,11 @@ impl TranslationLookasideBuffer {
         index.with_probe_successfull(found)
     }
 
-    pub fn read_entry(&mut self, index: usize, registers: &mut Registers) -> Option<()> {
+    pub fn read_entry(
+        &mut self,
+        index: usize,
+        registers: &mut target::cpu::Registers,
+    ) -> Option<()> {
         self.entries.get(index).map(|entry| {
             registers.write(register::Cp0::EntryHi, entry.hi.into());
             // For TLBR: The G bit read from the TLB is written into both of the EntryLo0 and EntryLo1 registers.
@@ -220,7 +224,7 @@ impl TranslationLookasideBuffer {
         })
     }
 
-    pub fn write_entry(&mut self, index: usize, registers: &Registers) -> Option<()> {
+    pub fn write_entry(&mut self, index: usize, registers: &target::cpu::Registers) -> Option<()> {
         self.entries.get_mut(index).map(|entry| {
             *entry = Entry {
                 page_mask: PageMask::new(registers.read(register::Cp0::PageMask) as u32),

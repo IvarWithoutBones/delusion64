@@ -89,7 +89,7 @@ impl Bus {
             cycles_ran: 0,
         };
 
-        let _regs = mips_lifter::Registers {
+        let _regs = mips_lifter::target::CpuRegisters {
             cp0: cp0_regs,
             ..Default::default()
         };

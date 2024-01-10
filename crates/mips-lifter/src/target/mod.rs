@@ -1,5 +1,4 @@
-//! The guest machine code target
-#![allow(dead_code)]
+//! The guest machine code target interface, describing registers, memory, and instructions.
 #![warn(clippy::all, clippy::pedantic)]
 
 use crate::{
@@ -10,12 +9,13 @@ use crate::{
     },
 };
 use inkwell::{execution_engine::ExecutionEngine, module::Module, values::PointerValue};
+use std::fmt;
 
 pub(crate) mod cpu;
 
-pub use cpu::Cpu;
+pub use cpu::{Cpu, Registers as CpuRegisters};
 
-pub(crate) trait RegisterStorage: std::fmt::Debug {
+pub(crate) trait RegisterStorage: fmt::Debug {
     type Globals<'ctx>: Globals<'ctx>;
 
     fn read_program_counter(&self) -> u64;
@@ -27,7 +27,7 @@ pub(crate) trait RegisterStorage: std::fmt::Debug {
     ) -> Self::Globals<'ctx>;
 }
 
-pub(crate) trait Globals<'ctx>: std::fmt::Debug {
+pub(crate) trait Globals<'ctx>: fmt::Debug {
     type Id;
 
     fn ptr_value<T: Target>(
@@ -57,13 +57,11 @@ pub(crate) trait Memory: Default {
     ) -> Result<u64, TranslationError>;
 }
 
-pub(crate) trait Instruction:
-    std::fmt::Debug + std::fmt::Display + TryFrom<u32> + Clone
-{
+pub(crate) trait Instruction: fmt::Debug + fmt::Display + TryFrom<u32> + Clone {
     fn has_delay_slot(&self) -> bool;
 }
 
-pub(crate) trait Label: std::fmt::Debug + Clone {
+pub(crate) trait Label: fmt::Debug + Clone {
     type Instruction: Instruction;
 
     // TODO: replace with return position impl trait when updating the compiler
@@ -82,8 +80,8 @@ pub(crate) trait Label: std::fmt::Debug + Clone {
     }
 }
 
-pub(crate) trait LabelList: std::fmt::Debug {
-    type Inner: Label;
+pub(crate) trait LabelList: fmt::Debug {
+    type Label: Label;
 
     fn from_iter<I>(iter: I) -> Option<Self>
     where
@@ -91,22 +89,22 @@ pub(crate) trait LabelList: std::fmt::Debug {
         I: IntoIterator<Item = PhysicalAddress>;
 
     // TODO: replace with return position impl trait when updating the compiler
-    fn iter(&self) -> Box<dyn DoubleEndedIterator<Item = Self::Inner> + '_>;
+    fn iter(&self) -> Box<dyn DoubleEndedIterator<Item = Self::Label> + '_>;
 
     /// Get the label with its starting address corresponding to a given address, or None.
-    fn get_label(&self, vaddr: u64) -> Option<Self::Inner>;
+    fn get_label(&self, vaddr: u64) -> Option<Self::Label>;
 
     fn set_start(&mut self, vaddr: u64);
 }
 
-pub(crate) trait Target: std::fmt::Debug {
+pub(crate) trait Target: fmt::Debug {
     // TODO: Is it possible bind Self::Registers::Globals::Target: Self, without specifying the lifetime 'ctx for Globals?
     type Registers: RegisterStorage;
     type Memory: Memory<Registers = Self::Registers>;
 
     type Instruction: Instruction;
     type Label: Label<Instruction = Self::Instruction>;
-    type LabelList: LabelList<Inner = Self::Label>;
+    type LabelList: LabelList<Label = Self::Label>;
 
     fn compile_instruction(codegen: &CodeGen<Self>, instr: &Self::Instruction) -> Option<()>
     where

@@ -17,6 +17,7 @@ pub const GENERAL_EXCEPTION_VECTOR: usize = EXCEPTION_VECTOR_BASE + 0x180;
 
 /// See table 6-2 of the VR4300 manual.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FromRepr)]
+#[repr(u8)]
 pub enum Exception {
     Interrupt = 0,
     TlbModification = 1,
