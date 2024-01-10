@@ -1,6 +1,5 @@
 use super::Cpu;
 use crate::{
-    codegen::INSIDE_DELAY_SLOT_STORAGE,
     gdb::MonitorCommand,
     runtime::{
         bus::Bus, memory::tlb, registers::RegIndex, Environment, GdbIntegration, InterruptHandler,
@@ -81,12 +80,11 @@ impl<B: Bus> Environment<'_, Cpu, B> {
             // so that we dont skip over the branch when we return from the exception. Notify the CPU of this by setting the BD bit.
             let pc = {
                 let mut pc = self.registers.read(register::Special::Pc);
-                if self.registers.read(INSIDE_DELAY_SLOT_STORAGE) == 0 {
-                    self.registers.write(INSIDE_DELAY_SLOT_STORAGE, 0);
-                    cause.set_branch_delay(false);
-                } else {
+                if self.flags().inside_delay_slot() {
                     pc -= INSTRUCTION_SIZE as u64;
                     cause.set_branch_delay(true);
+                } else {
+                    cause.set_branch_delay(false);
                 }
 
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]

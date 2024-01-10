@@ -1,7 +1,8 @@
 //! The register bank definitions for a MIPS VR4300 CPU, as well as its JIT mapping.
 
+use super::codegen::RESERVED_CP0_REGISTER_LATCH;
 use crate::{
-    codegen::{CodeGen, INSIDE_DELAY_SLOT_STORAGE, RESERVED_CP0_REGISTER_LATCH},
+    codegen::CodeGen,
     runtime::registers::{RegIndex, RegisterBankMapping},
     target, RegisterBank,
 };
@@ -135,6 +136,8 @@ impl RegIndex<register::Register> for Registers {
 }
 
 impl fmt::Debug for Registers {
+    // The iterators will return less than 256 items
+    #[allow(clippy::cast_possible_truncation)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let write_reg = |f: &mut fmt::Formatter<'_>, name: &str, reg: u64| -> fmt::Result {
             writeln!(f, "{name: <10} = {reg:#x}")
@@ -148,7 +151,7 @@ impl fmt::Debug for Registers {
 
         writeln!(f, "\ncoprocessor 0 registers:")?;
         for (i, reg) in self.cp0.iter_relaxed().enumerate() {
-            let register = register::Cp0::from_repr(i).unwrap();
+            let register = register::Cp0::from_repr(i as u8).unwrap();
             if !register.is_reserved() {
                 write_reg(f, register.name(), reg)?;
             }
@@ -163,7 +166,7 @@ impl fmt::Debug for Registers {
 
         writeln!(f, "\nfpu control registers:")?;
         for (i, reg) in self.fpu_control.iter_relaxed().enumerate() {
-            let register = register::FpuControl::from_repr(i).unwrap();
+            let register = register::FpuControl::from_repr(i as u8).unwrap();
             if !register.is_reserved() {
                 write_reg(f, register.name(), reg)?;
             }
@@ -174,7 +177,6 @@ impl fmt::Debug for Registers {
             let name = register::Special::name_from_index(i);
             write_reg(f, name, reg)?;
         }
-        write_reg(f, "delay_slot", self.read(INSIDE_DELAY_SLOT_STORAGE))?;
 
         Ok(())
     }
@@ -210,7 +212,7 @@ impl target::RegisterStorage for Registers {
     }
 }
 
-/// JIT mappings to the register banks.
+/// Mappings to the register banks for the JIT.
 #[derive(Debug)]
 pub struct Globals<'ctx> {
     pub general_purpose: RegisterBankMapping<'ctx>,

@@ -21,14 +21,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Break => {
             // TODO: this is the base pointer, which is not accurate
-            let ptr = codegen
-                .globals
-                .as_ref()
-                .unwrap()
-                .registers
-                .cp0
-                .pointer_value();
-
+            let ptr = codegen.globals().registers.cp0.pointer_value();
             let halted_and_broke = i32_type.const_int(0b11, false);
 
             let status = codegen.builder.build_load(i32_type, ptr, "status");

@@ -15,6 +15,10 @@ pub(crate) mod cpu;
 
 pub use cpu::{Cpu, Registers as CpuRegisters};
 
+/// The register ID type for the given target.
+pub(crate) type RegisterID<'ctx, T> =
+    <<<T as Target>::Registers as RegisterStorage>::Globals<'ctx> as Globals<'ctx>>::RegisterID;
+
 pub(crate) trait RegisterStorage: fmt::Debug {
     type Globals<'ctx>: Globals<'ctx>;
 

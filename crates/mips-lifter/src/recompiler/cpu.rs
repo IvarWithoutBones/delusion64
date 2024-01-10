@@ -1,8 +1,8 @@
 use super::stub;
 use crate::{
-    codegen::{CodeGen, Overflow},
+    codegen::CodeGen,
     runtime::RuntimeFunction,
-    target::Cpu,
+    target::{cpu::codegen::Overflow, Cpu},
 };
 use inkwell::{
     values::{FloatValue, IntValue},

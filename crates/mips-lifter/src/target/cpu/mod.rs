@@ -10,6 +10,7 @@ use crate::{
 use mips_decomp::instruction::ParsedInstruction;
 use std::fmt;
 
+pub(crate) mod codegen; // TODO: make private
 mod registers;
 mod runtime;
 

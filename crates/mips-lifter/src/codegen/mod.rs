@@ -1,8 +1,8 @@
-use self::{address_map::VirtualAddressMap, init::Helpers, register::BitWidth};
+use self::{address_map::VirtualAddressMap, init::Helpers};
 use crate::{
     label::{JitFunctionPointer, LabelWithContext},
     runtime::RuntimeFunction,
-    target::{self, Cpu, Globals as _, RegisterStorage, Target},
+    target::{self, Globals as _, RegisterID, RegisterStorage, Target},
     LLVM_CALLING_CONVENTION_TAILCC,
 };
 use inkwell::{
@@ -12,23 +12,20 @@ use inkwell::{
     context::Context,
     execution_engine::ExecutionEngine,
     module::Module,
-    types::{BasicType, IntType},
+    types::{BasicType, FloatType, IntType},
     values::{
-        BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, GlobalValue, IntValue,
-        PointerValue,
+        BasicValue, BasicValueEnum, CallSiteValue, FloatValue, FunctionValue, GlobalValue,
+        IntValue, PointerValue,
     },
     AtomicOrdering,
 };
-use mips_decomp::{instruction::ParsedInstruction, Exception};
 use std::collections::HashMap;
+use tartan_bitfield::bitfield;
 
 #[macro_use]
 mod comparison;
 pub(crate) mod address_map;
 mod init;
-mod register;
-
-pub(crate) use register::{INSIDE_DELAY_SLOT_STORAGE, RESERVED_CP0_REGISTER_LATCH};
 
 #[macro_export]
 macro_rules! env_call {
@@ -57,19 +54,21 @@ pub fn function_attributes(context: &Context) -> [Attribute; ATTRIBUTE_NAMES.len
     attributes.map(|a| unsafe { a.unwrap_unchecked() })
 }
 
-/// Mappings to the runtime environment.
-#[derive(Debug)]
-#[repr(C)]
-pub struct Globals<'ctx, T: Target> {
-    pub env_ptr: GlobalValue<'ctx>,
-    pub registers: <T::Registers as RegisterStorage>::Globals<'ctx>,
-    pub functions: HashMap<RuntimeFunction, FunctionValue<'ctx>>,
+bitfield! {
+    /// Flags used to track the state of the JIT.
+    pub(crate) struct Flags(u64) {
+        [0] pub inside_delay_slot,
+    }
 }
 
+/// Mappings to the runtime environment.
 #[derive(Debug)]
-pub enum FallthroughAmount {
-    One,
-    Two,
+pub struct Globals<'ctx, T: Target> {
+    pub env_ptr: GlobalValue<'ctx>,
+    pub flags_ptr: GlobalValue<'ctx>,
+    pub registers: <T::Registers as RegisterStorage>::Globals<'ctx>,
+    // TODO: Switch to a slice since this gets allocated for every compiled basic block
+    pub functions: HashMap<RuntimeFunction, FunctionValue<'ctx>>,
 }
 
 #[derive(Debug)]
@@ -79,15 +78,11 @@ pub struct CodeGen<'ctx, T: Target> {
     pub builder: Builder<'ctx>,
     pub execution_engine: ExecutionEngine<'ctx>,
     pub labels: VirtualAddressMap<'ctx, T>,
-    pub globals: Option<Globals<'ctx, T>>,
+    globals: Option<Globals<'ctx, T>>,
     helpers: Helpers<'ctx>,
     /// Every single module we compiled. We need to keep these around to cleanly shut down LLVM.
     pub modules: Vec<Module<'ctx>>,
 }
-
-/// The register ID type for the given target.
-type RegisterID<'ctx, T> =
-    <<<T as Target>::Registers as RegisterStorage>::Globals<'ctx> as target::Globals<'ctx>>::RegisterID;
 
 impl<'ctx, T: Target> CodeGen<'ctx, T> {
     pub(crate) fn new(
@@ -110,7 +105,7 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
     /// Verify our module is valid.
     pub fn verify(&self) -> Result<(), String> {
         self.module.verify().map_err(|e| {
-            self.module.print_to_file("./test/a.ll").unwrap();
+            self.module.print_to_file("./error.ll").unwrap();
             e.to_string()
         })
     }
@@ -162,7 +157,7 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
     /// Generate a jump to the given constant virtual address, ending the current basic block.
     pub fn build_constant_jump(&self, address: u64) {
         if let Ok(lab) = self.labels.get(address) {
-            // Check if we have previously compiled this function.
+            // If we have previously compiled this function we can insert a direct jump.
             self.set_call_attrs(self.builder.build_call(lab.function, &[], "constant_jump"));
             self.builder.build_return(None);
         } else {
@@ -356,81 +351,9 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         (hi, lo)
     }
 
-    /*
-       Register access helpers, to assist implementing target-specific code.
-    */
-
-    pub(crate) fn read_register_pointer(
-        &self,
-        ptr: PointerValue<'ctx>,
-        ty: impl BasicType<'ctx>,
-        reg: RegisterID<'ctx, T>,
-    ) -> BasicValueEnum<'ctx> {
-        // TODO: get the registers name
-        let value = self.builder.build_load(ty, ptr, "reg_name");
-        if self.globals().registers.is_atomic(reg) {
-            let i = value
-                .as_instruction_value()
-                .expect("build_load returns an InstructionValue");
-            i.set_atomic_ordering(AtomicOrdering::Unordered)
-                .expect("load instructions can be atomic");
-            // If the alignment is not set LLVM will segfault. Underestimating the alignment produces slower code, but is safe.
-            i.set_alignment(0).expect("alignment is valid");
-        }
-        value
-    }
-
-    pub(crate) fn write_register_pointer(
-        &self,
-        value: BasicValueEnum<'ctx>,
-        ptr: PointerValue<'ctx>,
-        reg: RegisterID<'ctx, T>,
-    ) {
-        let v = self.builder.build_store(ptr, value);
-        if self.globals().registers.is_atomic(reg) {
-            v.set_atomic_ordering(AtomicOrdering::Unordered)
-                .expect("store instructions can be atomic");
-            // If the alignment is not set LLVM will segfault. Underestimating the alignment produces slower code, but is safe.
-            v.set_alignment(0).expect("alignment is valid");
-        }
-    }
-
-    pub(crate) fn read_register_raw(
-        &self,
-        ty: IntType<'ctx>,
-        reg: impl Into<RegisterID<'ctx, T>>,
-    ) -> IntValue<'ctx> {
-        let reg = reg.into();
-        let registers = &self.globals().registers;
-        let ptr = registers.pointer_value(self, &reg);
-        self.read_register_pointer(ptr, ty, reg).into_int_value()
-    }
-
-    pub(crate) fn write_register_raw(&self, reg: RegisterID<'ctx, T>, value: IntValue<'ctx>) {
-        let registers = &self.globals().registers;
-        let ptr = registers.pointer_value(self, &reg);
-        self.write_register_pointer(value.as_basic_value_enum(), ptr, reg);
-    }
-
-    pub fn read_program_counter(&self) -> IntValue<'ctx> {
-        let pc_id = <<T::Registers as target::RegisterStorage>::Globals<'ctx> as target::Globals>::PROGRAM_COUNTER_ID;
-        self.read_register_raw(self.context.i64_type(), pc_id)
-    }
-
-    pub fn write_program_counter(&self, value: u64) {
-        let pc_id = <<T::Registers as target::RegisterStorage>::Globals<'ctx> as target::Globals>::PROGRAM_COUNTER_ID;
-        let value = self.context.i64_type().const_int(value, false);
-        self.write_register_raw(pc_id, value);
-    }
-}
-
-impl<'ctx> CodeGen<'ctx, Cpu> {
-    pub fn base_plus_offset(&self, instr: &ParsedInstruction, add_name: &str) -> IntValue<'ctx> {
-        let i16_type = self.context.i16_type();
-        let i64_type = self.context.i64_type();
-        let base = self.read_general_register(i64_type, instr.base());
-        let offset = self.sign_extend_to(i64_type, i16_type.const_int(instr.offset() as _, true));
-        self.builder.build_int_add(base, offset, add_name)
+    pub fn build_mask(&self, to_mask: IntValue<'ctx>, mask: u64, name: &str) -> IntValue<'ctx> {
+        let mask = to_mask.get_type().const_int(mask, false);
+        self.builder.build_and(to_mask, mask, name)
     }
 
     /// Get a host pointer to a function which simply returns.
@@ -453,61 +376,6 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
 
         self.execution_engine.add_module(&module).unwrap();
         self.execution_engine.get_function_address(NAME).unwrap() as JitFunctionPointer
-    }
-
-    pub fn set_inside_delay_slot(&self, inside: bool) {
-        let value = self.context.i64_type().const_int(inside as u64, false);
-        self.write_register_raw(INSIDE_DELAY_SLOT_STORAGE.into(), value);
-    }
-
-    pub fn throw_exception(
-        &self,
-        exception: Exception,
-        coprocessor: Option<u8>,
-        bad_vaddr: Option<IntValue<'ctx>>,
-    ) {
-        let i64_type = self.context.i64_type();
-        let i8_type = self.context.i8_type();
-        let exception = i64_type.const_int(exception as u64, false);
-
-        let has_coprocessor = self
-            .context
-            .bool_type()
-            .const_int(coprocessor.is_some() as u64, false);
-        let coprocessor = coprocessor
-            .map(|cop| {
-                assert!(cop <= 3, "invalid coprocessor in throw_exception: {cop}");
-                i8_type.const_int(cop as u64, false)
-            })
-            .unwrap_or_else(|| i8_type.const_zero());
-
-        let has_bad_vaddr = self
-            .context
-            .bool_type()
-            .const_int(bad_vaddr.is_some() as u64, false);
-        let bad_vaddr = bad_vaddr.unwrap_or_else(|| i64_type.const_zero());
-
-        let exception_vec_ptr = env_call!(
-            self,
-            RuntimeFunction::HandleException,
-            [
-                exception,
-                has_coprocessor,
-                coprocessor,
-                has_bad_vaddr,
-                bad_vaddr
-            ]
-        )
-        .try_as_basic_value()
-        .left()
-        .unwrap()
-        .into_int_value();
-        self.build_jump_to_jit_func_ptr(exception_vec_ptr, "exception_vector");
-    }
-
-    pub fn build_mask(&self, to_mask: IntValue<'ctx>, mask: u64, name: &str) -> IntValue<'ctx> {
-        let mask = self.context.i64_type().const_int(mask, false);
-        self.builder.build_and(to_mask, mask, name)
     }
 
     pub fn read_memory(&self, ty: IntType<'ctx>, address: IntValue<'ctx>) -> IntValue<'ctx> {
@@ -580,89 +448,164 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
             .into_int_value()
     }
 
-    pub fn assert_coprocessor_usable(&self, coprocessor: u8) {
-        use mips_decomp::register::{cp0::Status, Cp0};
-        assert!(
-            coprocessor <= 3,
-            "invalid coprocessor in assert_coprocessor_usable: {coprocessor}"
-        );
-
-        let mask = match coprocessor {
-            0 => Status::COPROCESSOR_0_ENABLED_MASK,
-            1 => Status::COPROCESSOR_1_ENABLED_MASK,
-            2 => Status::COPROCESSOR_2_ENABLED_MASK,
-            3 => Status::COPROCESSOR_3_ENABLED_MASK,
-            _ => unreachable!(),
+    pub fn set_inside_delay_slot(&self, inside: bool) {
+        let i64_type = self.context.i64_type();
+        let flags_ptr = self.globals().flags_ptr.as_pointer_value();
+        let prev = {
+            let flags = self
+                .builder
+                .build_load(i64_type, flags_ptr, "flags_prev")
+                .into_int_value();
+            // Zero the least significant bit as to overwrite it with the new value.
+            self.builder.build_and(
+                flags,
+                i64_type.const_int(!1, false),
+                "flags_prev_delay_zeroed",
+            )
         };
-
-        let enabled = self.build_mask(
-            self.read_register(self.context.i32_type(), Cp0::Status),
-            mask,
-            &format!("cop{coprocessor}_usable"),
-        );
-
-        self.build_if(
-            &format!("cop{coprocessor}_unusable"),
-            cmp!(self, enabled == 0),
-            || {
-                self.throw_exception(Exception::CoprocessorUnusable, Some(coprocessor), None);
-            },
-        );
+        let new = {
+            // Set the least significant bit to the new value.
+            let inside = i64_type.const_int(inside as u64, false);
+            self.builder.build_or(prev, inside, "flags_new_delay")
+        };
+        self.builder.build_store(flags_ptr, new);
     }
 
-    /// Builds a check for arithmetic overflow exception, and throws if it should occur.
-    pub fn check_overflow_exception(
+    /*
+       Register access helpers, to assist implementing target-specific code.
+    */
+
+    pub(crate) fn read_register_pointer(
         &self,
-        ty: Overflow,
-        lhs: IntValue<'ctx>,
-        rhs: IntValue<'ctx>,
-        result: IntValue<'ctx>,
+        ptr: PointerValue<'ctx>,
+        ty: impl BasicType<'ctx>,
+        reg: RegisterID<'ctx, T>,
+    ) -> BasicValueEnum<'ctx> {
+        // TODO: get the registers name
+        let value = self.builder.build_load(ty, ptr, "reg_name");
+        if self.globals().registers.is_atomic(reg) {
+            let i = value
+                .as_instruction_value()
+                .expect("build_load returns an InstructionValue");
+            i.set_atomic_ordering(AtomicOrdering::Unordered)
+                .expect("load instructions can be atomic");
+            // If the alignment is not set LLVM will segfault. Underestimating the alignment produces slower code, but is safe.
+            i.set_alignment(0).expect("alignment is valid");
+        }
+        value
+    }
+
+    pub(crate) fn write_register_pointer(
+        &self,
+        value: BasicValueEnum<'ctx>,
+        ptr: PointerValue<'ctx>,
+        reg: RegisterID<'ctx, T>,
     ) {
-        // Swap arguments for subtraction so that this function can be used the same way for both.
-        let (lhs, rhs) = match ty {
-            Overflow::Subtract => (rhs, lhs),
-            Overflow::Add => (lhs, rhs),
-        };
+        let v = self.builder.build_store(ptr, value);
+        if self.globals().registers.is_atomic(reg) {
+            v.set_atomic_ordering(AtomicOrdering::Unordered)
+                .expect("store instructions can be atomic");
+            // If the alignment is not set LLVM will segfault. Underestimating the alignment produces slower code, but is safe.
+            v.set_alignment(0).expect("alignment is valid");
+        }
+    }
 
-        // Compare the twos complement sign bits of the operands and the result.
-        let overflow = {
-            let lhs = {
-                let xor = self.builder.build_xor(lhs, rhs, "signed_overflow_lhs_xor");
-                match ty {
-                    Overflow::Add => self.builder.build_not(xor, "signed_overflow_lhs"),
-                    Overflow::Subtract => xor,
-                }
-            };
+    pub(crate) fn read_register_raw(
+        &self,
+        ty: IntType<'ctx>,
+        reg: impl Into<RegisterID<'ctx, T>>,
+    ) -> IntValue<'ctx> {
+        let reg = reg.into();
+        let registers = &self.globals().registers;
+        let ptr = registers.pointer_value(self, &reg);
+        self.read_register_pointer(ptr, ty, reg).into_int_value()
+    }
 
-            let rhs = self
-                .builder
-                .build_xor(rhs, result, "signed_overflow_rhs_xor");
+    pub(crate) fn write_register_raw(&self, reg: RegisterID<'ctx, T>, value: IntValue<'ctx>) {
+        let registers = &self.globals().registers;
+        let ptr = registers.pointer_value(self, &reg);
+        self.write_register_pointer(value.as_basic_value_enum(), ptr, reg);
+    }
 
-            let combined = self.builder.build_and(lhs, rhs, "signed_overflow_and");
-            let ty = combined.get_type();
-            let shift = ty.const_int((ty.bit_width() as u64 * 8) - 1, false);
-            self.builder
-                .build_right_shift(combined, shift, false, "signed_overflow_shift")
-        };
+    pub fn read_program_counter(&self) -> IntValue<'ctx> {
+        let pc_id = <<T::Registers as target::RegisterStorage>::Globals<'ctx> as target::Globals>::PROGRAM_COUNTER_ID;
+        self.read_register_raw(self.context.i64_type(), pc_id)
+    }
 
-        self.build_if("signed_overflow", overflow, || {
-            self.throw_exception(Exception::ArithmeticOverflow, Some(0), None)
-        });
+    pub fn write_program_counter(&self, value: u64) {
+        let pc_id = <<T::Registers as target::RegisterStorage>::Globals<'ctx> as target::Globals>::PROGRAM_COUNTER_ID;
+        let value = self.context.i64_type().const_int(value, false);
+        self.write_register_raw(pc_id, value);
     }
 }
 
-// impl Drop for CodeGen<'_, Cpu> {
-//     fn drop(&mut self) {
-//         // Without manually removing the modules from the execution engine LLVM segfaults.
-//         // We use drain here to run their Drop implementation prior to anything else, which prevents out of bounds reads/writes according to valgrind.
-//         for module in self.modules.drain(..) {
-//             self.execution_engine.remove_module(&module).unwrap();
-//         }
-//         self.execution_engine.remove_module(&self.module).unwrap();
-//     }
-// }
+impl<T: Target> Drop for CodeGen<'_, T> {
+    fn drop(&mut self) {
+        // Without manually removing the modules from the execution engine LLVM segfaults.
+        // We use drain here to run their Drop implementation prior to anything else, which prevents out of bounds reads/writes according to valgrind.
+        for module in self.modules.drain(..) {
+            self.execution_engine.remove_module(&module).unwrap();
+        }
+        self.execution_engine.remove_module(&self.module).unwrap();
+    }
+}
 
-pub enum Overflow {
-    Subtract,
-    Add,
+#[derive(Debug)]
+pub enum FallthroughAmount {
+    One,
+    Two,
+}
+
+pub(crate) trait BitWidth: std::fmt::Display + Copy {
+    fn bit_width(&self) -> usize;
+}
+
+impl BitWidth for IntType<'_> {
+    fn bit_width(&self) -> usize {
+        self.get_bit_width() as usize
+    }
+}
+
+impl BitWidth for usize {
+    fn bit_width(&self) -> usize {
+        *self
+    }
+}
+
+pub(crate) trait NumericValue<'ctx>:
+    BasicValue<'ctx> + TryFrom<BasicValueEnum<'ctx>> + Copy
+{
+    type Tag: BasicType<'ctx>;
+
+    fn tag(context: &'ctx Context, bit_width: &impl BitWidth) -> Self::Tag;
+}
+
+impl<'ctx> NumericValue<'ctx> for IntValue<'ctx> {
+    type Tag = IntType<'ctx>;
+
+    fn tag(context: &'ctx Context, bit_width: &impl BitWidth) -> Self::Tag {
+        match bit_width.bit_width() {
+            1 => context.bool_type(),
+            8 => context.i8_type(),
+            16 => context.i16_type(),
+            32 => context.i32_type(),
+            64 => context.i64_type(),
+            128 => context.i128_type(),
+            _ => unimplemented!("<IntValue as NumericValue>::tag(): bit_width={bit_width}"),
+        }
+    }
+}
+
+impl<'ctx> NumericValue<'ctx> for FloatValue<'ctx> {
+    type Tag = FloatType<'ctx>;
+
+    fn tag(context: &'ctx Context, bit_width: &impl BitWidth) -> Self::Tag {
+        match bit_width.bit_width() {
+            16 => context.f16_type(),
+            32 => context.f32_type(),
+            64 => context.f64_type(),
+            128 => context.f128_type(),
+            _ => unimplemented!("<FloatValue as NumericValue>::tag(): bit_width={bit_width}"),
+        }
+    }
 }

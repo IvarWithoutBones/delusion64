@@ -79,6 +79,7 @@ where
     pub(crate) memory: T::Memory,
     pub(crate) codegen: CodeGen<'ctx, T>,
     pub(crate) bus: B,
+    jit_flags: *mut codegen::Flags,
     debugger: Option<gdb::Debugger<'ctx, T, B>>,
     pub(crate) interrupt_pending: bool,
     pub(crate) exit_requested: bool,
@@ -97,6 +98,7 @@ where
         execution_engine: ExecutionEngine<'ctx>,
     ) -> Pin<Box<Self>> {
         let mut env = Box::new(Self {
+            jit_flags: Box::into_raw(Default::default()),
             registers: builder.registers(),
             bus: builder.bus,
             trace: builder.trace,
@@ -128,6 +130,10 @@ where
         let env_ptr = module.add_global(i64_ptr_type, Default::default(), "env");
         let ptr = self as *const Environment<_, _> as usize;
         execution_engine.add_global_mapping(&env_ptr, ptr);
+
+        // Map a pointer to the flags
+        let flags_ptr = module.add_global(i64_ptr_type, Default::default(), "flags");
+        execution_engine.add_global_mapping(&flags_ptr, self.jit_flags as usize);
 
         // Map the registers into the modules globals
         let registers = self.registers.build_globals(module, execution_engine);
@@ -170,6 +176,7 @@ where
 
         codegen::Globals {
             env_ptr,
+            flags_ptr,
             registers,
             functions,
         }
@@ -220,6 +227,10 @@ where
                 let msg = format!("failed to generate vaddr for paddr {paddr:#06x}: {err:#?}");
                 self.panic_update_debugger(&msg)
             })
+    }
+
+    pub(crate) fn flags(&self) -> codegen::Flags {
+        unsafe { self.jit_flags.read() }
     }
 
     /*

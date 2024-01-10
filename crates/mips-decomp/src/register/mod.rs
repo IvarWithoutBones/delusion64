@@ -100,6 +100,7 @@ impl_reg!(GeneralPurpose);
 
 /// A MIPS 3 coprocessor 0 register.
 #[derive(EnumCount, FromRepr, EnumVariantNames, Debug, PartialEq, Eq, Clone, Copy)]
+#[repr(u8)]
 pub enum Cp0 {
     /// Programmable pointer into TLB array
     Index,
@@ -194,6 +195,7 @@ impl Cp0 {
 /// A general purpose MIPS 3 FPU (coprocessor 1, or CP1) register.
 #[derive(EnumCount, FromRepr, EnumVariantNames, Debug, PartialEq, Eq, Clone, Copy)]
 #[strum(serialize_all = "snake_case")]
+#[repr(u8)]
 pub enum Fpu {
     F0,
     F1,
@@ -233,6 +235,7 @@ impl_reg!(Fpu);
 
 /// A MIPS 3 FPU (coprocessor 1, or CP1) control register, or `FCR`.
 #[derive(EnumCount, FromRepr, EnumVariantNames, Debug, PartialEq, Eq, Clone, Copy)]
+#[repr(u8)]
 pub enum FpuControl {
     /// FPU Implementation/Revision Register `FCR0`.
     ImplementationRevision,
@@ -341,6 +344,7 @@ impl FpuControl {
 /// A miscellaneous MIPS 3 register, which does not nicely fit into any other category.
 #[derive(EnumCount, FromRepr, EnumVariantNames, Debug, PartialEq, Eq, Clone, Copy)]
 #[strum(serialize_all = "snake_case")]
+#[repr(u8)]
 pub enum Special {
     /// The program counter, which is not directly accessible but here for bookkeeping purposes.
     Pc,
