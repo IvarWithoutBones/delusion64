@@ -1,6 +1,9 @@
 use inkwell::{
-    context::ContextRef, execution_engine::ExecutionEngine, module::Module, types::IntType,
-    values::GlobalValue,
+    context::ContextRef,
+    execution_engine::ExecutionEngine,
+    module::Module,
+    types::IntType,
+    values::{GlobalValue, PointerValue},
 };
 use std::sync::{atomic, Arc};
 
@@ -91,6 +94,16 @@ impl<T: Integer, const LEN: usize> RegisterBank<T, LEN> {
         )
     }
 
+    /// Returns true when this register bank is shared, and atomic operations are required to access it.
+    pub fn is_shared(&self) -> bool {
+        matches!(self.ownership, Ownership::Shared(_))
+    }
+
+    /// Returns true when this register bank is exclusive, and atomic operations are not required to access it.
+    pub fn is_exclusive(&self) -> bool {
+        matches!(self.ownership, Ownership::Exclusive)
+    }
+
     /// Reads a value from the underlying array, at the given index, using the given atomic ordering if this is bank is shared.
     ///
     /// # Safety
@@ -172,11 +185,14 @@ impl<T: Integer, const LEN: usize> RegisterBank<T, LEN> {
         module: &Module<'ctx>,
         execution_engine: &ExecutionEngine<'ctx>,
         name: &str,
-    ) -> GlobalValue<'ctx> {
+    ) -> RegisterBankMapping<'ctx> {
         let ty = T::ty(&module.get_context()).array_type(LEN as u32);
-        let global = module.add_global(ty, None, name);
-        execution_engine.add_global_mapping(&global, self.start_ptr as usize);
-        global
+        let pointer = module.add_global(ty, None, name);
+        execution_engine.add_global_mapping(&pointer, self.start_ptr as usize);
+        RegisterBankMapping {
+            pointer,
+            atomic: self.is_shared(),
+        }
     }
 }
 
@@ -215,4 +231,20 @@ pub trait RegIndex<T> {
     fn read(&self, index: T) -> Self::Output;
 
     fn write(&mut self, index: T, value: Self::Output);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RegisterBankMapping<'ctx> {
+    pointer: GlobalValue<'ctx>,
+    atomic: bool,
+}
+
+impl<'ctx> RegisterBankMapping<'ctx> {
+    pub fn pointer_value(&self) -> PointerValue<'ctx> {
+        self.pointer.as_pointer_value()
+    }
+
+    pub fn is_atomic(&self) -> bool {
+        self.atomic
+    }
 }

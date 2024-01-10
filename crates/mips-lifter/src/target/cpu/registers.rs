@@ -2,17 +2,14 @@
 
 use crate::{
     codegen::{CodeGen, INSIDE_DELAY_SLOT_STORAGE, RESERVED_CP0_REGISTER_LATCH},
-    runtime::registers::RegIndex,
+    runtime::registers::{RegIndex, RegisterBankMapping},
     target, RegisterBank,
 };
-use inkwell::{
-    execution_engine::ExecutionEngine,
-    module::Module,
-    values::{GlobalValue, PointerValue},
-};
+use inkwell::{execution_engine::ExecutionEngine, module::Module, values::PointerValue};
 use mips_decomp::register;
 use std::fmt;
 
+/// The standard MIPS VR4300 registers.
 #[derive(Default)]
 pub struct Registers {
     pub general_purpose: RegisterBank<u64, { register::GeneralPurpose::count() }>,
@@ -196,63 +193,70 @@ impl target::RegisterStorage for Registers {
         exec: &ExecutionEngine<'ctx>,
     ) -> Self::Globals<'ctx> {
         Globals {
+            cp0: self.cp0.map_into(module, exec, "coprocessor_0_registers"),
+            fpu: self.fpu.map_into(module, exec, "floating_point_registers"),
+            special: self.special.map_into(module, exec, "special_registers"),
             general_purpose: self.general_purpose.map_into(
                 module,
                 exec,
                 "general_purpose_registers",
             ),
-            cp0: self.cp0.map_into(module, exec, "coprocessor_0_registers"),
-            fpu: self.fpu.map_into(module, exec, "floating_point_registers"),
             fpu_control: self.fpu_control.map_into(
                 module,
                 exec,
                 "floating_point_control_registers",
             ),
-            special: self.special.map_into(module, exec, "special_registers"),
         }
     }
 }
 
+/// JIT mappings to the register banks.
 #[derive(Debug)]
 pub struct Globals<'ctx> {
-    pub general_purpose: GlobalValue<'ctx>,
-    pub cp0: GlobalValue<'ctx>,
-    pub special: GlobalValue<'ctx>,
-    pub fpu: GlobalValue<'ctx>,
-    pub fpu_control: GlobalValue<'ctx>,
+    pub general_purpose: RegisterBankMapping<'ctx>,
+    pub cp0: RegisterBankMapping<'ctx>,
+    pub special: RegisterBankMapping<'ctx>,
+    pub fpu: RegisterBankMapping<'ctx>,
+    pub fpu_control: RegisterBankMapping<'ctx>,
 }
 
 impl<'ctx> target::Globals<'ctx> for Globals<'ctx> {
-    type Id = register::Register;
+    type RegisterID = register::Register;
 
-    fn ptr_value<T: target::Target>(
+    const PROGRAM_COUNTER_ID: Self::RegisterID = register::Register::Special(register::Special::Pc);
+
+    fn pointer_value<T: target::Target>(
         &self,
         codegen: &CodeGen<'ctx, T>,
-        index: Self::Id,
+        reg: &Self::RegisterID,
     ) -> PointerValue<'ctx> {
         let gep = |ptr| unsafe {
             let i64_type = codegen.context.i64_type();
-            let name = &format!("{}_", index.name());
+            let name = &format!("{}_", reg.name());
             codegen.builder.build_in_bounds_gep(
                 i64_type,
                 ptr,
-                &[i64_type.const_int(index.to_repr() as u64, false)],
+                &[i64_type.const_int(reg.to_repr() as u64, false)],
                 name,
             )
         };
-        match index {
-            register::Register::Cp0(_) => gep(self.cp0.as_pointer_value()),
-            register::Register::Special(_) => gep(self.special.as_pointer_value()),
-            register::Register::Fpu(_) => gep(self.fpu.as_pointer_value()),
-            register::Register::FpuControl(_) => gep(self.fpu_control.as_pointer_value()),
-            register::Register::GeneralPurpose(_) => gep(self.general_purpose.as_pointer_value()),
+        match reg {
+            register::Register::Cp0(_) => gep(self.cp0.pointer_value()),
+            register::Register::Special(_) => gep(self.special.pointer_value()),
+            register::Register::Fpu(_) => gep(self.fpu.pointer_value()),
+            register::Register::FpuControl(_) => gep(self.fpu_control.pointer_value()),
+            register::Register::GeneralPurpose(_) => gep(self.general_purpose.pointer_value()),
         }
     }
 
-    fn program_counter_ptr<T: target::Target>(
-        &self,
-        codegen: &CodeGen<'ctx, T>,
-    ) -> PointerValue<'ctx> {
-        self.ptr_value(codegen, register::Register::Special(register::Special::Pc))
+    fn is_atomic(&self, bank: Self::RegisterID) -> bool {
+        // TODO: This needs to hold a specific register, should we add a associated Bank type to avoid that?
+        match bank {
+            register::Register::Cp0(_) => self.cp0.is_atomic(),
+            register::Register::GeneralPurpose(_) => self.general_purpose.is_atomic(),
+            register::Register::Special(_) => self.special.is_atomic(),
+            register::Register::Fpu(_) => self.fpu.is_atomic(),
+            register::Register::FpuControl(_) => self.fpu_control.is_atomic(),
+        }
     }
 }

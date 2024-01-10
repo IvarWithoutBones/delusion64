@@ -1,7 +1,7 @@
 use inkwell::{context::Context, OptimizationLevel};
 use std::pin::Pin;
 
-pub use self::{builder::JitBuilder, runtime::registers::RegisterBank};
+pub use self::{builder::JitBuilder, runtime::registers::{RegisterBank, RegIndex}};
 pub use mips_decomp::register;
 
 pub mod gdb {

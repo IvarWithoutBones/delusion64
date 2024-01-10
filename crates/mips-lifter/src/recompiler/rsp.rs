@@ -27,7 +27,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                 .unwrap()
                 .registers
                 .cp0
-                .as_pointer_value();
+                .pointer_value();
 
             let halted_and_broke = i32_type.const_int(0b11, false);
 

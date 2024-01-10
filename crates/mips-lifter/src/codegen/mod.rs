@@ -2,7 +2,7 @@ use self::{address_map::VirtualAddressMap, init::Helpers, register::BitWidth};
 use crate::{
     label::{JitFunctionPointer, LabelWithContext},
     runtime::RuntimeFunction,
-    target::{Cpu, Globals as _, RegisterStorage, Target},
+    target::{self, Cpu, Globals as _, RegisterStorage, Target},
     LLVM_CALLING_CONVENTION_TAILCC,
 };
 use inkwell::{
@@ -12,8 +12,12 @@ use inkwell::{
     context::Context,
     execution_engine::ExecutionEngine,
     module::Module,
-    types::IntType,
-    values::{CallSiteValue, FunctionValue, GlobalValue, IntValue},
+    types::{BasicType, IntType},
+    values::{
+        BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, GlobalValue, IntValue,
+        PointerValue,
+    },
+    AtomicOrdering,
 };
 use mips_decomp::{instruction::ParsedInstruction, Exception};
 use std::collections::HashMap;
@@ -42,7 +46,7 @@ macro_rules! env_call {
 
 pub const FUNCTION_PREFIX: &str = "delusion64_jit_";
 
-const ATTRIBUTE_NAMES: &[&str] = &["noreturn", "nosync", "nofree", "nocf_check"];
+const ATTRIBUTE_NAMES: &[&str] = &["noreturn", "nofree", "nocf_check"];
 pub fn function_attributes(context: &Context) -> [Attribute; ATTRIBUTE_NAMES.len()] {
     let mut attributes = [None; ATTRIBUTE_NAMES.len()];
     for (attr, name) in attributes.iter_mut().zip(ATTRIBUTE_NAMES.iter()) {
@@ -80,6 +84,10 @@ pub struct CodeGen<'ctx, T: Target> {
     /// Every single module we compiled. We need to keep these around to cleanly shut down LLVM.
     pub modules: Vec<Module<'ctx>>,
 }
+
+/// The register ID type for the given target.
+type RegisterID<'ctx, T> =
+    <<<T as Target>::Registers as RegisterStorage>::Globals<'ctx> as target::Globals<'ctx>>::RegisterID;
 
 impl<'ctx, T: Target> CodeGen<'ctx, T> {
     pub(crate) fn new(
@@ -348,11 +356,71 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         (hi, lo)
     }
 
+    /*
+       Register access helpers, to assist implementing target-specific code.
+    */
+
+    pub(crate) fn read_register_pointer(
+        &self,
+        ptr: PointerValue<'ctx>,
+        ty: impl BasicType<'ctx>,
+        reg: RegisterID<'ctx, T>,
+    ) -> BasicValueEnum<'ctx> {
+        // TODO: get the registers name
+        let value = self.builder.build_load(ty, ptr, "reg_name");
+        if self.globals().registers.is_atomic(reg) {
+            let i = value
+                .as_instruction_value()
+                .expect("build_load returns an InstructionValue");
+            i.set_atomic_ordering(AtomicOrdering::Unordered)
+                .expect("load instructions can be atomic");
+            // If the alignment is not set LLVM will segfault. Underestimating the alignment produces slower code, but is safe.
+            i.set_alignment(0).expect("alignment is valid");
+        }
+        value
+    }
+
+    pub(crate) fn write_register_pointer(
+        &self,
+        value: BasicValueEnum<'ctx>,
+        ptr: PointerValue<'ctx>,
+        reg: RegisterID<'ctx, T>,
+    ) {
+        let v = self.builder.build_store(ptr, value);
+        if self.globals().registers.is_atomic(reg) {
+            v.set_atomic_ordering(AtomicOrdering::Unordered)
+                .expect("store instructions can be atomic");
+            // If the alignment is not set LLVM will segfault. Underestimating the alignment produces slower code, but is safe.
+            v.set_alignment(0).expect("alignment is valid");
+        }
+    }
+
+    pub(crate) fn read_register_raw(
+        &self,
+        ty: IntType<'ctx>,
+        reg: impl Into<RegisterID<'ctx, T>>,
+    ) -> IntValue<'ctx> {
+        let reg = reg.into();
+        let registers = &self.globals().registers;
+        let ptr = registers.pointer_value(self, &reg);
+        self.read_register_pointer(ptr, ty, reg).into_int_value()
+    }
+
+    pub(crate) fn write_register_raw(&self, reg: RegisterID<'ctx, T>, value: IntValue<'ctx>) {
+        let registers = &self.globals().registers;
+        let ptr = registers.pointer_value(self, &reg);
+        self.write_register_pointer(value.as_basic_value_enum(), ptr, reg);
+    }
+
+    pub fn read_program_counter(&self) -> IntValue<'ctx> {
+        let pc_id = <<T::Registers as target::RegisterStorage>::Globals<'ctx> as target::Globals>::PROGRAM_COUNTER_ID;
+        self.read_register_raw(self.context.i64_type(), pc_id)
+    }
+
     pub fn write_program_counter(&self, value: u64) {
-        // TODO: handle atomicity
+        let pc_id = <<T::Registers as target::RegisterStorage>::Globals<'ctx> as target::Globals>::PROGRAM_COUNTER_ID;
         let value = self.context.i64_type().const_int(value, false);
-        let ptr = self.globals().registers.program_counter_ptr(self);
-        self.builder.build_store(ptr, value);
+        self.write_register_raw(pc_id, value);
     }
 }
 
@@ -388,10 +456,10 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
     }
 
     pub fn set_inside_delay_slot(&self, inside: bool) {
-        let new = self.context.i64_type().const_int(inside as u64, false);
-        let ptr = self.register_pointer(register::INSIDE_DELAY_SLOT_STORAGE);
-        self.builder.build_store(ptr, new);
+        let value = self.context.i64_type().const_int(inside as u64, false);
+        self.write_register_raw(INSIDE_DELAY_SLOT_STORAGE.into(), value);
     }
+
     pub fn throw_exception(
         &self,
         exception: Exception,

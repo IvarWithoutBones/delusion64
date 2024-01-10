@@ -28,15 +28,17 @@ pub(crate) trait RegisterStorage: fmt::Debug {
 }
 
 pub(crate) trait Globals<'ctx>: fmt::Debug {
-    type Id;
+    type RegisterID: fmt::Debug;
 
-    fn ptr_value<T: Target>(
+    const PROGRAM_COUNTER_ID: Self::RegisterID;
+
+    fn pointer_value<T: Target>(
         &self,
         codegen: &CodeGen<'ctx, T>,
-        index: Self::Id,
+        index: &Self::RegisterID,
     ) -> PointerValue<'ctx>;
 
-    fn program_counter_ptr<T: Target>(&self, codegen: &CodeGen<'ctx, T>) -> PointerValue<'ctx>;
+    fn is_atomic(&self, bank: Self::RegisterID) -> bool;
 }
 
 pub(crate) trait Memory: Default {

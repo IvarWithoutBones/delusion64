@@ -1,13 +1,6 @@
 use super::{CodeGen, Globals};
-use crate::{
-    env_call,
-    runtime::RuntimeFunction,
-    target::{Globals as _, Target},
-};
-use inkwell::{
-    execution_engine::JitFunction,
-    values::{FunctionValue, IntValue},
-};
+use crate::{env_call, runtime::RuntimeFunction, target::Target};
+use inkwell::{execution_engine::JitFunction, values::FunctionValue};
 use mips_decomp::INSTRUCTION_SIZE;
 
 #[derive(Default, Debug)]
@@ -76,15 +69,6 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         }
     }
 
-    fn pc(&self) -> IntValue<'ctx> {
-        // TODO dont hardcode i64
-        let i64_type = self.context.i64_type();
-        let pc_ptr = self.globals().registers.program_counter_ptr(self);
-        self.builder
-            .build_load(i64_type, pc_ptr, "pc")
-            .into_int_value()
-    }
-
     fn build_main(&mut self) {
         let fn_type = self.context.void_type().fn_type(&[], false);
         let main_fn = self.module.add_function("main", fn_type, None);
@@ -92,7 +76,8 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         let entry_block = self.context.append_basic_block(main_fn, "entry");
         self.builder.position_at_end(entry_block);
         {
-            self.build_dynamic_jump(self.pc());
+            let pc = self.read_program_counter();
+            self.build_dynamic_jump(pc);
         }
 
         self.helpers.main = Some(main_fn);
@@ -139,7 +124,7 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
             let block = codegen.context.append_basic_block(func, "entry");
             codegen.builder.position_at_end(block);
             {
-                let pc = codegen.pc();
+                let pc = codegen.read_program_counter();
                 let offset = i64_type.const_int(amount * INSTRUCTION_SIZE as u64, false);
                 let new_pc = codegen.builder.build_int_add(pc, offset, "new_pc");
                 codegen.build_dynamic_jump(new_pc);

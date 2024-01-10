@@ -91,7 +91,7 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
             unsafe {
                 self.builder.build_in_bounds_gep(
                     i64_type,
-                    self.globals().registers.fpu.as_pointer_value(),
+                    self.globals().registers.fpu.pointer_value(),
                     &[i64_type.const_int(index as u64, false)],
                     &name(index), // This'll bounds check
                 )
@@ -123,7 +123,7 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
                         let ptr = self.builder.build_pointer_cast(
                             pointer_at_index(base_register),
                             i32_type.ptr_type(Default::default()),
-                            &format!("{name}lo_ptr_"),
+                            &format!("{name}_lo_ptr_"),
                         );
 
                         // If the index is odd, we need to add 1 to the pointer to get the high-order 32 bits.
@@ -148,49 +148,18 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
         result.as_basic_value().into_pointer_value()
     }
 
-    pub(crate) fn register_pointer<T>(&self, reg: T) -> PointerValue<'ctx>
-    where
-        T: Into<Register>,
-    {
-        let reg = reg.into();
-        let i64_type = self.context.i64_type();
-
-        let base_ptr = match reg {
-            Register::GeneralPurpose(_) => {
-                self.globals().registers.general_purpose.as_pointer_value()
-            }
-            Register::Special(_) => self.globals().registers.special.as_pointer_value(),
-            Register::Cp0(_) => self.globals().registers.cp0.as_pointer_value(),
-            Register::Fpu(_) => {
-                unimplemented!("use fpu_general_register_pointer instead of register_pointer")
-            }
-            Register::FpuControl(_) => self.globals().registers.fpu_control.as_pointer_value(),
-        };
-
-        unsafe {
-            self.builder.build_in_bounds_gep(
-                i64_type,
-                base_ptr,
-                &[i64_type.const_int(reg.to_repr() as _, false)],
-                &format!("{}_ptr", reg.name()),
-            )
-        }
-    }
-
     /// Read the general-purpose register (GPR) at the given index.
     /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits returned.
     pub fn read_general_register<T>(&self, ty: IntType<'ctx>, index: T) -> IntValue<'ctx>
     where
         T: Into<u64>,
     {
-        let reg = register::GeneralPurpose::from_repr(index.into() as _).unwrap();
+        let reg = register::GeneralPurpose::from_repr(index.into() as u8).unwrap();
         if reg == register::GeneralPurpose::Zero {
             // Register zero is hardwired to zero.
             ty.const_zero()
         } else {
-            let name = format!("{}_", reg.name());
-            let reg_ptr = self.register_pointer(reg);
-            self.builder.build_load(ty, reg_ptr, &name).into_int_value()
+            self.read_register_raw(ty, reg)
         }
     }
 
@@ -206,9 +175,7 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
             reg = RESERVED_CP0_REGISTER_LATCH;
         }
 
-        let name = &format!("{}_", reg.name());
-        let register = self.register_pointer(reg);
-        self.builder.build_load(ty, register, name).into_int_value()
+        self.read_register_raw(ty, reg)
     }
 
     /// Read the floating-point unit (FPU) register at the given index.
@@ -219,11 +186,14 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
         Value: NumericValue<'ctx>,
     {
         let index = index.into() as usize;
-        let name = format!("fpr_{index}_f{bit_width}_");
+        let reg = register::Fpu::from_repr(index).unwrap();
         let tag = Value::tag(self.context, &bit_width);
-        let ptr_type = tag.ptr_type(Default::default());
-        let ptr = self.fpu_general_register_pointer(&bit_width, ptr_type, index);
-        let value = Value::try_from(self.builder.build_load(tag, ptr, &name));
+        let ptr = {
+            let ptr_type = tag.ptr_type(Default::default());
+            self.fpu_general_register_pointer(&bit_width, ptr_type, index)
+        };
+
+        let value = Value::try_from(self.read_register_pointer(ptr, tag, reg.into()));
         unsafe { value.unwrap_unchecked() } // SAFETY: We loaded the value with the correct type.
     }
 
@@ -234,9 +204,7 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
         T: Into<u64>,
     {
         let reg = register::FpuControl::from_repr(index.into() as usize).unwrap();
-        let name = format!("{}_", reg.name());
-        let reg_ptr = self.register_pointer(reg);
-        self.builder.build_load(ty, reg_ptr, &name).into_int_value()
+        self.read_register_raw(ty, reg)
     }
 
     /// Read the specified miscellaneous "special" register.
@@ -246,18 +214,13 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
         ty: IntType<'ctx>,
         reg: register::Special,
     ) -> IntValue<'ctx> {
-        let name = &format!("{}_", reg.name());
-        let register = self.register_pointer(reg);
-        self.builder.build_load(ty, register, name).into_int_value()
+        self.read_register_raw(ty, reg)
     }
 
     /// Read the coprocessor 2 (CP2) register latch.
     /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits returned.
     pub fn read_cp2_register(&self, ty: IntType<'ctx>) -> IntValue<'ctx> {
-        let register = self.register_pointer(CP2_REGISTER_LATCH);
-        self.builder
-            .build_load(ty, register, "cp2_register_latch_")
-            .into_int_value()
+        self.read_register_raw(ty, CP2_REGISTER_LATCH)
     }
 
     /// Read the specified register.
@@ -282,8 +245,7 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
         let reg = register::GeneralPurpose::from_repr(index.into() as _).unwrap();
         if reg != register::GeneralPurpose::Zero {
             // Register zero is hardwired to zero.
-            let register = self.register_pointer(reg);
-            self.builder.build_store(register, value);
+            self.write_register_raw(reg.into(), value)
         }
     }
 
@@ -429,13 +391,10 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
             }
         }
 
-        let reg_ptr = self.register_pointer(reg);
-        self.builder.build_store(reg_ptr, value);
-
+        self.write_register_raw(reg.into(), value);
         if reg != RESERVED_CP0_REGISTER_LATCH {
             // Any CP0 register write sets the reserved latch as well as the target register.
-            let reserved_latch = self.register_pointer(RESERVED_CP0_REGISTER_LATCH);
-            self.builder.build_store(reserved_latch, value);
+            self.write_register_raw(RESERVED_CP0_REGISTER_LATCH.into(), value);
         }
     }
 
@@ -448,9 +407,11 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
         Index: Into<u64>,
         Value: NumericValue<'ctx>,
     {
+        let index = index.into() as usize;
+        let reg = register::Fpu::from_repr(index).unwrap();
         let ptr_type = Value::tag(self.context, &bit_width).ptr_type(Default::default());
-        let ptr = self.fpu_general_register_pointer(&bit_width, ptr_type, index.into() as usize);
-        self.builder.build_store(ptr, value.as_basic_value_enum());
+        let ptr = self.fpu_general_register_pointer(&bit_width, ptr_type, index);
+        self.write_register_pointer(value.as_basic_value_enum(), ptr, reg.into());
     }
 
     pub fn write_fpu_control_register<T>(&self, index: T, mut value: IntValue<'ctx>)
@@ -465,27 +426,25 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
                     register::fpu::ControlStatus::WRITE_MASK,
                     "fpu_control_masked",
                 );
-                self.builder.build_store(self.register_pointer(reg), value);
+                self.write_register_raw(reg.into(), value);
             }
 
             // Read-only
             register::FpuControl::ImplementationRevision => {}
 
-            // These are all reserved, should handle this properly at some point.
-            _ => todo!("write_fpu_control_register: {reg:?}"),
+            // These are all reserved
+            _ => unimplemented!("write_fpu_control_register: {reg:?}"),
         }
     }
 
     pub fn write_special_register(&self, reg: register::Special, value: IntValue<'ctx>) {
-        let register = self.register_pointer(reg);
-        self.builder.build_store(register, value);
+        self.write_register_raw(reg.into(), value);
     }
 
     /// Write the coprocessor 2 (CP2) register latch.
     /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits returned.
     pub fn write_cp2_register(&self, value: IntValue<'ctx>) {
-        let register = self.register_pointer(CP2_REGISTER_LATCH);
-        self.builder.build_store(register, value);
+        self.write_register_raw(CP2_REGISTER_LATCH.into(), value);
     }
 
     pub fn write_register<T>(&self, reg: T, value: IntValue<'ctx>)
