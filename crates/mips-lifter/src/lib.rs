@@ -23,7 +23,6 @@ pub mod gdb {
 mod codegen;
 mod builder;
 mod label;
-mod recompiler;
 pub mod runtime;
 pub mod target;
 

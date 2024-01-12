@@ -356,6 +356,12 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         self.builder.build_and(to_mask, mask, name)
     }
 
+    pub fn build_stub(&self, name: &str) {
+        let output = format!("{name} instruction not implemented");
+        let storage_name = format!("{name}_stub");
+        self.build_panic(&output, &storage_name);
+    }
+
     /// Get a host pointer to a function which simply returns.
     /// Calling this inside of a JIT'ed block will return to the callee of [`JitBuilder::run`].
     pub(crate) fn return_from_jit_ptr(&self) -> JitFunctionPointer {

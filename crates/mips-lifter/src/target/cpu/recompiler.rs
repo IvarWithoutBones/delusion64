@@ -1,4 +1,3 @@
-use super::stub;
 use crate::{
     codegen::CodeGen,
     runtime::RuntimeFunction,
@@ -10,8 +9,224 @@ use inkwell::{
 };
 use mips_decomp::{
     instruction::{FloatCondition, FloatFormat, Mnenomic, ParsedInstruction},
-    register, Exception,
+    register, Exception, INSTRUCTION_SIZE,
 };
+
+/// A helper to calculate the target for jump instructions (JAL, J).
+/// The 26-bit target is shifted left two bits and combined with the high-order four bits of the address of the delay slot.
+fn jump_address(delay_slot_pc: u64, target: u32) -> u64 {
+    let masked_delay_slot = delay_slot_pc & 0xFFFF_FFFF_F000_0000;
+    let shifted_target = u64::from(target) << 2;
+    shifted_target | masked_delay_slot
+}
+
+enum JumpTarget<'ctx> {
+    Constant(u64),
+    Dynamic(IntValue<'ctx>),
+}
+
+pub fn compile_instruction_with_delay_slot(
+    codegen: &CodeGen<Cpu>,
+    pc: u64,
+    instr: &ParsedInstruction,
+    delay_slot_instr: &ParsedInstruction,
+    on_instruction: impl Fn(u64),
+) {
+    debug_assert!(instr.mnemonic().has_delay_slot());
+    let delay_slot_pc = pc + INSTRUCTION_SIZE as u64;
+
+    let compile_delay_slot_instr = || {
+        // Update runtime metadata about delay slots so we can properly handle traps and exceptions
+        codegen.set_inside_delay_slot(true);
+        on_instruction(delay_slot_pc);
+        crate::target::cpu::recompiler::compile_instruction(codegen, delay_slot_instr);
+        codegen.set_inside_delay_slot(false);
+    };
+
+    if instr.mnemonic().is_branch() || instr.mnemonic().is_trap() {
+        // Evaluate the branch condition prior to running the delay slot instruction,
+        // as the delay slot instruction can influence the branch condition.
+        let name = &format!("{}_cmp", instr.mnemonic().name());
+        let comparison = {
+            let (pred, lhs, rhs) = if instr.mnemonic().is_branch() {
+                evaluate_branch(codegen, instr, delay_slot_pc)
+            } else {
+                debug_assert!(instr.mnemonic().is_trap());
+                crate::target::cpu::recompiler::evaluate_trap(codegen, instr)
+            };
+            codegen.builder.build_int_compare(pred, lhs, rhs, name)
+        };
+
+        if !instr.mnemonic().is_likely_branch() {
+            // If the delay slot instruction is not discarded, it gets executed regardless of the branch condition.
+            compile_delay_slot_instr();
+        }
+
+        on_instruction(pc);
+        codegen.build_if(name, comparison, || {
+            if instr.mnemonic().is_likely_branch() {
+                // If the delay slot is discarded, the delay slot instruction only gets executed when the branch is taken.
+                compile_delay_slot_instr();
+            }
+
+            if instr.mnemonic().is_branch() {
+                let target_pc = instr
+                    .try_resolve_constant_jump(pc)
+                    .expect("target address for branch instruction could not be resolved");
+                codegen.build_constant_jump(target_pc);
+            } else {
+                // This must be a trap instruction, checked above.
+                codegen.throw_exception(Exception::Trap, Some(0), None);
+            }
+        });
+    } else {
+        // Evaluate the jump target, and set the link register if needed, prior to executing the delay slot instruction.
+        let target = evaluate_jump(codegen, instr, delay_slot_pc);
+
+        // Compile the delay slot, writes to the jump target register will be ignored.
+        compile_delay_slot_instr();
+
+        // Execute the jump.
+        on_instruction(pc);
+        match target {
+            JumpTarget::Constant(vaddr) => codegen.build_constant_jump(vaddr),
+            JumpTarget::Dynamic(vaddr) => codegen.build_dynamic_jump(vaddr),
+        }
+    }
+}
+
+fn evaluate_jump<'ctx>(
+    codegen: &CodeGen<'ctx, Cpu>,
+    instr: &ParsedInstruction,
+    delay_slot_pc: u64,
+) -> JumpTarget<'ctx> {
+    let i64_type = codegen.context.i64_type();
+    let return_address = i64_type.const_int(delay_slot_pc + INSTRUCTION_SIZE as u64, false);
+    match instr.mnemonic() {
+        Mnenomic::J => {
+            // Jump to target address
+            JumpTarget::Constant(jump_address(delay_slot_pc, instr.immediate()))
+        }
+
+        Mnenomic::Jal => {
+            // Jump to target address, stores return address in r31 (ra)
+            codegen.write_register(register::GeneralPurpose::Ra, return_address);
+            JumpTarget::Constant(jump_address(delay_slot_pc, instr.immediate()))
+        }
+
+        Mnenomic::Jr => {
+            // Jump to address stored in rs. If the address is not aligned to a 4-byte boundary, an address error exception occurs.
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            codegen.build_if(
+                "jr_addr_misaligned",
+                {
+                    let low_bits = codegen.build_mask(source, 0b11, "jr_addr_low_two_bits");
+                    cmp!(codegen, low_bits != 0)
+                },
+                || {
+                    // The exception occurs during the instruction fetch stage after finishing the jump instruction.
+                    // We set PC to the address of the instruction that caused the exception, so EPC is set accordingly.
+                    codegen.write_register(register::Special::Pc, source);
+                    codegen.throw_exception(Exception::AddressLoad, None, Some(source));
+                },
+            );
+            JumpTarget::Dynamic(source)
+        }
+
+        Mnenomic::Jalr => {
+            // Jump to address stored in rs, stores return address in rd
+            codegen.write_general_register(instr.rd(), return_address);
+            JumpTarget::Dynamic(
+                codegen.read_general_register(codegen.context.i64_type(), instr.rs()),
+            )
+        }
+
+        _ => unreachable!("evaluate_jump: {}", instr.mnemonic().name()),
+    }
+}
+
+fn evaluate_branch<'ctx>(
+    codegen: &CodeGen<'ctx, Cpu>,
+    instr: &ParsedInstruction,
+    delay_slot_pc: u64,
+) -> (IntPredicate, IntValue<'ctx>, IntValue<'ctx>) {
+    // NOTE: For the VR43000, the difference between regular and likely branches is taken care of by the callee.
+    let i64_type = codegen.context.i64_type();
+    match instr.mnemonic() {
+        Mnenomic::Beq | Mnenomic::Beql => {
+            // If rs equals rt, branch to address.
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            let target = codegen.read_general_register(i64_type, instr.rt());
+            (IntPredicate::EQ, source, target)
+        }
+
+        Mnenomic::Bne | Mnenomic::Bnel => {
+            // If rs is not equal to rt, branch to address.
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            let target = codegen.read_general_register(i64_type, instr.rt());
+            (IntPredicate::NE, source, target)
+        }
+
+        Mnenomic::Blez | Mnenomic::Blezl => {
+            // If rs is less than or equal to zero, branch to address.
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            let zero = i64_type.const_zero();
+            (IntPredicate::SLE, source, zero)
+        }
+
+        Mnenomic::Bgez | Mnenomic::Bgezl => {
+            // If rs is greater than or equal to zero, branch to address.
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            (IntPredicate::SGE, source, i64_type.const_zero())
+        }
+
+        Mnenomic::Bgezal | Mnenomic::Bgezall => {
+            // If rs is greater than or equal to zero, branch to address. Unconditionally stores return address to r31 (ra).
+            let return_address = i64_type.const_int(delay_slot_pc + INSTRUCTION_SIZE as u64, false);
+            codegen.write_register(register::GeneralPurpose::Ra, return_address);
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            (IntPredicate::SGE, source, i64_type.const_zero())
+        }
+
+        Mnenomic::Bltz | Mnenomic::Bltzl => {
+            // If rs is less than zero, branch to address.
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            (IntPredicate::SLT, source, i64_type.const_zero())
+        }
+
+        Mnenomic::Bltzal | Mnenomic::Bltzall => {
+            // If rs is less than zero, branch to address. Unconditionally stores return address to r31 (ra).
+            let return_address = i64_type.const_int(delay_slot_pc + INSTRUCTION_SIZE as u64, false);
+            codegen.write_register(register::GeneralPurpose::Ra, return_address);
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            (IntPredicate::SLT, source, i64_type.const_zero())
+        }
+
+        Mnenomic::Bgtz | Mnenomic::Bgtzl => {
+            // If rs is greater than zero, branch to address.
+            let source = codegen.read_general_register(i64_type, instr.rs());
+            (IntPredicate::SGT, source, i64_type.const_zero())
+        }
+
+        Mnenomic::Bc1t | Mnenomic::Bc1tl => {
+            // If the last floating-point compare is true, branch to address.
+            let source = codegen.read_register(i64_type, register::Fpu::F31);
+            let mask = i64_type.const_int(1 << register::fpu::ControlStatus::CONDITION_BIT, false);
+            let masked = codegen.builder.build_and(source, mask, "bc1t_mask");
+            (IntPredicate::NE, masked, i64_type.const_zero())
+        }
+
+        Mnenomic::Bc1f | Mnenomic::Bc1fl => {
+            // If the last floating-point compare is false, branch to address.
+            let source = codegen.read_register(i64_type, register::Fpu::F31);
+            let mask = i64_type.const_int(1 << register::fpu::ControlStatus::CONDITION_BIT, false);
+            let masked = codegen.builder.build_and(source, mask, "bc1t_mask");
+            (IntPredicate::EQ, masked, i64_type.const_zero())
+        }
+
+        _ => todo!("evaluate_branch: {}", instr.mnemonic().name()),
+    }
+}
 
 pub fn evaluate_trap<'ctx>(
     codegen: &CodeGen<'ctx, Cpu>,
@@ -32,7 +247,7 @@ pub fn evaluate_trap<'ctx>(
             let source = codegen.read_general_register(i64_type, instr.rs());
             let immediate = codegen.sign_extend_to(
                 i64_type,
-                i16_type.const_int(instr.immediate() as u64, false),
+                i16_type.const_int(u64::from(instr.immediate()), false),
             );
             (IntPredicate::EQ, source, immediate)
         }
@@ -49,7 +264,7 @@ pub fn evaluate_trap<'ctx>(
             let source = codegen.read_general_register(i64_type, instr.rs());
             let immediate = codegen.sign_extend_to(
                 i64_type,
-                i16_type.const_int(instr.immediate() as u64, false),
+                i16_type.const_int(u64::from(instr.immediate()), false),
             );
             (IntPredicate::SGE, source, immediate)
         }
@@ -59,7 +274,7 @@ pub fn evaluate_trap<'ctx>(
             let source = codegen.read_general_register(i64_type, instr.rs());
             let immediate = codegen.sign_extend_to(
                 i64_type,
-                i16_type.const_int(instr.immediate() as u64, false),
+                i16_type.const_int(u64::from(instr.immediate()), false),
             );
             (IntPredicate::UGE, source, immediate)
         }
@@ -83,7 +298,7 @@ pub fn evaluate_trap<'ctx>(
             let source = codegen.read_general_register(i64_type, instr.rs());
             let immediate = codegen.sign_extend_to(
                 i64_type,
-                i16_type.const_int(instr.immediate() as u64, false),
+                i16_type.const_int(u64::from(instr.immediate()), false),
             );
             (IntPredicate::SLT, source, immediate)
         }
@@ -93,7 +308,7 @@ pub fn evaluate_trap<'ctx>(
             let source = codegen.read_general_register(i64_type, instr.rs());
             let immediate = codegen.sign_extend_to(
                 i64_type,
-                i16_type.const_int(instr.immediate() as u64, false),
+                i16_type.const_int(u64::from(instr.immediate()), false),
             );
             (IntPredicate::ULT, source, immediate)
         }
@@ -117,7 +332,7 @@ pub fn evaluate_trap<'ctx>(
             let source = codegen.read_general_register(i64_type, instr.rs());
             let immediate = codegen.sign_extend_to(
                 i64_type,
-                i16_type.const_int(instr.immediate() as u64, false),
+                i16_type.const_int(u64::from(instr.immediate()), false),
             );
             (IntPredicate::NE, source, immediate)
         }
@@ -126,6 +341,7 @@ pub fn evaluate_trap<'ctx>(
     }
 }
 
+#[allow(clippy::similar_names, clippy::too_many_lines, clippy::match_same_arms)]
 pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) -> Option<()> {
     let mnemonic = instr.mnemonic();
     let bool_type = codegen.context.bool_type();
@@ -147,7 +363,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
     match mnemonic {
         Mnenomic::Sync => {
-            // Executed as NOP on the VR4300
+            // Executed as a NOOP on the VR4300
         }
 
         Mnenomic::Cache => {
@@ -289,7 +505,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
         Mnenomic::Ctc2 => {
             // Copy contents of GPR rt, to CP2 register rd.
             codegen.assert_coprocessor_usable(2);
-            let target = codegen.read_general_register(i64_type, instr.rt());
+            let target = codegen.read_general_register(i32_type, instr.rt());
             codegen.write_cp2_register(target);
         }
 
@@ -484,8 +700,10 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
         Mnenomic::Xori => {
             // XOR rs with zero-extended immediate, store result in rd
             let source = codegen.read_general_register(i64_type, instr.rs());
-            let immediate =
-                codegen.zero_extend_to(i64_type, i16_type.const_int(instr.immediate() as _, false));
+            let immediate = codegen.zero_extend_to(
+                i64_type,
+                i16_type.const_int(u64::from(instr.immediate()), false),
+            );
 
             let result = codegen.builder.build_xor(source, immediate, "xori_res");
             codegen.write_general_register(instr.rt(), result);
@@ -494,8 +712,10 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
         Mnenomic::Daddi => {
             // Add sign-extended 16bit immediate and rs, store result in rt. If the addition overflows, an integer overflow exception occurs.
             let source = codegen.read_general_register(i64_type, instr.rs());
-            let immediate =
-                codegen.sign_extend_to(i64_type, i16_type.const_int(instr.immediate() as _, true));
+            let immediate = codegen.sign_extend_to(
+                i64_type,
+                i16_type.const_int(u64::from(instr.immediate()), true),
+            );
             let result = codegen
                 .builder
                 .build_int_add(source, immediate, "daddi_res");
@@ -543,8 +763,10 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                         cmps!(codegen, source >= 0),
                         || codegen.write_register(register::Special::Lo, i64_type.const_all_ones()),
                         || {
-                            codegen
-                                .write_register(register::Special::Lo, i64_type.const_int(1, false))
+                            codegen.write_register(
+                                register::Special::Lo,
+                                i64_type.const_int(1, false),
+                            );
                         },
                     );
                 },
@@ -632,18 +854,23 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                         cmps!(codegen, source >= 0),
                         || codegen.write_register(register::Special::Lo, i64_type.const_all_ones()),
                         || {
-                            codegen
-                                .write_register(register::Special::Lo, i64_type.const_int(1, false))
+                            codegen.write_register(
+                                register::Special::Lo,
+                                i64_type.const_int(1, false),
+                            );
                         },
                     );
                 },
                 || {
+                    #[allow(clippy::cast_sign_loss)]
+                    let is_min = cmp!(
+                        codegen,
+                        source == i64_type.const_int(i64::MIN as u64, false)
+                    );
+
                     codegen.build_if_else(
                         "ddiv_dividend_min_int",
-                        cmp!(
-                            codegen,
-                            source == i64_type.const_int(i64::MIN as u64, false)
-                        ),
+                        is_min,
                         || {
                             codegen.write_register(register::Special::Hi, i64_type.const_zero());
                             codegen.write_register(register::Special::Lo, source);
@@ -706,7 +933,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Dsll => {
             // Shift rt left by sa bits, store result in rd (64-bits)
-            let shift = i64_type.const_int(instr.sa() as _, false);
+            let shift = i64_type.const_int(u64::from(instr.sa()), false);
             let target = codegen.read_general_register(i64_type, instr.rt());
             let result = codegen.builder.build_left_shift(target, shift, "dsll_res");
             codegen.write_general_register(instr.rd(), result);
@@ -729,7 +956,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Sll => {
             // Shift rt left by sa bits, store result in rd (32-bits)
-            let shift = i32_type.const_int(instr.sa() as _, false);
+            let shift = i32_type.const_int(u64::from(instr.sa()), false);
             let target = codegen.read_general_register(i32_type, instr.rt());
             let result = codegen.sign_extend_to(
                 i64_type,
@@ -759,7 +986,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
         Mnenomic::Dsll32 => {
             // Shift rt left by (32 + sa) bits, store result in rd
             let target = codegen.read_general_register(i64_type, instr.rt());
-            let shift = i64_type.const_int((instr.sa() + 32) as u64, false);
+            let shift = i64_type.const_int(u64::from(instr.sa() + 32), false);
             let result = codegen
                 .builder
                 .build_left_shift(target, shift, "dsll32_shift");
@@ -769,7 +996,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
         Mnenomic::Dsrl => {
             // Shift rt right by sa bits, store sign-extended result in rd
             let target = codegen.read_general_register(i64_type, instr.rt());
-            let shift = i64_type.const_int(instr.sa() as u64, false);
+            let shift = i64_type.const_int(u64::from(instr.sa()), false);
             let result = codegen
                 .builder
                 .build_right_shift(target, shift, false, "dsrl_shift");
@@ -779,7 +1006,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
         Mnenomic::Dsrl32 => {
             // Shift rt right by (32 + sa) bits, store sign-extended result in rd
             let target = codegen.read_general_register(i64_type, instr.rt());
-            let shift = i64_type.const_int((instr.sa() + 32) as u64, false);
+            let shift = i64_type.const_int(u64::from(instr.sa() + 32), false);
             let result = codegen
                 .builder
                 .build_right_shift(target, shift, false, "dsrl32_shift");
@@ -804,7 +1031,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
         Mnenomic::Dsra => {
             // Shift rt right by sa bits, store sign-extended result in rd
             let target = codegen.read_general_register(i64_type, instr.rt());
-            let shift = i64_type.const_int(instr.sa() as _, false);
+            let shift = i64_type.const_int(u64::from(instr.sa()), false);
             let result = codegen
                 .builder
                 .build_right_shift(target, shift, true, "dsra32_shift");
@@ -829,7 +1056,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
         Mnenomic::Dsra32 => {
             // Shift rt right by (32 + sa) bits, store sign-extended result in rd
             let target = codegen.read_general_register(i64_type, instr.rt());
-            let shift = i64_type.const_int((instr.sa() + 32) as _, false);
+            let shift = i64_type.const_int(u64::from(instr.sa() + 32), false);
             let result = codegen
                 .builder
                 .build_right_shift(target, shift, true, "dsra32_shift");
@@ -839,7 +1066,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
         Mnenomic::Srl => {
             // Shift rt right by sa bits, store sign-extended result in rd
             let target = codegen.read_general_register(i32_type, instr.rt());
-            let shift = i32_type.const_int(instr.sa() as _, false);
+            let shift = i32_type.const_int(u64::from(instr.sa()), false);
             let result = codegen
                 .builder
                 .build_right_shift(target, shift, false, "srl_shift");
@@ -864,7 +1091,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
         Mnenomic::Sra => {
             // Shift rt right by sa bits, store sign-extended result in rd
             let target = codegen.read_general_register(i64_type, instr.rt());
-            let shift = i64_type.const_int(instr.sa() as _, false);
+            let shift = i64_type.const_int(u64::from(instr.sa()), false);
 
             // Sign-extend the upper 32 bits by truncating to an u32, then sign-extending to an i64
             let result = codegen.truncate_to(
@@ -1460,15 +1687,17 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Lui => {
             // 16-bit immediate is shifted left 16 bits using trailing zeros, result placed in rt
-            let immediate = (instr.immediate() << 16) as u64;
+            let immediate = u64::from(instr.immediate() << 16);
             let result = codegen.sign_extend_to(i64_type, i32_type.const_int(immediate, false));
             codegen.write_general_register(instr.rt(), result);
         }
 
         Mnenomic::Addiu => {
             // Add sign-extended 16-bit immediate and rs, store sign-extended result in rt
-            let immediate =
-                codegen.sign_extend_to(i32_type, i16_type.const_int(instr.immediate() as _, true));
+            let immediate = codegen.sign_extend_to(
+                i32_type,
+                i16_type.const_int(u64::from(instr.immediate()), true),
+            );
             let source = codegen.read_general_register(i32_type, instr.rs());
 
             let result = codegen.sign_extend_to(
@@ -1482,8 +1711,10 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Addi => {
             // Add sign-extended 16-bit immediate and rs, store sign-extended result in rt. If the addition overflows, an integer overflow exception occurs.
-            let immediate =
-                codegen.sign_extend_to(i32_type, i16_type.const_int(instr.immediate() as _, true));
+            let immediate = codegen.sign_extend_to(
+                i32_type,
+                i16_type.const_int(u64::from(instr.immediate()), true),
+            );
             let source = codegen.read_general_register(i32_type, instr.rs());
             let result = codegen.builder.build_int_add(source, immediate, "addi_res");
             codegen.check_overflow_exception(Overflow::Add, source, immediate, result);
@@ -1513,8 +1744,10 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Andi => {
             // AND rs with zero-extended 16-bit immediate, store result in rt
-            let immediate =
-                codegen.zero_extend_to(i64_type, i16_type.const_int(instr.immediate() as _, false));
+            let immediate = codegen.zero_extend_to(
+                i64_type,
+                i16_type.const_int(u64::from(instr.immediate()), false),
+            );
             let source = codegen.read_general_register(i64_type, instr.rs());
             let result = codegen.builder.build_and(source, immediate, "andi_res");
             codegen.write_general_register(instr.rt(), result);
@@ -1522,8 +1755,10 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Ori => {
             // OR rs and zero-extended 16-bit immediate, store result in rt
-            let immediate =
-                codegen.zero_extend_to(i64_type, i16_type.const_int(instr.immediate() as _, false));
+            let immediate = codegen.zero_extend_to(
+                i64_type,
+                i16_type.const_int(u64::from(instr.immediate()), false),
+            );
             let source = codegen.read_general_register(i64_type, instr.rs());
             let result = codegen.builder.build_or(source, immediate, "ori_res");
             codegen.write_general_register(instr.rt(), result);
@@ -1540,8 +1775,10 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Daddiu => {
             // Add sign-extended 16bit immediate and rs, store result in rt
-            let immediate =
-                codegen.sign_extend_to(i64_type, i16_type.const_int(instr.immediate() as _, true));
+            let immediate = codegen.sign_extend_to(
+                i64_type,
+                i16_type.const_int(u64::from(instr.immediate()), true),
+            );
             let source = codegen.read_general_register(i64_type, instr.rs());
             let result = codegen
                 .builder
@@ -1559,8 +1796,10 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Slti => {
             // If signed rs is less than sign-extended 16-bit immediate, store one in rd, otherwise store zero
-            let immediate =
-                codegen.sign_extend_to(i64_type, i16_type.const_int(instr.immediate() as _, true));
+            let immediate = codegen.sign_extend_to(
+                i64_type,
+                i16_type.const_int(u64::from(instr.immediate()), true),
+            );
             let source = codegen.read_general_register(i64_type, instr.rs());
             let cmp = codegen.zero_extend_to(i64_type, cmps!(codegen, source < immediate));
             codegen.write_general_register(instr.rt(), cmp);
@@ -1576,8 +1815,10 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Sltiu => {
             // If unsigned rs is less than sign-extended 16-bit immediate, store one in rt, otherwise store zero
-            let immediate =
-                codegen.sign_extend_to(i64_type, i16_type.const_int(instr.immediate() as _, true));
+            let immediate = codegen.sign_extend_to(
+                i64_type,
+                i16_type.const_int(u64::from(instr.immediate()), true),
+            );
             let source = codegen.read_general_register(i64_type, instr.rs());
             let cmp = codegen.zero_extend_to(i64_type, cmpu!(codegen, source < immediate));
             codegen.write_general_register(instr.rt(), cmp);
@@ -1767,7 +2008,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
         }
 
         _ => {
-            stub(codegen, &instr.mnemonic().full_name());
+            codegen.build_stub(&instr.mnemonic().full_name());
             return None;
         }
     };

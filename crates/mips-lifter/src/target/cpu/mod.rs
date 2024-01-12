@@ -1,6 +1,5 @@
 use crate::{
     codegen::CodeGen,
-    recompiler,
     runtime::{
         bus::PhysicalAddress,
         memory::tlb::{AccessMode, TranslationError, TranslationLookasideBuffer},
@@ -10,7 +9,8 @@ use crate::{
 use mips_decomp::instruction::ParsedInstruction;
 use std::fmt;
 
-pub(crate) mod codegen; // TODO: make private
+mod codegen;
+mod recompiler;
 mod registers;
 mod runtime;
 
@@ -142,7 +142,7 @@ impl target::Target for Cpu {
     type LabelList = LabelList;
 
     fn compile_instruction(codegen: &CodeGen<Self>, instr: &Self::Instruction) -> Option<()> {
-        recompiler::cpu::compile_instruction(codegen, &instr.0)
+        recompiler::compile_instruction(codegen, &instr.0)
     }
 
     fn compile_instruction_with_delay_slot(
