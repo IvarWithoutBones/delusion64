@@ -13,14 +13,13 @@ use mips_decomp::{
 
 // TODO: move to different file
 impl<B: Bus> Environment<'_, Cpu, B> {
-    /// Called whenever a block of JIT'ed code is entered. This returns a pointer to the exception handler if an interrupt is pending, otherwise null.
     #[allow(clippy::cast_possible_truncation)] // The relevant part of the registers we read is in the lower 32 bits.
-    unsafe extern "C" fn on_block_entered(&mut self, instructions_in_block: u64) -> usize {
+    fn update_count(&mut self, instructions: usize) {
         // Trigger an timer interrupt if it would happen anywhere in this block.
         // We're doing this ahead of time to avoid trapping into the runtime environment to check on every instruction.
         let old_count = self.registers.read(register::Cp0::Count) as u32;
         let compare = self.registers.read(register::Cp0::Compare) as u32;
-        let new_count = old_count.wrapping_add(8 * instructions_in_block as u32);
+        let new_count = old_count.wrapping_add(8 * instructions as u32);
         self.registers
             .write(register::Cp0::Count, u64::from(new_count));
         if old_count < compare && new_count >= compare {
@@ -28,35 +27,13 @@ impl<B: Bus> Environment<'_, Cpu, B> {
             let ip = cause.interrupt_pending().with_timer(true);
             self.registers.set_cause(cause.with_interrupt_pending(ip));
             if self.registers.trigger_interrupt() {
-                self.interrupt_pending = true;
+                self.target.interrupt_pending = true;
             }
-        }
-
-        self.bus
-            .tick(instructions_in_block as usize)
-            .unwrap_or_else(|err| {
-                let msg = format!("failed to tick: {err:#?}");
-                self.panic_update_debugger(&msg)
-            })
-            .handle(self);
-
-        if self.exit_requested {
-            self.codegen.return_from_jit_ptr()
-        } else if self.interrupt_pending {
-            self.interrupt_pending = false;
-            self.handle_exception(Exception::Interrupt, None)
-        } else {
-            // Null pointer, must be checked by the caller.
-            0
         }
     }
 
     /// Updates the CPU state for the given exception, and returns a host pointer to the JIT'ed function containing the exception handler.
-    pub(crate) fn handle_exception(
-        &mut self,
-        exception: Exception,
-        coprocessor: Option<u8>,
-    ) -> usize {
+    fn handle_exception(&mut self, exception: Exception, coprocessor: Option<u8>) -> usize {
         if self
             .registers
             .status()
@@ -168,9 +145,19 @@ impl<B: Bus> Environment<'_, Cpu, B> {
 }
 
 impl<B: Bus> TargetDependantCallbacks for Environment<'_, Cpu, B> {
+    fn on_block_entered(&mut self, instructions_in_block: usize) -> usize {
+        self.update_count(instructions_in_block);
+        if self.target.interrupt_pending {
+            self.target.interrupt_pending = false;
+            self.handle_exception(Exception::Interrupt, None)
+        } else {
+            // Resume execution as normal
+            0
+        }
+    }
+
     fn callback_ptr(&self, func: RuntimeFunction) -> *const u8 {
         match func {
-            RuntimeFunction::OnBlockEntered => Self::on_block_entered as *const u8,
             RuntimeFunction::HandleException => Self::handle_exception_jit as *const u8,
             RuntimeFunction::ProbeTlbEntry => Self::probe_tlb_entry as *const u8,
             RuntimeFunction::ReadTlbEntry => Self::read_tlb_entry as *const u8,
@@ -187,7 +174,7 @@ impl<B: Bus> InterruptHandler for Environment<'_, Cpu, B> {
         self.registers
             .set_cause(cause.with_interrupt_pending(pending.into()));
         if self.registers.trigger_interrupt() {
-            self.interrupt_pending = true;
+            self.target.interrupt_pending = true;
         }
     }
 }

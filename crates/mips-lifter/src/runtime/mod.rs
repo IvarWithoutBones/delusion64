@@ -15,7 +15,7 @@ use crate::{
     JitBuilder,
 };
 use inkwell::{context::Context, execution_engine::ExecutionEngine, module::Module};
-use std::{collections::HashMap, pin::Pin};
+use std::{cell::UnsafeCell, collections::HashMap, pin::Pin};
 use strum::IntoEnumIterator;
 
 pub(crate) use self::function::RuntimeFunction;
@@ -27,6 +27,10 @@ pub(crate) mod memory;
 pub(crate) mod registers;
 
 pub(crate) trait TargetDependantCallbacks {
+    /// Called before executing a single instruction of a basic block. Note that you do not need to call [`Bus::tick`] here.
+    /// This should return a function pointer to run instead of the block of guest machine code, or null if we can continue as normal.
+    fn on_block_entered(&mut self, instructions_in_block: usize) -> usize;
+
     /// Pointers to target-dependant callbacks, to be called by JIT'd code. These may be null if the function is not supported by the target.
     fn callback_ptr(&self, _func: RuntimeFunction) -> *const u8 {
         std::ptr::null()
@@ -75,14 +79,14 @@ pub(crate) struct Environment<'ctx, T: Target, B: Bus>
 where
     for<'a> Environment<'a, T, B>: ValidRuntime,
 {
+    pub(crate) bus: B,
+    pub(crate) target: T,
     pub(crate) registers: T::Registers,
     pub(crate) memory: T::Memory,
     pub(crate) codegen: CodeGen<'ctx, T>,
-    pub(crate) bus: B,
-    jit_flags: *mut codegen::Flags,
+    jit_flags: UnsafeCell<codegen::Flags>,
     debugger: Option<gdb::Debugger<'ctx, T, B>>,
-    pub(crate) interrupt_pending: bool,
-    pub(crate) exit_requested: bool,
+    exit_requested: bool,
     // TODO: replace this with a proper logging library
     trace: bool,
 }
@@ -98,14 +102,14 @@ where
         execution_engine: ExecutionEngine<'ctx>,
     ) -> Pin<Box<Self>> {
         let mut env = Box::new(Self {
-            jit_flags: Box::into_raw(Default::default()),
+            jit_flags: UnsafeCell::default(),
             registers: builder.registers(),
             bus: builder.bus,
             trace: builder.trace,
             memory: Default::default(),
+            target: Default::default(),
             codegen: CodeGen::new(context, module, execution_engine),
             debugger: None,
-            interrupt_pending: false,
             exit_requested: false,
         });
 
@@ -133,7 +137,7 @@ where
 
         // Map a pointer to the flags
         let flags_ptr = module.add_global(i64_ptr_type, Default::default(), "flags");
-        execution_engine.add_global_mapping(&flags_ptr, self.jit_flags as usize);
+        execution_engine.add_global_mapping(&flags_ptr, self.jit_flags.get() as usize);
 
         // Map the registers into the modules globals
         let registers = self.registers.build_globals(module, execution_engine);
@@ -144,6 +148,7 @@ where
             let ptr: *const u8 = match func {
                 RuntimeFunction::Panic => Self::panic as _,
                 RuntimeFunction::OnInstruction => Self::on_instruction as _,
+                RuntimeFunction::OnBlockEntered => Self::on_block_entered as _,
                 RuntimeFunction::GetFunctionPtr => Self::get_function_ptr as _,
                 RuntimeFunction::GetPhysicalAddress => Self::get_physical_address as _,
 
@@ -230,12 +235,30 @@ where
     }
 
     pub(crate) fn flags(&self) -> codegen::Flags {
-        unsafe { self.jit_flags.read() }
+        unsafe { self.jit_flags.get().read() }
     }
 
     /*
         Runtime functions. These are not meant to be called directly, but rather by JIT'ed code.
     */
+
+    unsafe extern "C" fn on_block_entered(&mut self, instructions_in_block: u64) -> usize {
+        let instructions = instructions_in_block as usize;
+        self.bus
+            .tick(instructions)
+            .unwrap_or_else(|err| {
+                let msg = format!("failed to tick the bus: {err:#?}");
+                self.panic_update_debugger(&msg)
+            })
+            .handle(self);
+
+        if self.exit_requested {
+            // Redirect execution to a function that simply returns, eventually giving back control to the callee.
+            self.codegen.return_from_jit_ptr()
+        } else {
+            <Self as TargetDependantCallbacks>::on_block_entered(self, instructions)
+        }
+    }
 
     unsafe extern "C" fn get_physical_address(&mut self, vaddr: u64) -> PhysicalAddress {
         self.virtual_to_physical_address(vaddr, AccessMode::Read)
@@ -341,9 +364,9 @@ where
         }
     }
 
-    unsafe extern "C" fn panic(&mut self, string_ptr: *const u8, len: u64) {
+    unsafe extern "C" fn panic(&mut self, string_ptr: *const u8, string_len: u64) {
         let string = {
-            let slice = std::slice::from_raw_parts(string_ptr, len as usize);
+            let slice = std::slice::from_raw_parts(string_ptr, string_len as usize);
             std::str::from_utf8(slice).unwrap()
         };
         self.panic_update_debugger(&format!("Environment::panic called: {string}"));

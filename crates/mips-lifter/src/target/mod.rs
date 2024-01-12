@@ -98,7 +98,7 @@ pub(crate) trait LabelList: Sized + fmt::Debug {
     fn set_start(&mut self, vaddr: u64);
 }
 
-pub(crate) trait Target: Sized + fmt::Debug {
+pub(crate) trait Target: Sized + Default + fmt::Debug {
     type Registers: RegisterStorage;
     type Memory: Memory<Registers = Self::Registers>;
 

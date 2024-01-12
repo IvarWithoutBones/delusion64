@@ -130,8 +130,11 @@ impl target::LabelList for LabelList {
     }
 }
 
-#[derive(Debug)]
-pub struct Cpu;
+#[derive(Debug, Default)]
+#[repr(transparent)]
+pub struct Cpu {
+    pub(crate) interrupt_pending: bool,
+}
 
 impl target::Target for Cpu {
     type Registers = Registers;

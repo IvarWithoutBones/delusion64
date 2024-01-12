@@ -81,7 +81,7 @@ pub struct CodeGen<'ctx, T: Target> {
     globals: Option<Globals<'ctx, T>>,
     helpers: Helpers<'ctx>,
     /// Every single module we compiled. We need to keep these around to cleanly shut down LLVM.
-    pub modules: Vec<Module<'ctx>>,
+    modules: Vec<Module<'ctx>>,
 }
 
 impl<'ctx, T: Target> CodeGen<'ctx, T> {
