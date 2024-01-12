@@ -98,9 +98,10 @@ cmp_macro!(
     equality,
     r#"
     Compares the given two integers for equality, returning an runtime boolean.
-    ```rust
-    cmp!(codegen, left == right)
-    cmp!(codegen, left != right)
+    ```ignore
+    # #[macro_use] extern crate mips_lifter;
+    cmp!(codegen, left == right);
+    cmp!(codegen, left != right);
     ```
     "#
 );
@@ -110,11 +111,11 @@ cmp_macro!(
     unsigned,
     r#"
     Compares the given two unsigned integers for equality, returning an runtime boolean.
-    ```rust
-    cmpu!(codegen, left < right)
-    cmpu!(codegen, left > right)
-    cmpu!(codegen, left => right)
-    cmpu!(codegen, left <= right)
+    ```ignore
+    cmpu!(codegen, left < right);
+    cmpu!(codegen, left > right);
+    cmpu!(codegen, left => right);
+    cmpu!(codegen, left <= right);
     ```
     "#
 );
@@ -124,11 +125,11 @@ cmp_macro!(
     signed,
     r#"
     Compares the given two signed integers for equality, returning an runtime boolean. Usage:
-    ```
-    cmps!(codegen, left < right)
-    cmps!(codegen, left > right)
-    cmps!(codegen, left => right)
-    cmps!(codegen, left <= right)
+    ```ignore
+    cmps!(codegen, left < right);
+    cmps!(codegen, left > right);
+    cmps!(codegen, left => right);
+    cmps!(codegen, left <= right);
     ```
     "#
 );

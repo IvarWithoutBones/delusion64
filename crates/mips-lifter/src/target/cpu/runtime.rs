@@ -1,10 +1,7 @@
 use super::Cpu;
-use crate::{
-    gdb::MonitorCommand,
-    runtime::{
-        bus::Bus, memory::tlb, registers::RegIndex, Environment, GdbIntegration, InterruptHandler,
-        RuntimeFunction, TargetDependantCallbacks,
-    },
+use crate::runtime::{
+    bus::Bus, memory::tlb, register_bank::RegIndex, Environment, InterruptHandler, RuntimeFunction,
+    TargetDependantCallbacks,
 };
 use mips_decomp::{
     register::{self, cp0::Bits},
@@ -176,98 +173,5 @@ impl<B: Bus> InterruptHandler for Environment<'_, Cpu, B> {
         if self.registers.trigger_interrupt() {
             self.target.interrupt_pending = true;
         }
-    }
-}
-
-impl<B: Bus> GdbIntegration for Environment<'_, Cpu, B> {
-    #[allow(clippy::cast_possible_truncation)] // Our GDB integration currently only supports 32-bit MIPS.
-    fn gdb_read_registers(
-        &mut self,
-        regs: &mut <<Self as gdbstub::target::Target>::Arch as gdbstub::arch::Arch>::Registers,
-    ) -> gdbstub::target::TargetResult<(), Self> {
-        regs.pc = self.registers.read(register::Special::Pc) as u32;
-        regs.hi = self.registers.read(register::Special::Hi) as u32;
-        regs.lo = self.registers.read(register::Special::Lo) as u32;
-        regs.cp0.cause = self.registers.read(register::Cp0::CacheErr) as u32;
-        regs.cp0.status = self.registers.read(register::Cp0::Status) as u32;
-        regs.cp0.badvaddr = self.registers.read(register::Cp0::BadVAddr) as u32;
-        for (i, r) in regs.r.iter_mut().enumerate() {
-            *r = self.registers.general_purpose.read_relaxed(i).unwrap() as u32;
-        }
-        for (i, r) in regs.fpu.r.iter_mut().enumerate() {
-            *r = self.registers.fpu.read_relaxed(i).unwrap() as u32;
-        }
-        Ok(())
-    }
-
-    fn gdb_write_registers(
-        &mut self,
-        regs: &<<Self as gdbstub::target::Target>::Arch as gdbstub::arch::Arch>::Registers,
-    ) -> gdbstub::target::TargetResult<(), Self> {
-        assert!(
-            u64::from(regs.pc) == self.registers.read(register::Special::Pc),
-            "gdb: attempted to change PC"
-        );
-
-        self.registers
-            .write(register::Special::Hi, u64::from(regs.hi));
-        self.registers
-            .write(register::Special::Lo, u64::from(regs.lo));
-        self.registers
-            .write(register::Cp0::Cause, u64::from(regs.cp0.cause));
-        self.registers
-            .write(register::Cp0::Status, u64::from(regs.cp0.status));
-        self.registers
-            .write(register::Cp0::BadVAddr, u64::from(regs.cp0.badvaddr));
-
-        for (i, r) in regs.r.iter().enumerate() {
-            self.registers
-                .general_purpose
-                .write_relaxed(i, u64::from(*r))
-                .unwrap();
-        }
-
-        for (i, r) in regs.fpu.r.iter().enumerate() {
-            self.registers.fpu.write_relaxed(i, u64::from(*r)).unwrap();
-        }
-
-        Ok(())
-    }
-
-    fn extra_monitor_commands() -> Vec<MonitorCommand<Self>> {
-        vec![
-            MonitorCommand {
-                name: "status",
-                description: "print the coprocessor 0 status register",
-                handler: Box::new(|env, out, _args| {
-                    writeln!(out, "{:#?}", env.registers.status())?;
-                    Ok(())
-                }),
-            },
-            MonitorCommand {
-                name: "cause",
-                description: "print the coprocessor 0 cause register",
-                handler: Box::new(|env, out, _args| {
-                    writeln!(out, "{:#?}", env.registers.cause())?;
-                    Ok(())
-                }),
-            },
-            MonitorCommand {
-                name: "fpu-status",
-                description: "print the FPU control and status register",
-                handler: Box::new(|env, out, _args| {
-                    writeln!(out, "{:#?}", env.registers.fpu_control_status())?;
-                    Ok(())
-                }),
-            },
-            MonitorCommand {
-                name: "tlb",
-                description: "print every entry in the TLB",
-                handler: Box::new(|env, out, _args| {
-                    writeln!(out, "{:#?}", env.memory.tlb)?;
-                    Ok(())
-                }),
-            },
-        ]
     }
 }

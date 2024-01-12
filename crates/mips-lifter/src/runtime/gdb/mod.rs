@@ -1,13 +1,16 @@
 use self::command::{Command, MonitorCommand, MonitorCommandMap};
 use super::{memory::tlb::AccessMode, Bus, Environment, GdbIntegration, ValidRuntime};
-use crate::target::{Memory, Target};
+use crate::target::{Cpu, Memory, Target};
 use gdbstub::{
     conn::ConnectionExt,
     stub::{state_machine::GdbStubStateMachine, GdbStub, SingleThreadStopReason},
     target::{
         self,
         ext::{
-            base::singlethread::{SingleThreadBase, SingleThreadResume, SingleThreadSingleStep},
+            base::{
+                single_register_access::SingleRegisterAccess,
+                singlethread::{SingleThreadBase, SingleThreadResume, SingleThreadSingleStep},
+            },
             breakpoints::{Breakpoints, HwWatchpoint, SwBreakpoint, WatchKind},
         },
         Target as GdbTarget, TargetResult,
@@ -18,24 +21,14 @@ use std::{collections::HashSet, net::TcpStream, ops::Range};
 pub(crate) mod command;
 
 /// An error that can occur when creating a GDB connection.
+#[derive(thiserror::Error, Debug)]
 pub enum GdbConnectionError {
+    #[error("empty name at index {0}")]
     EmptyCommandName(usize),
+    #[error("command name '{0:?}' has already been defined")]
     DuplicateCommand(&'static str),
+    #[error("command name '{0:?}' is reserved for internal use")]
     RedefinedInternalCommand(&'static str),
-}
-
-impl std::fmt::Debug for GdbConnectionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            GdbConnectionError::EmptyCommandName(i) => write!(f, "empty name at index {i}"),
-            GdbConnectionError::DuplicateCommand(name) => {
-                write!(f, "duplicate command name {name:?}")
-            }
-            GdbConnectionError::RedefinedInternalCommand(name) => {
-                write!(f, "redefined internal command {name:?}",)
-            }
-        }
-    }
 }
 
 /// A connection to a GDB client.
@@ -45,11 +38,13 @@ pub struct Connection<B: Bus> {
 }
 
 impl<B: Bus> Connection<B> {
-    /// Create a new GDB connection, and optionally register custom monitor commands.
-    pub fn new(
+    fn new_with_target<T: Target>(
         stream: TcpStream,
         monitor_commands: Option<Vec<MonitorCommand<B>>>,
-    ) -> Result<Self, GdbConnectionError> {
+    ) -> Result<Self, GdbConnectionError>
+    where
+        for<'a> Environment<'a, T, B>: ValidRuntime,
+    {
         if let Some(cmds) = &monitor_commands {
             for (i, cmd) in cmds.iter().enumerate() {
                 if cmd.name.is_empty() {
@@ -58,7 +53,7 @@ impl<B: Bus> Connection<B> {
                 if cmds.iter().skip(i + 1).any(|other| other.name == cmd.name) {
                     return Err(GdbConnectionError::DuplicateCommand(cmd.name));
                 }
-                if Environment::<'_, crate::target::Cpu, B>::monitor_commands()
+                if Environment::<'_, T, B>::monitor_commands()
                     .iter()
                     .any(|other| other.name == cmd.name)
                 {
@@ -71,10 +66,46 @@ impl<B: Bus> Connection<B> {
             monitor_commands,
         })
     }
+
+    /// Create a new GDB connection for the CPU target, and optionally register custom monitor commands.
+    pub fn new_cpu(
+        stream: TcpStream,
+        monitor_commands: Option<Vec<MonitorCommand<B>>>,
+    ) -> Result<Self, GdbConnectionError> {
+        Self::new_with_target::<Cpu>(stream, monitor_commands)
+    }
+}
+
+/// MIPS-specific breakpoint kinds.
+///
+/// This definition was taken from `gdbstub_arch`, thanks to @daniel5151! See the original here:
+/// https://github.com/daniel5151/gdbstub/blob/3bc01635466db762dcefc3c6b4ee4096d2ccead7/gdbstub_arch/src/mips/mod.rs#L12
+#[derive(Debug)]
+pub(crate) enum BreakpointKind {
+    /// 16-bit MIPS16 mode breakpoint.
+    Mips16,
+    /// 16-bit microMIPS mode breakpoint.
+    MicroMips16,
+    /// 32-bit standard MIPS mode breakpoint.
+    Mips32,
+    /// 32-bit microMIPS mode breakpoint.
+    MicroMips32,
+}
+
+impl gdbstub::arch::BreakpointKind for BreakpointKind {
+    fn from_usize(kind: usize) -> Option<Self> {
+        Some(match kind {
+            2 => BreakpointKind::Mips16,
+            3 => BreakpointKind::MicroMips16,
+            4 => BreakpointKind::Mips32,
+            5 => BreakpointKind::MicroMips32,
+            _ => None?,
+        })
+    }
 }
 
 #[derive(Debug)]
-pub struct Watchpoint {
+struct Watchpoint {
     addresses: Range<u64>,
     kind: WatchKind,
 }
@@ -92,7 +123,7 @@ where
     for<'a> Environment<'a, T, B>: ValidRuntime,
 {
     state_machine: Option<GdbStubStateMachine<'ctx, Environment<'ctx, T, B>, TcpStream>>,
-    stop_reason: Option<SingleThreadStopReason<u32>>,
+    stop_reason: Option<SingleThreadStopReason<u64>>,
     state: State,
     monitor_commands: MonitorCommandMap<'ctx, T, B>,
     breakpoints: HashSet<u64>,
@@ -123,10 +154,6 @@ where
     }
 
     pub fn on_instruction(&mut self, pc: u64) {
-        // TODO: The upper 32 bits are almost always set by the JIT, while GDB ignores them causing mismatches.
-        // Should we mask them off here or never set them in the first place?
-        let pc = pc & u32::MAX as u64;
-
         if self.breakpoints.contains(&pc) {
             self.stop_reason = Some(SingleThreadStopReason::SwBreak(()));
             self.state = State::Paused;
@@ -154,20 +181,22 @@ impl<T: Target, B: Bus> Environment<'_, T, B>
 where
     for<'a> Environment<'a, T, B>: ValidRuntime,
 {
-    fn debugger_signal_memory_access(&mut self, address: u64, len: usize, kind: WatchKind) {
+    fn debugger_signal_memory_access(&mut self, addr: u64, len: usize, kind: WatchKind) {
         let Some(debugger) = self.debugger.as_mut() else {
             return;
         };
 
         if let Some(watch) = debugger.watchpoints.iter().find(|w| {
-            (w.kind == kind || w.kind == WatchKind::ReadWrite)
-                && ((w.addresses.start >= address) && (w.addresses.end <= address + len as u64))
+            let kind_match = (w.kind == kind) || (w.kind == WatchKind::ReadWrite);
+            let addr_match =
+                (w.addresses.start <= addr) && (w.addresses.end >= (addr + len as u64));
+            kind_match && addr_match
         }) {
             debugger.state = State::Paused;
             debugger.stop_reason = Some(SingleThreadStopReason::Watch {
                 tid: (),
                 kind: watch.kind,
-                addr: address as u32,
+                addr,
             });
         }
     }
@@ -219,8 +248,8 @@ where
             }
 
             GdbStubStateMachine::Disconnected(_gdb) => {
-                println!("GDB disconnected, exiting");
-                std::process::exit(0);
+                self.debugger.take();
+                self.panic_update_debugger("GDB disconnected");
             }
         };
     }
@@ -230,9 +259,7 @@ impl<T: Target, B: Bus> GdbTarget for Environment<'_, T, B>
 where
     for<'a> Environment<'a, T, B>: ValidRuntime,
 {
-    // TODO: this is 32-bits, the 64-bit version is giving trouble because of the following issue:
-    // https://github.com/daniel5151/gdbstub/issues/97
-    type Arch = gdbstub_arch::mips::Mips;
+    type Arch = <Self as GdbIntegration>::Arch;
     type Error = &'static str;
 
     #[inline(always)]
@@ -251,12 +278,6 @@ where
     fn support_monitor_cmd(&mut self) -> Option<target::ext::monitor_cmd::MonitorCmdOps<'_, Self>> {
         // See `src/runtime/gdb/command.rs`.
         Some(self)
-    }
-
-    // Workaround for https://github.com/daniel5151/gdbstub/issues/89
-    #[inline(always)]
-    fn guard_rail_single_step_gdb_behavior(&self) -> gdbstub::arch::SingleStepGdbBehavior {
-        gdbstub::arch::SingleStepGdbBehavior::Optional
     }
 }
 
@@ -288,12 +309,7 @@ where
         vaddr: <Self::Arch as gdbstub::arch::Arch>::Usize,
         _kind: <Self::Arch as gdbstub::arch::Arch>::BreakpointKind,
     ) -> TargetResult<bool, Self> {
-        Ok(self
-            .debugger
-            .as_mut()
-            .unwrap()
-            .breakpoints
-            .insert(vaddr as _))
+        Ok(self.debugger.as_mut().unwrap().breakpoints.insert(vaddr))
     }
 
     fn remove_sw_breakpoint(
@@ -301,12 +317,7 @@ where
         vaddr: <Self::Arch as gdbstub::arch::Arch>::Usize,
         _kind: <Self::Arch as gdbstub::arch::Arch>::BreakpointKind,
     ) -> TargetResult<bool, Self> {
-        Ok(self
-            .debugger
-            .as_mut()
-            .unwrap()
-            .breakpoints
-            .remove(&(vaddr as _)))
+        Ok(self.debugger.as_mut().unwrap().breakpoints.remove(&vaddr))
     }
 }
 
@@ -320,12 +331,9 @@ where
         len: <Self::Arch as gdbstub::arch::Arch>::Usize,
         kind: WatchKind,
     ) -> TargetResult<bool, Self> {
-        let addresses = addr as u64..addr as u64 + len as u64;
-        self.debugger
-            .as_mut()
-            .unwrap()
-            .watchpoints
-            .push(Watchpoint { addresses, kind });
+        let addresses = addr..addr + len;
+        let watchpoint = Watchpoint { addresses, kind };
+        self.debugger.as_mut().unwrap().watchpoints.push(watchpoint);
         Ok(true)
     }
 
@@ -335,11 +343,11 @@ where
         len: <Self::Arch as gdbstub::arch::Arch>::Usize,
         kind: WatchKind,
     ) -> TargetResult<bool, Self> {
-        let addresses = addr as u64..addr as u64 + len as u64;
+        let addresses = addr..addr + len;
         let watchpoints = &mut self.debugger.as_mut().unwrap().watchpoints;
         let Some(index) = watchpoints
             .iter()
-            .position(|w| w.addresses == addresses && w.kind == kind)
+            .position(|w| (w.addresses == addresses) && (w.kind == kind))
         else {
             return Ok(false);
         };
@@ -356,20 +364,20 @@ where
         &mut self,
         start_addr: <Self::Arch as gdbstub::arch::Arch>::Usize,
         data: &mut [u8],
-    ) -> TargetResult<(), Self> {
+    ) -> TargetResult<usize, Self> {
         for i in (0..data.len()).step_by(4) {
-            let end = data.len().min(i + 4);
             let word: u32 = {
-                let vaddr = start_addr as u64 + i as u64;
+                let vaddr = start_addr + i as u64;
                 let paddr = self
                     .memory
                     .virtual_to_physical_address(vaddr, AccessMode::Read, &self.registers)
                     .map_err(|_| ())?;
                 self.read(vaddr, paddr).map_err(|_| ())?.into()
             };
-            data[i..end].copy_from_slice(&word.to_ne_bytes()[..end - i]);
+            let end = data.len().min(i + 4);
+            data[i..end].copy_from_slice(&word.to_be_bytes()[..end - i]);
         }
-        Ok(())
+        Ok(data.len())
     }
 
     fn write_addrs(
@@ -378,16 +386,17 @@ where
         data: &[u8],
     ) -> TargetResult<(), Self> {
         for i in (0..data.len()).step_by(4) {
-            let end = data.len().min(i + 4);
-            let vaddr = start_addr as u64 + i as u64;
+            let value = {
+                let end = data.len().min(i + 4);
+                u32::from_be_bytes(data[i..end].try_into().unwrap())
+            };
+            let vaddr = start_addr + i as u64;
             let paddr = self
                 .memory
                 .virtual_to_physical_address(vaddr, AccessMode::Write, &self.registers)
                 .map_err(|_| ())?;
-            let word = u32::from_ne_bytes(data[i..end].try_into().unwrap());
-            self.write(vaddr, paddr, word.into()).map_err(|_| ())?;
+            self.write(vaddr, paddr, value.into()).map_err(|_| ())?;
         }
-
         Ok(())
     }
 
@@ -406,10 +415,41 @@ where
     }
 
     #[inline(always)]
+    fn support_single_register_access(
+        &mut self,
+    ) -> Option<target::ext::base::single_register_access::SingleRegisterAccessOps<'_, (), Self>>
+    {
+        Some(self)
+    }
+
+    #[inline(always)]
     fn support_resume(
         &mut self,
     ) -> Option<target::ext::base::singlethread::SingleThreadResumeOps<'_, Self>> {
         Some(self)
+    }
+}
+
+impl<T: Target, B: Bus> SingleRegisterAccess<()> for Environment<'_, T, B>
+where
+    for<'a> Environment<'a, T, B>: ValidRuntime,
+{
+    fn read_register(
+        &mut self,
+        _tid: (),
+        reg_id: <Self::Arch as gdbstub::arch::Arch>::RegId,
+        buf: &mut [u8],
+    ) -> TargetResult<usize, Self> {
+        self.gdb_read_register(reg_id, buf)
+    }
+
+    fn write_register(
+        &mut self,
+        _tid: (),
+        reg_id: <Self::Arch as gdbstub::arch::Arch>::RegId,
+        val: &[u8],
+    ) -> TargetResult<(), Self> {
+        self.gdb_write_register(reg_id, val)
     }
 }
 
@@ -425,7 +465,6 @@ where
         Ok(())
     }
 
-    // Workaround for https://github.com/daniel5151/gdbstub/issues/89
     #[inline(always)]
     fn support_single_step(
         &mut self,

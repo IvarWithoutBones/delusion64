@@ -1,4 +1,4 @@
-use crate::{runtime::registers::RegIndex, target};
+use crate::{runtime::register_bank::RegIndex, target};
 use mips_decomp::register::{
     self,
     cp0::{Bits, EntryHi, EntryLo, Index, OperatingMode, PageMask},

@@ -60,7 +60,7 @@ impl Emulator {
         let gdb = args.gdb.map(|port| {
             let stream = wait_for_gdb_connection(port.unwrap_or(DEFAULT_GDB_PORT))
                 .expect("failed to wait for GDB connection");
-            gdb::Connection::new(stream, Some(Bus::gdb_monitor_commands()))
+            gdb::Connection::new_cpu(stream, Some(Bus::gdb_monitor_commands()))
                 .expect("failed to create to GDB connection")
         });
 

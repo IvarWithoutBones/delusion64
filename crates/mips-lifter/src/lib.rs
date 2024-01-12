@@ -3,7 +3,7 @@ use std::pin::Pin;
 
 pub use self::{
     builder::JitBuilder,
-    runtime::registers::{RegIndex, RegisterBank},
+    runtime::register_bank::{RegIndex, RegisterBank},
 };
 pub use mips_decomp::register;
 

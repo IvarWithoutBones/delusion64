@@ -24,7 +24,7 @@ pub mod bus;
 mod function;
 pub(crate) mod gdb;
 pub(crate) mod memory;
-pub(crate) mod registers;
+pub(crate) mod register_bank;
 
 pub(crate) trait TargetDependantCallbacks {
     /// Called before executing a single instruction of a basic block. Note that you do not need to call [`Bus::tick`] here.
@@ -43,17 +43,35 @@ pub(crate) trait InterruptHandler {
 }
 
 pub(crate) trait GdbIntegration: Sized {
-    /// Copy of [`gdbstub::target::ext::base::singlethread::SingleThreadBase::read_registers`]
-    /// so that it can be specialised based on the target, see its documentation for more information.
+    type Arch: gdbstub::arch::Arch<Usize = u64>;
+
+    /// Copy of [`gdbstub::target::ext::base::single_register_access::SingleRegisterAccess::read_register`], see its documentation for more information.
+    fn gdb_read_register(
+        &mut self,
+        reg_id: <<Self as GdbIntegration>::Arch as gdbstub::arch::Arch>::RegId,
+        buf: &mut [u8],
+    ) -> gdbstub::target::TargetResult<usize, Self>
+    where
+        Self: gdbstub::target::Target<Arch = <Self as GdbIntegration>::Arch>;
+
+    /// Copy of [`gdbstub::target::ext::base::single_register_access::SingleRegisterAccess::write_register`], see its documentation for more information.
+    fn gdb_write_register(
+        &mut self,
+        reg_id: <<Self as GdbIntegration>::Arch as gdbstub::arch::Arch>::RegId,
+        value: &[u8],
+    ) -> gdbstub::target::TargetResult<(), Self>
+    where
+        Self: gdbstub::target::Target<Arch = <Self as GdbIntegration>::Arch>;
+
+    /// Copy of [`gdbstub::target::ext::base::singlethread::SingleThreadBase::read_registers`], see its documentation for more information.
     fn gdb_read_registers(
         &mut self,
         regs: &mut <<Self as gdbstub::target::Target>::Arch as gdbstub::arch::Arch>::Registers,
     ) -> gdbstub::target::TargetResult<(), Self>
     where
-        Self: gdbstub::target::Target;
+        Self: gdbstub::target::Target<Arch = <Self as GdbIntegration>::Arch>;
 
-    /// Copy of [`gdbstub::target::ext::base::singlethread::SingleThreadBase::write_registers`]
-    /// so that it can be specialised based on the target, see its documentation for more information.
+    /// Copy of [`gdbstub::target::ext::base::singlethread::SingleThreadBase::write_registers`], see its documentation for more information.
     fn gdb_write_registers(
         &mut self,
         regs: &<<Self as gdbstub::target::Target>::Arch as gdbstub::arch::Arch>::Registers,

@@ -26,7 +26,8 @@ impl Handle {
         imem: Arc<RwLock<Box<[u8; MemoryBank::IMem.len()]>>>,
     ) -> Self {
         let default_regs = Box::new(std::array::from_fn(|_| AtomicU64::default()));
-        let (cp0_registers, registers_for_bus) = RegisterBank::new_shared(default_regs);
+        let cp0_registers = RegisterBank::new_shared(default_regs);
+        let registers_for_bus = cp0_registers.clone();
         cp0_registers.write_relaxed(0, 1).unwrap(); // sp status halted
 
         let cycles: Arc<_> = AtomicUsize::default().into();

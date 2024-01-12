@@ -10,6 +10,7 @@ use mips_decomp::instruction::ParsedInstruction;
 use std::fmt;
 
 mod codegen;
+mod gdb;
 mod recompiler;
 mod registers;
 mod runtime;

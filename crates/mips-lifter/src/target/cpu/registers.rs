@@ -3,7 +3,7 @@
 use super::codegen::RESERVED_CP0_REGISTER_LATCH;
 use crate::{
     codegen::CodeGen,
-    runtime::registers::{RegIndex, RegisterBankMapping},
+    runtime::register_bank::{RegIndex, RegisterBankMapping},
     target, RegisterBank,
 };
 use inkwell::{execution_engine::ExecutionEngine, module::Module, values::PointerValue};
@@ -11,7 +11,7 @@ use mips_decomp::register;
 use std::fmt;
 
 /// The standard MIPS VR4300 registers.
-#[derive(Default)]
+#[derive(Default, Clone, PartialEq)]
 pub struct Registers {
     pub general_purpose: RegisterBank<u64, { register::GeneralPurpose::count() }>,
     pub cp0: RegisterBank<u64, { register::Cp0::count() }>,
@@ -223,9 +223,10 @@ pub struct Globals<'ctx> {
 }
 
 impl<'ctx> target::Globals<'ctx> for Globals<'ctx> {
-    type RegisterID = register::Register;
+    type RegisterID = RegisterID;
 
-    const PROGRAM_COUNTER_ID: Self::RegisterID = register::Register::Special(register::Special::Pc);
+    const PROGRAM_COUNTER_ID: Self::RegisterID =
+        RegisterID(register::Register::Special(register::Special::Pc));
 
     fn pointer_value<T: target::Target>(
         &self,
@@ -234,15 +235,15 @@ impl<'ctx> target::Globals<'ctx> for Globals<'ctx> {
     ) -> PointerValue<'ctx> {
         let gep = |ptr| unsafe {
             let i64_type = codegen.context.i64_type();
-            let name = &format!("{}_", reg.name());
+            let name = &format!("{}_", reg.0.name());
             codegen.builder.build_in_bounds_gep(
                 i64_type,
                 ptr,
-                &[i64_type.const_int(reg.to_repr() as u64, false)],
+                &[i64_type.const_int(reg.0.to_repr() as u64, false)],
                 name,
             )
         };
-        match reg {
+        match reg.0 {
             register::Register::Cp0(_) => gep(self.cp0.pointer_value()),
             register::Register::Special(_) => gep(self.special.pointer_value()),
             register::Register::Fpu(_) => gep(self.fpu.pointer_value()),
@@ -251,14 +252,28 @@ impl<'ctx> target::Globals<'ctx> for Globals<'ctx> {
         }
     }
 
-    fn is_atomic(&self, bank: Self::RegisterID) -> bool {
+    fn is_atomic(&self, reg: Self::RegisterID) -> bool {
         // TODO: This needs to hold a specific register, should we add a associated Bank type to avoid that?
-        match bank {
+        match reg.0 {
             register::Register::Cp0(_) => self.cp0.is_atomic(),
             register::Register::GeneralPurpose(_) => self.general_purpose.is_atomic(),
             register::Register::Special(_) => self.special.is_atomic(),
             register::Register::Fpu(_) => self.fpu.is_atomic(),
             register::Register::FpuControl(_) => self.fpu_control.is_atomic(),
         }
+    }
+}
+
+/// A singular MIPS VR4300 register.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub(crate) struct RegisterID(pub register::Register);
+
+impl<T> From<T> for RegisterID
+where
+    T: Into<register::Register>,
+{
+    fn from(value: T) -> Self {
+        Self(value.into())
     }
 }
