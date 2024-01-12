@@ -70,8 +70,7 @@ pub(crate) trait Instruction: fmt::Debug + fmt::Display + TryFrom<u32> + Clone {
 pub(crate) trait Label: fmt::Debug + Clone {
     type Instruction: Instruction;
 
-    // TODO: replace with return position impl trait when updating the compiler
-    fn instructions(&self) -> Box<dyn DoubleEndedIterator<Item = Self::Instruction> + '_>;
+    fn instructions(&self) -> impl DoubleEndedIterator<Item = Self::Instruction> + '_;
 
     fn len(&self) -> usize;
 
@@ -86,16 +85,12 @@ pub(crate) trait Label: fmt::Debug + Clone {
     }
 }
 
-pub(crate) trait LabelList: fmt::Debug {
+pub(crate) trait LabelList: Sized + fmt::Debug {
     type Label: Label;
 
-    fn from_iter<I>(iter: I) -> Option<Self>
-    where
-        Self: Sized,
-        I: IntoIterator<Item = PhysicalAddress>;
+    fn from_iter(iter: impl IntoIterator<Item = PhysicalAddress>) -> Option<Self>;
 
-    // TODO: replace with return position impl trait when updating the compiler
-    fn iter(&self) -> Box<dyn DoubleEndedIterator<Item = Self::Label> + '_>;
+    fn iter(&self) -> impl DoubleEndedIterator<Item = Self::Label> + '_;
 
     /// Get the label with its starting address corresponding to a given address, or None.
     fn get_label(&self, vaddr: u64) -> Option<Self::Label>;
@@ -103,8 +98,7 @@ pub(crate) trait LabelList: fmt::Debug {
     fn set_start(&mut self, vaddr: u64);
 }
 
-pub(crate) trait Target: fmt::Debug {
-    // TODO: Is it possible bind Self::Registers::Globals::Target: Self, without specifying the lifetime 'ctx for Globals?
+pub(crate) trait Target: Sized + fmt::Debug {
     type Registers: RegisterStorage;
     type Memory: Memory<Registers = Self::Registers>;
 
@@ -112,17 +106,13 @@ pub(crate) trait Target: fmt::Debug {
     type Label: Label<Instruction = Self::Instruction>;
     type LabelList: LabelList<Label = Self::Label>;
 
-    fn compile_instruction(codegen: &CodeGen<Self>, instr: &Self::Instruction) -> Option<()>
-    where
-        Self: Sized;
+    fn compile_instruction(codegen: &CodeGen<Self>, instr: &Self::Instruction) -> Option<()>;
 
-    // TODO: generic func to unify this
     fn compile_instruction_with_delay_slot(
         codegen: &CodeGen<Self>,
         pc: u64,
         instr: &Self::Instruction,
         delay_slot_instr: &Self::Instruction,
         on_instruction: impl Fn(u64),
-    ) where
-        Self: Sized;
+    );
 }

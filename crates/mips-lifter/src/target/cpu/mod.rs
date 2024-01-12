@@ -17,6 +17,7 @@ mod runtime;
 pub use registers::Registers;
 
 #[derive(Default)]
+#[repr(transparent)]
 pub struct Memory {
     pub tlb: TranslationLookasideBuffer,
 }
@@ -45,6 +46,7 @@ impl target::Memory for Memory {
 
 /// A single MIPS instruction.
 #[derive(Debug, Clone)]
+#[repr(transparent)]
 pub(crate) struct Instruction(pub ParsedInstruction);
 
 impl target::Instruction for Instruction {
@@ -75,13 +77,14 @@ impl From<ParsedInstruction> for Instruction {
 
 /// A block of instructions that can be jumped to.
 #[derive(Debug, Clone)]
+#[repr(transparent)]
 pub(crate) struct Label(pub mips_decomp::Label);
 
 impl target::Label for Label {
     type Instruction = Instruction;
 
-    fn instructions(&self) -> Box<dyn DoubleEndedIterator<Item = Self::Instruction> + '_> {
-        Box::new(self.0.instructions.iter().map(|i| Instruction(i.clone())))
+    fn instructions(&self) -> impl DoubleEndedIterator<Item = Self::Instruction> + '_ {
+        self.0.instructions.iter().map(|i| Instruction(i.clone()))
     }
 
     fn len(&self) -> usize {
@@ -102,21 +105,18 @@ impl target::Label for Label {
 }
 
 #[derive(Debug)]
+#[repr(transparent)]
 pub(crate) struct LabelList(pub mips_decomp::LabelList);
 
 impl target::LabelList for LabelList {
     type Label = Label;
 
-    fn from_iter<I>(iter: I) -> Option<Self>
-    where
-        Self: Sized,
-        I: IntoIterator<Item = PhysicalAddress>,
-    {
+    fn from_iter(iter: impl IntoIterator<Item = PhysicalAddress>) -> Option<Self> {
         mips_decomp::read_labels(1, &mut iter.into_iter()).map(Self)
     }
 
-    fn iter(&self) -> Box<dyn DoubleEndedIterator<Item = Self::Label> + '_> {
-        Box::new(self.0.iter().map(|l| Label(l.clone())))
+    fn iter(&self) -> impl DoubleEndedIterator<Item = Self::Label> + '_ {
+        self.0.iter().map(|l| Label(l.clone()))
     }
 
     #[allow(clippy::cast_possible_truncation)]

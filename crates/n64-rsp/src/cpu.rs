@@ -14,7 +14,7 @@ use std::{
 };
 
 pub struct Handle {
-    handle: JoinHandle<Bus>,
+    thread: JoinHandle<Bus>,
     cycle_budget: Arc<AtomicUsize>,
     cp0_registers: RegisterBank<u64, 32>,
 }
@@ -31,12 +31,12 @@ impl Handle {
 
         let cycles: Arc<_> = AtomicUsize::default().into();
         let cycles_for_bus = cycles.clone();
-        let handle =
+        let thread =
             std::thread::spawn(move || Bus::new(registers_for_bus, cycles_for_bus, dmem, imem));
 
         Self {
             cp0_registers,
-            handle,
+            thread,
             cycle_budget: cycles,
         }
     }
@@ -62,7 +62,6 @@ impl Handle {
 }
 
 struct Bus {
-    // TODO: add registers
     dmem: Arc<RwLock<Box<[u8; MemoryBank::DMem.len()]>>>,
     imem: Arc<RwLock<Box<[u8; MemoryBank::IMem.len()]>>>,
     cycle_budget: Arc<AtomicUsize>,
