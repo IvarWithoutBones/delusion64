@@ -10,7 +10,7 @@ use mips_decomp::instruction::ParsedInstruction;
 use std::fmt;
 
 mod codegen;
-mod gdb;
+pub(crate) mod gdb; // TODO make private
 mod recompiler;
 mod registers;
 mod runtime;

@@ -19,6 +19,7 @@ use inkwell::{
     },
     AtomicOrdering,
 };
+use mips_decomp::Exception;
 use std::collections::HashMap;
 use tartan_bitfield::bitfield;
 
@@ -477,6 +478,52 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         self.builder.build_store(flags_ptr, new);
     }
 
+    pub fn throw_exception(
+        &self,
+        exception: Exception,
+        coprocessor: Option<u8>,
+        bad_vaddr: Option<IntValue<'ctx>>,
+    ) {
+        let i64_type = self.context.i64_type();
+        let i8_type = self.context.i8_type();
+        let exception = i64_type.const_int(exception as u64, false);
+
+        let has_coprocessor = self
+            .context
+            .bool_type()
+            .const_int(u64::from(coprocessor.is_some()), false);
+        let coprocessor = coprocessor.map_or_else(
+            || i8_type.const_zero(),
+            |cop| {
+                assert!(cop <= 3, "invalid coprocessor in throw_exception: {cop}");
+                i8_type.const_int(u64::from(cop), false)
+            },
+        );
+
+        let has_bad_vaddr = self
+            .context
+            .bool_type()
+            .const_int(u64::from(bad_vaddr.is_some()), false);
+        let bad_vaddr = bad_vaddr.unwrap_or_else(|| i64_type.const_zero());
+
+        let exception_vec_ptr = env_call!(
+            self,
+            RuntimeFunction::HandleException,
+            [
+                exception,
+                has_coprocessor,
+                coprocessor,
+                has_bad_vaddr,
+                bad_vaddr
+            ]
+        )
+        .try_as_basic_value()
+        .left()
+        .unwrap()
+        .into_int_value();
+        self.build_jump_to_jit_func_ptr(exception_vec_ptr, "exception_vector");
+    }
+
     /*
        Register access helpers, to assist implementing target-specific code.
     */
@@ -496,7 +543,7 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
             i.set_atomic_ordering(AtomicOrdering::Unordered)
                 .expect("load instructions can be atomic");
             // If the alignment is not set LLVM will segfault. Underestimating the alignment produces slower code, but is safe.
-            i.set_alignment(0).expect("alignment is valid");
+            i.set_alignment(1).expect("alignment is valid");
         }
         value
     }
@@ -512,7 +559,7 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
             v.set_atomic_ordering(AtomicOrdering::Unordered)
                 .expect("store instructions can be atomic");
             // If the alignment is not set LLVM will segfault. Underestimating the alignment produces slower code, but is safe.
-            v.set_alignment(0).expect("alignment is valid");
+            v.set_alignment(1).expect("alignment is valid");
         }
     }
 

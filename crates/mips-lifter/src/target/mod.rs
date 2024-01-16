@@ -12,8 +12,10 @@ use inkwell::{execution_engine::ExecutionEngine, module::Module, values::Pointer
 use std::fmt;
 
 pub(crate) mod cpu;
+pub(crate) mod rsp;
 
 pub use cpu::{Cpu, Registers as CpuRegisters};
+pub use rsp::{Registers as RspRegisters, Rsp};
 
 /// The register ID type for the given target.
 pub(crate) type RegisterID<'ctx, T> =

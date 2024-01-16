@@ -3,7 +3,7 @@
 use crate::{
     gdb, run,
     runtime::{self, bus::Bus},
-    target::{Cpu, Target},
+    target::{cpu, Cpu, Rsp, Target, rsp},
 };
 
 pub struct JitBuilder<const READY: bool, T: Target, B: Bus>
@@ -14,6 +14,17 @@ where
     pub(crate) registers: Option<T::Registers>,
     pub(crate) gdb: Option<gdb::Connection<B>>,
     pub(crate) trace: bool,
+}
+
+impl<B: Bus> JitBuilder<false, Rsp, B> {
+    pub fn new_rsp(bus: B) -> Self {
+        Self {
+            bus,
+            registers: None,
+            gdb: None,
+            trace: false,
+        }
+    }
 }
 
 impl<B: Bus> JitBuilder<false, Cpu, B> {
@@ -47,19 +58,26 @@ where
     pub fn with_gdb(self, gdb: gdb::Connection<B>) -> Self {
         self.maybe_with_gdb(Some(gdb))
     }
-}
 
-impl<B: Bus> JitBuilder<false, Cpu, B> {
-    pub fn with_cpu_registers(
-        self,
-        registers: crate::target::cpu::Registers,
-    ) -> JitBuilder<true, Cpu, B> {
+    fn with_registers(self, registers: T::Registers) -> JitBuilder<true, T, B> {
         JitBuilder {
             registers: Some(registers),
             trace: self.trace,
             bus: self.bus,
             gdb: self.gdb,
         }
+    }
+}
+
+impl<B: Bus> JitBuilder<false, Cpu, B> {
+    pub fn with_cpu_registers(self, registers: cpu::Registers) -> JitBuilder<true, Cpu, B> {
+        self.with_registers(registers)
+    }
+}
+
+impl<B: Bus> JitBuilder<false, Rsp, B> {
+    pub fn with_rsp_registers(self, registers: rsp::Registers) -> JitBuilder<true, Rsp, B> {
+        self.with_registers(registers)
     }
 }
 

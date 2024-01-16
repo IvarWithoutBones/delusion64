@@ -1,10 +1,7 @@
 //! Code generation helpers
 
 use super::Cpu;
-use crate::{
-    codegen::{BitWidth, CodeGen, NumericValue},
-    runtime::RuntimeFunction,
-};
+use crate::codegen::{BitWidth, CodeGen, NumericValue};
 use inkwell::{
     types::{BasicType, IntType, PointerType},
     values::{IntValue, PointerValue},
@@ -368,52 +365,6 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
             i16_type.const_int(u64::from(instr.offset()), true),
         );
         self.builder.build_int_add(base, offset, add_name)
-    }
-
-    pub fn throw_exception(
-        &self,
-        exception: Exception,
-        coprocessor: Option<u8>,
-        bad_vaddr: Option<IntValue<'ctx>>,
-    ) {
-        let i64_type = self.context.i64_type();
-        let i8_type = self.context.i8_type();
-        let exception = i64_type.const_int(exception as u64, false);
-
-        let has_coprocessor = self
-            .context
-            .bool_type()
-            .const_int(u64::from(coprocessor.is_some()), false);
-        let coprocessor = coprocessor.map_or_else(
-            || i8_type.const_zero(),
-            |cop| {
-                assert!(cop <= 3, "invalid coprocessor in throw_exception: {cop}");
-                i8_type.const_int(u64::from(cop), false)
-            },
-        );
-
-        let has_bad_vaddr = self
-            .context
-            .bool_type()
-            .const_int(u64::from(bad_vaddr.is_some()), false);
-        let bad_vaddr = bad_vaddr.unwrap_or_else(|| i64_type.const_zero());
-
-        let exception_vec_ptr = env_call!(
-            self,
-            RuntimeFunction::HandleException,
-            [
-                exception,
-                has_coprocessor,
-                coprocessor,
-                has_bad_vaddr,
-                bad_vaddr
-            ]
-        )
-        .try_as_basic_value()
-        .left()
-        .unwrap()
-        .into_int_value();
-        self.build_jump_to_jit_func_ptr(exception_vec_ptr, "exception_vector");
     }
 
     pub fn assert_coprocessor_usable(&self, coprocessor: u8) {

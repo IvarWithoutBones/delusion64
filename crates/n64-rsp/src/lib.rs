@@ -99,6 +99,9 @@ impl Rsp {
                 }
             }
             Ok(self.cpu.sp_status())
+        } else if offset == 0x40000 {
+            #[allow(clippy::cast_possible_truncation)]
+            Ok(self.cpu.pc() as u32)
         } else {
             self.registers.read(offset)
         }
@@ -114,6 +117,9 @@ impl Rsp {
             let mut sp_status = register::definitions::SpStatus::from(self.cpu.sp_status());
             sp_status.write(value);
             self.cpu.set_sp_status(sp_status.into());
+            Ok(SideEffects::default())
+        } else if offset == 0x40000 {
+            self.cpu.set_pc(u64::from(value));
             Ok(SideEffects::default())
         } else {
             self.registers.write(offset, value)
