@@ -8,7 +8,6 @@ use inkwell::{
     AddressSpace,
 };
 use mips_decomp::{
-    instruction::ParsedInstruction,
     register::{self, cpu::Register},
     Exception,
 };
@@ -54,7 +53,7 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
         // If the FR bit of the Status register is disabled, we have 16 32-bit registers instead of 32 64-bit registers.
         // In the case FR is disabled, the even registers are the upper 32 bits, and the odd registers are the lower 32 bits.
         let fr_set = {
-            let status = self.read_register(i64_type, register::cpu::Cp0::Status);
+            let status = self.read_cpu_register(i64_type, register::cpu::Cp0::Status);
             let fr_bit =
                 self.build_mask(status, register::cpu::cp0::Status::FR_MASK, "fr_in_status");
             cmp!(self, fr_bit != 0)
@@ -100,23 +99,6 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
         let result = self.builder.build_phi(ptr_ty, "fpr_ptr");
         result.add_incoming(&[(&then_ptr.unwrap(), then_bb), (&else_ptr.unwrap(), else_bb)]);
         result.as_basic_value().into_pointer_value()
-    }
-
-    /// Read the general-purpose register (GPR) at the given index.
-    /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits returned.
-    pub fn read_general_register(
-        &self,
-        ty: IntType<'ctx>,
-        index: impl Into<u64>,
-    ) -> IntValue<'ctx> {
-        let index = u8::try_from(index.into()).expect("index must be less than 32");
-        let reg = register::cpu::GeneralPurpose::from_repr(index).unwrap();
-        if reg == register::cpu::GeneralPurpose::Zero {
-            // Register zero is hardwired to zero.
-            ty.const_zero()
-        } else {
-            self.read_register_raw(ty, reg)
-        }
     }
 
     /// Read the CP0 register at the given index.
@@ -181,22 +163,13 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
 
     /// Read the specified register.
     /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits returned.
-    pub fn read_register(&self, ty: IntType<'ctx>, reg: impl Into<Register>) -> IntValue<'ctx> {
+    pub fn read_cpu_register(&self, ty: IntType<'ctx>, reg: impl Into<Register>) -> IntValue<'ctx> {
         match reg.into() {
             Register::GeneralPurpose(reg) => self.read_general_register(ty, reg),
             Register::Special(reg) => self.read_special_register(ty, reg),
             Register::Cp0(reg) => self.read_cp0_register(ty, reg),
             Register::Fpu(reg) => self.read_fpu_register(ty, reg),
             Register::FpuControl(reg) => self.read_fpu_control_register(ty, reg),
-        }
-    }
-
-    pub fn write_general_register(&self, index: impl Into<u64>, value: IntValue<'ctx>) {
-        let index = u8::try_from(index.into()).expect("index must be less than 32");
-        let reg = register::cpu::GeneralPurpose::from_repr(index).unwrap();
-        if reg != register::cpu::GeneralPurpose::Zero {
-            // Register zero is hardwired to zero.
-            self.write_register_raw(reg, value);
         }
     }
 
@@ -221,10 +194,10 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
                 value = self.build_mask(value, Compare::WRITE_MASK, "cp0_compare_masked");
 
                 // Writes also clear the Timer bit of Interrupt Pending in the Cause register.
-                let cause = self.read_register(i32_type, register::cpu::Cp0::Cause);
+                let cause = self.read_cpu_register(i32_type, register::cpu::Cp0::Cause);
                 let mask = i32_type.const_int(!Cause::INTERRUPT_PENDING_TIMER_MASK, false);
                 let masked_cause = self.builder.build_and(cause, mask, "cp0_cause_masked");
-                self.write_register(register::cpu::Cp0::Cause, masked_cause);
+                self.write_cpu_register(register::cpu::Cp0::Cause, masked_cause);
             }
 
             register::cpu::Cp0::Config => {
@@ -232,7 +205,7 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
                 let mask = i32_type.const_int(Config::WRITE_MASK, false);
                 let new = self.builder.build_and(value, mask, "cp0_config_masked");
                 let prev = {
-                    let prev = self.read_register(i32_type, register::cpu::Cp0::Config);
+                    let prev = self.read_cpu_register(i32_type, register::cpu::Cp0::Config);
                     let mask = i32_type.const_int(!Config::WRITE_MASK, false);
                     self.builder.build_and(prev, mask, "cp0_config_prev_masked")
                 };
@@ -247,7 +220,7 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
                     "cp0_context_ptebase_masked",
                 );
                 let prev = {
-                    let context = self.read_register(i64_type, register::cpu::Cp0::Context);
+                    let context = self.read_cpu_register(i64_type, register::cpu::Cp0::Context);
                     self.build_mask(context, Context::READ_ONLY_MASK, "cp0_context_prev_masked")
                 };
                 value = self.builder.build_or(prev, new, "cp0_context_combined");
@@ -261,7 +234,7 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
                     "cp0_xcontext_ptebase_masked",
                 );
                 let prev = self.build_mask(
-                    self.read_register(i64_type, register::cpu::Cp0::XContext),
+                    self.read_cpu_register(i64_type, register::cpu::Cp0::XContext),
                     XContext::READ_ONLY_MASK,
                     "cp0_xcontext_prev_masked",
                 );
@@ -345,7 +318,7 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
         self.write_register_raw(CP2_REGISTER_LATCH, value);
     }
 
-    pub fn write_register(&self, reg: impl Into<Register>, value: IntValue<'ctx>) {
+    pub fn write_cpu_register(&self, reg: impl Into<Register>, value: IntValue<'ctx>) {
         match reg.into() {
             Register::GeneralPurpose(reg) => self.write_general_register(reg, value),
             Register::Cp0(reg) => self.write_cp0_register(reg, value),
@@ -358,18 +331,6 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
     /*
        General helpers
     */
-
-    pub fn base_plus_offset(&self, instr: &ParsedInstruction, add_name: &str) -> IntValue<'ctx> {
-        let i16_type = self.context.i16_type();
-        let i64_type = self.context.i64_type();
-
-        let base = self.read_general_register(i64_type, instr.base());
-        let offset = self.sign_extend_to(
-            i64_type,
-            i16_type.const_int(u64::from(instr.offset()), true),
-        );
-        self.builder.build_int_add(base, offset, add_name)
-    }
 
     pub fn assert_coprocessor_usable(&self, coprocessor: u8) {
         use mips_decomp::register::cpu::{cp0::Status, Cp0};
@@ -387,7 +348,7 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
         };
 
         let enabled = self.build_mask(
-            self.read_register(self.context.i32_type(), Cp0::Status),
+            self.read_cpu_register(self.context.i32_type(), Cp0::Status),
             mask,
             &format!("cop{coprocessor}_usable"),
         );

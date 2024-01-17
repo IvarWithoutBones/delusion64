@@ -73,7 +73,6 @@ struct Bus {
     dmem: MemoryBankHandle,
     imem: MemoryBankHandle,
     cycle_budget: Arc<AtomicUsize>,
-    cycles_ran: usize,
 }
 
 impl Bus {
@@ -94,7 +93,6 @@ impl Bus {
             dmem,
             imem,
             cycle_budget,
-            cycles_ran: 0,
         };
 
         let regs = mips_lifter::target::rsp::Registers {
@@ -118,9 +116,8 @@ impl BusInterface for Bus {
         address: PhysicalAddress,
     ) -> BusResult<Int<SIZE>, Self::Error> {
         // TODO: should not assume banks
-        println!("read_memory: {address:x}");
         let imem = self.imem.read().unwrap();
-        let slice = &imem[address as usize..][..SIZE];
+        let slice = &imem[(address as usize) % 0x1000..][..SIZE];
         Ok(Int::from_slice(slice).unwrap().into())
     }
 
@@ -130,31 +127,20 @@ impl BusInterface for Bus {
         value: Int<SIZE>,
     ) -> BusResult<(), Self::Error> {
         // TODO: should not assume banks
-        println!("write_memory: {address:x} = {value:#x?}");
         let mut dmem = self.dmem.write().unwrap();
-        let slice = &mut dmem[address as usize..][..SIZE];
+        let slice = &mut dmem[(address as usize) % 0x1000..][..SIZE];
         slice.copy_from_slice(value.as_slice());
         Ok(().into())
     }
 
     fn tick(&mut self, cycles: usize) -> BusResult<(), Self::Error> {
-        println!("tick: {cycles}");
-        self.cycles_ran += cycles;
-
-        let budget = self.cycle_budget.load(atomic::Ordering::Relaxed);
-        if budget < self.cycles_ran {
-            // Yield until our budget is big enough
-            println!("waiting till budget is big enough");
-            while self.cycle_budget.load(atomic::Ordering::Relaxed) < self.cycles_ran {
-                std::thread::yield_now();
-            }
+        // Yield until our budget is big enough (i.e. the CPU has ran enough cycles for us to catch up to it)
+        while self.cycle_budget.load(atomic::Ordering::Relaxed) < cycles {
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
 
-        println!("continuing");
-        // Continue running until we've used up our budget
-        self.cycles_ran -= budget;
         self.cycle_budget
-            .fetch_sub(budget, atomic::Ordering::Relaxed);
+            .fetch_sub(cycles, atomic::Ordering::Relaxed);
         Ok(().into())
     }
 }

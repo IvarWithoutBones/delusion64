@@ -5,8 +5,7 @@ use strum::{EnumCount, EnumIter, EnumVariantNames, FromRepr};
 pub mod cp0;
 pub mod fpu;
 
-#[doc(inline)]
-pub use super::shared::GeneralPurpose;
+pub use super::GeneralPurpose;
 
 /// A MIPS 3 coprocessor 0 register.
 #[derive(EnumCount, EnumIter, EnumVariantNames, FromRepr, Debug, PartialEq, Eq, Clone, Copy)]

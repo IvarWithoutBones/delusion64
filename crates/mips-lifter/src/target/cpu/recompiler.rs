@@ -110,7 +110,7 @@ fn evaluate_jump<'ctx>(
 
         Mnenomic::Jal => {
             // Jump to target address, stores return address in r31 (ra)
-            codegen.write_register(register::cpu::GeneralPurpose::Ra, return_address);
+            codegen.write_cpu_register(register::cpu::GeneralPurpose::Ra, return_address);
             JumpTarget::Constant(jump_address(delay_slot_pc, instr.immediate()))
         }
 
@@ -126,7 +126,7 @@ fn evaluate_jump<'ctx>(
                 || {
                     // The exception occurs during the instruction fetch stage after finishing the jump instruction.
                     // We set PC to the address of the instruction that caused the exception, so EPC is set accordingly.
-                    codegen.write_register(register::cpu::Special::Pc, source);
+                    codegen.write_cpu_register(register::cpu::Special::Pc, source);
                     codegen.throw_exception(Exception::AddressLoad, None, Some(source));
                 },
             );
@@ -183,7 +183,7 @@ fn evaluate_branch<'ctx>(
         Mnenomic::Bgezal | Mnenomic::Bgezall => {
             // If rs is greater than or equal to zero, branch to address. Unconditionally stores return address to r31 (ra).
             let return_address = i64_type.const_int(delay_slot_pc + INSTRUCTION_SIZE as u64, false);
-            codegen.write_register(register::cpu::GeneralPurpose::Ra, return_address);
+            codegen.write_cpu_register(register::cpu::GeneralPurpose::Ra, return_address);
             let source = codegen.read_general_register(i64_type, instr.rs());
             (IntPredicate::SGE, source, i64_type.const_zero())
         }
@@ -197,7 +197,7 @@ fn evaluate_branch<'ctx>(
         Mnenomic::Bltzal | Mnenomic::Bltzall => {
             // If rs is less than zero, branch to address. Unconditionally stores return address to r31 (ra).
             let return_address = i64_type.const_int(delay_slot_pc + INSTRUCTION_SIZE as u64, false);
-            codegen.write_register(register::cpu::GeneralPurpose::Ra, return_address);
+            codegen.write_cpu_register(register::cpu::GeneralPurpose::Ra, return_address);
             let source = codegen.read_general_register(i64_type, instr.rs());
             (IntPredicate::SLT, source, i64_type.const_zero())
         }
@@ -210,7 +210,7 @@ fn evaluate_branch<'ctx>(
 
         Mnenomic::Bc1t | Mnenomic::Bc1tl => {
             // If the last floating-point compare is true, branch to address.
-            let source = codegen.read_register(i64_type, register::cpu::Fpu::F31);
+            let source = codegen.read_cpu_register(i64_type, register::cpu::Fpu::F31);
             let mask =
                 i64_type.const_int(1 << register::cpu::fpu::ControlStatus::CONDITION_BIT, false);
             let masked = codegen.builder.build_and(source, mask, "bc1t_mask");
@@ -219,7 +219,7 @@ fn evaluate_branch<'ctx>(
 
         Mnenomic::Bc1f | Mnenomic::Bc1fl => {
             // If the last floating-point compare is false, branch to address.
-            let source = codegen.read_register(i64_type, register::cpu::Fpu::F31);
+            let source = codegen.read_cpu_register(i64_type, register::cpu::Fpu::F31);
             let mask =
                 i64_type.const_int(1 << register::cpu::fpu::ControlStatus::CONDITION_BIT, false);
             let masked = codegen.builder.build_and(source, mask, "bc1t_mask");
@@ -385,9 +385,9 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Eret => {
             // Return from interrupt, exception, or error exception. Unsets the LL bit.
-            codegen.write_register(register::cpu::Special::LoadLink, bool_type.const_zero());
+            codegen.write_cpu_register(register::cpu::Special::LoadLink, bool_type.const_zero());
 
-            let status = codegen.read_register(i64_type, register::cpu::Cp0::Status);
+            let status = codegen.read_cpu_register(i64_type, register::cpu::Cp0::Status);
             let erl_mask = i64_type.const_int(0b100, false);
             let erl_set = {
                 let status = codegen.builder.build_and(status, erl_mask, "eret_erl_mask");
@@ -401,18 +401,19 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                     // Clear the ERL bit of the CP0 register Status to zero.
                     let not_erl = erl_mask.const_not();
                     let new_status = codegen.builder.build_and(status, not_erl, "eret_clear_erl");
-                    codegen.write_register(register::cpu::Cp0::Status, new_status);
+                    codegen.write_cpu_register(register::cpu::Cp0::Status, new_status);
                     // Load the contents of the CP0 register ErrorEPC to the PC
-                    let error_epc = codegen.read_register(i64_type, register::cpu::Cp0::ErrorEPC);
+                    let error_epc =
+                        codegen.read_cpu_register(i64_type, register::cpu::Cp0::ErrorEPC);
                     codegen.build_dynamic_jump(error_epc);
                 },
                 || {
                     // Clear the EXL bit of the CP0 register Status to zero.
                     let not_exl = i64_type.const_int(0b10, false).const_not();
                     let new_status = codegen.builder.build_and(status, not_exl, "eret_clear_exl");
-                    codegen.write_register(register::cpu::Cp0::Status, new_status);
+                    codegen.write_cpu_register(register::cpu::Cp0::Status, new_status);
                     // Load the contents of the CP0 register EPC to the PC
-                    let epc = codegen.read_register(i64_type, register::cpu::Cp0::EPC);
+                    let epc = codegen.read_cpu_register(i64_type, register::cpu::Cp0::EPC);
                     codegen.build_dynamic_jump(epc);
                 },
             );
@@ -426,13 +427,13 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Tlbwi => {
             // Stores the contents of EntryHi and EntryLo registers into the TLB entry pointed at by the Index register
-            let index = codegen.read_register(i64_type, register::cpu::Cp0::Index);
+            let index = codegen.read_cpu_register(i64_type, register::cpu::Cp0::Index);
             env_call!(codegen, RuntimeFunction::WriteTlbEntry, [index]);
         }
 
         Mnenomic::Tlbr => {
             // Loads EntryHi and EntryLo registers with the TLB entry pointed at by the Index register.
-            let index = codegen.read_register(i64_type, register::cpu::Cp0::Index);
+            let index = codegen.read_cpu_register(i64_type, register::cpu::Cp0::Index);
             env_call!(codegen, RuntimeFunction::ReadTlbEntry, [index]);
         }
 
@@ -554,13 +555,13 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
         Mnenomic::Mtlo => {
             // Copy contents of rs to register LO
             let target = codegen.read_general_register(i64_type, instr.rs());
-            codegen.write_register(register::cpu::Special::Lo, target);
+            codegen.write_cpu_register(register::cpu::Special::Lo, target);
         }
 
         Mnenomic::Mthi => {
             // Copy contents of rs to register HI
             let target = codegen.read_general_register(i64_type, instr.rs());
-            codegen.write_register(register::cpu::Special::Hi, target);
+            codegen.write_cpu_register(register::cpu::Special::Hi, target);
         }
 
         Mnenomic::Mtc0 => {
@@ -656,9 +657,9 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Sc => {
             // If LL bit is set, stores contents of rt, to memory address (base + offset), truncated to 32-bits
-            let ll_bit = codegen.read_register(bool_type, register::cpu::Special::LoadLink);
+            let ll_bit = codegen.read_cpu_register(bool_type, register::cpu::Special::LoadLink);
             codegen.build_if("sc_ll_set", cmp!(codegen, ll_bit == 1), || {
-                let addr = codegen.base_plus_offset(instr, "sc_addr");
+                let addr = codegen.base_plus_offset(i64_type, instr, "sc_addr");
                 let value = codegen.read_general_register(i32_type, instr.rt());
                 codegen.write_memory(addr, value);
             });
@@ -666,9 +667,9 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Scd => {
             // If LL bit is set, stores contents of rt, to memory address (base + offset)
-            let ll_bit = codegen.read_register(bool_type, register::cpu::Special::LoadLink);
+            let ll_bit = codegen.read_cpu_register(bool_type, register::cpu::Special::LoadLink);
             codegen.build_if("scd_ll_set", cmp!(codegen, ll_bit == 1), || {
-                let addr = codegen.base_plus_offset(instr, "scd_addr");
+                let addr = codegen.base_plus_offset(i64_type, instr, "scd_addr");
                 let value = codegen.read_general_register(i64_type, instr.rt());
                 codegen.write_memory(addr, value);
             });
@@ -676,11 +677,11 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Ll => {
             // Loads word stored at memory address (base + offset), stores sign-extended word in rt, and sets the LL bit to 1
-            let addr = codegen.base_plus_offset(instr, "ll_addr");
+            let addr = codegen.base_plus_offset(i64_type, instr, "ll_addr");
             let value = codegen.read_memory(i32_type, addr);
             let sign_extended = codegen.sign_extend_to(i64_type, value);
             codegen.write_general_register(instr.rt(), sign_extended);
-            codegen.write_register(
+            codegen.write_cpu_register(
                 register::cpu::Special::LoadLink,
                 bool_type.const_int(1, false),
             );
@@ -762,18 +763,18 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                 "div_zero_divisor",
                 cmp!(codegen, target == 0),
                 || {
-                    codegen.write_register(register::cpu::Special::Hi, source);
+                    codegen.write_cpu_register(register::cpu::Special::Hi, source);
                     codegen.build_if_else(
                         "div_dividend_positive",
                         cmps!(codegen, source >= 0),
                         || {
-                            codegen.write_register(
+                            codegen.write_cpu_register(
                                 register::cpu::Special::Lo,
                                 i64_type.const_all_ones(),
                             );
                         },
                         || {
-                            codegen.write_register(
+                            codegen.write_cpu_register(
                                 register::cpu::Special::Lo,
                                 i64_type.const_int(1, false),
                             );
@@ -801,8 +802,8 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                         ),
                     );
 
-                    codegen.write_register(register::cpu::Special::Lo, quotient);
-                    codegen.write_register(register::cpu::Special::Hi, remainder);
+                    codegen.write_cpu_register(register::cpu::Special::Lo, quotient);
+                    codegen.write_cpu_register(register::cpu::Special::Hi, remainder);
                 },
             );
         }
@@ -816,8 +817,9 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                 "divu_zero_divisor",
                 cmp!(codegen, target == 0),
                 || {
-                    codegen.write_register(register::cpu::Special::Lo, i64_type.const_all_ones());
-                    codegen.write_register(
+                    codegen
+                        .write_cpu_register(register::cpu::Special::Lo, i64_type.const_all_ones());
+                    codegen.write_cpu_register(
                         register::cpu::Special::Hi,
                         codegen.sign_extend_to(i64_type, source),
                     );
@@ -843,8 +845,8 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                         ),
                     );
 
-                    codegen.write_register(register::cpu::Special::Lo, quotient);
-                    codegen.write_register(register::cpu::Special::Hi, remainder);
+                    codegen.write_cpu_register(register::cpu::Special::Lo, quotient);
+                    codegen.write_cpu_register(register::cpu::Special::Hi, remainder);
                 },
             );
         }
@@ -858,18 +860,18 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                 "ddiv_valid_divisor",
                 cmp!(codegen, target == 0),
                 || {
-                    codegen.write_register(register::cpu::Special::Hi, source);
+                    codegen.write_cpu_register(register::cpu::Special::Hi, source);
                     codegen.build_if_else(
                         "ddiv_dividend_positive",
                         cmps!(codegen, source >= 0),
                         || {
-                            codegen.write_register(
+                            codegen.write_cpu_register(
                                 register::cpu::Special::Lo,
                                 i64_type.const_all_ones(),
                             );
                         },
                         || {
-                            codegen.write_register(
+                            codegen.write_cpu_register(
                                 register::cpu::Special::Lo,
                                 i64_type.const_int(1, false),
                             );
@@ -887,9 +889,11 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                         "ddiv_dividend_min_int",
                         is_min,
                         || {
-                            codegen
-                                .write_register(register::cpu::Special::Hi, i64_type.const_zero());
-                            codegen.write_register(register::cpu::Special::Lo, source);
+                            codegen.write_cpu_register(
+                                register::cpu::Special::Hi,
+                                i64_type.const_zero(),
+                            );
+                            codegen.write_cpu_register(register::cpu::Special::Lo, source);
                         },
                         || {
                             let quotient = codegen.builder.build_int_signed_div(
@@ -903,8 +907,8 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                                 "ddiv_remainder",
                             );
 
-                            codegen.write_register(register::cpu::Special::Lo, quotient);
-                            codegen.write_register(register::cpu::Special::Hi, remainder);
+                            codegen.write_cpu_register(register::cpu::Special::Lo, quotient);
+                            codegen.write_cpu_register(register::cpu::Special::Hi, remainder);
                         },
                     );
                 },
@@ -920,8 +924,9 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                 "ddivu_zero_divisor",
                 cmp!(codegen, target == 0),
                 || {
-                    codegen.write_register(register::cpu::Special::Hi, source);
-                    codegen.write_register(register::cpu::Special::Lo, i64_type.const_all_ones());
+                    codegen.write_cpu_register(register::cpu::Special::Hi, source);
+                    codegen
+                        .write_cpu_register(register::cpu::Special::Lo, i64_type.const_all_ones());
                 },
                 || {
                     let quotient =
@@ -933,8 +938,8 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                             .builder
                             .build_int_unsigned_rem(source, target, "ddivu_remainder");
 
-                    codegen.write_register(register::cpu::Special::Lo, quotient);
-                    codegen.write_register(register::cpu::Special::Hi, remainder);
+                    codegen.write_cpu_register(register::cpu::Special::Lo, quotient);
+                    codegen.write_cpu_register(register::cpu::Special::Hi, remainder);
                 },
             );
         }
@@ -1151,11 +1156,11 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
             let (hi, lo) =
                 codegen.split(codegen.builder.build_int_mul(source, target, "dmult_res"));
-            codegen.write_register(
+            codegen.write_cpu_register(
                 register::cpu::Special::Hi,
                 codegen.sign_extend_to(i64_type, hi),
             );
-            codegen.write_register(
+            codegen.write_cpu_register(
                 register::cpu::Special::Lo,
                 codegen.sign_extend_to(i64_type, lo),
             );
@@ -1174,11 +1179,11 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
             let (hi, lo) =
                 codegen.split(codegen.builder.build_int_mul(source, target, "dmultu_res"));
-            codegen.write_register(
+            codegen.write_cpu_register(
                 register::cpu::Special::Hi,
                 codegen.sign_extend_to(i64_type, hi),
             );
-            codegen.write_register(
+            codegen.write_cpu_register(
                 register::cpu::Special::Lo,
                 codegen.sign_extend_to(i64_type, lo),
             );
@@ -1196,11 +1201,11 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
             );
 
             let (hi, lo) = codegen.split(codegen.builder.build_int_mul(source, target, "mult_res"));
-            codegen.write_register(
+            codegen.write_cpu_register(
                 register::cpu::Special::Hi,
                 codegen.sign_extend_to(i64_type, hi),
             );
-            codegen.write_register(
+            codegen.write_cpu_register(
                 register::cpu::Special::Lo,
                 codegen.sign_extend_to(i64_type, lo),
             );
@@ -1219,11 +1224,11 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
             let (hi, lo) =
                 codegen.split(codegen.builder.build_int_mul(source, target, "multu_res"));
-            codegen.write_register(
+            codegen.write_cpu_register(
                 register::cpu::Special::Hi,
                 codegen.sign_extend_to(i64_type, hi),
             );
-            codegen.write_register(
+            codegen.write_cpu_register(
                 register::cpu::Special::Lo,
                 codegen.sign_extend_to(i64_type, lo),
             );
@@ -1232,20 +1237,20 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
         Mnenomic::Mflo => {
             // Copy contents of register LO to rd
             // This should produce incorrect results if any of the two following instructions modify LO register, probably fine to ignore.
-            let lo = codegen.read_register(i64_type, register::cpu::Special::Lo);
+            let lo = codegen.read_cpu_register(i64_type, register::cpu::Special::Lo);
             codegen.write_general_register(instr.rd(), lo);
         }
 
         Mnenomic::Mfhi => {
             // Copy contents of register HI to rd
             // This should produce incorrect results if any of the two following instructions modify LO register, probably fine to ignore.
-            let hi = codegen.read_register(i64_type, register::cpu::Special::Hi);
+            let hi = codegen.read_cpu_register(i64_type, register::cpu::Special::Hi);
             codegen.write_general_register(instr.rd(), hi);
         }
 
         Mnenomic::Lwl => {
             // Loads a portion of a word beginning at memory address (base + offset), stores 1-4 bytes in high-order portion of rt
-            let address = codegen.base_plus_offset(instr, "lwl_addr");
+            let address = codegen.base_plus_offset(i64_type, instr, "lwl_addr");
 
             let shift = {
                 let zero = i32_type.const_zero();
@@ -1291,7 +1296,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Lwr => {
             // Loads a portion of a word beginning at memory address (base + offset), stores 1-4 bytes in low-order portion of rt
-            let address = codegen.base_plus_offset(instr, "lwr_addr");
+            let address = codegen.base_plus_offset(i64_type, instr, "lwr_addr");
 
             let shift = {
                 let three = i32_type.const_int(3, false);
@@ -1336,7 +1341,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Sdl => {
             // Loads a portion of rt, stores 1-8 bytes in high-order portion of memory address (base + offset)
-            let vaddr = codegen.base_plus_offset(instr, "sdl_addr");
+            let vaddr = codegen.base_plus_offset(i64_type, instr, "sdl_addr");
             let paddr = {
                 let paddr = codegen.get_physical_address(vaddr);
                 codegen.builder.build_and(
@@ -1385,7 +1390,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Sdr => {
             // Loads a portion of rt, stores 1-8 bytes in low-order portion of memory address (base + offset)
-            let vaddr = codegen.base_plus_offset(instr, "sdr_addr");
+            let vaddr = codegen.base_plus_offset(i64_type, instr, "sdr_addr");
             let paddr = {
                 let paddr = codegen.get_physical_address(vaddr);
                 codegen.builder.build_and(
@@ -1431,7 +1436,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Ldl => {
             // Loads a portion of a doubleword beginning at memory address (base + offset), stores 1-8 bytes in high-order portion of rt.
-            let address = codegen.base_plus_offset(instr, "ldl_addr");
+            let address = codegen.base_plus_offset(i64_type, instr, "ldl_addr");
 
             let shift = {
                 let zero = i64_type.const_zero();
@@ -1475,7 +1480,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Ldr => {
             // Loads a portion of a doubleword beginning at memory address (base + offset), stores 1-8 bytes in low-order portion of rt.
-            let address = codegen.base_plus_offset(instr, "ldr_addr");
+            let address = codegen.base_plus_offset(i64_type, instr, "ldr_addr");
 
             let shift = {
                 let seven = i64_type.const_int(7, false);
@@ -1519,7 +1524,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Swl => {
             // Loads a portion of rt, stores 1-4 bytes in high-order portion of memory address (base + offset)
-            let address = codegen.base_plus_offset(instr, "swl_addr");
+            let address = codegen.base_plus_offset(i64_type, instr, "swl_addr");
 
             let shift = {
                 let zero = i32_type.const_zero();
@@ -1568,7 +1573,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Swr => {
             // Loads a portion of rt, stores 1-4 bytes in low-order portion of memory address (base + offset)
-            let address = codegen.base_plus_offset(instr, "swr_addr");
+            let address = codegen.base_plus_offset(i64_type, instr, "swr_addr");
 
             let shift = {
                 let three = i64_type.const_int(3, false);
@@ -1613,7 +1618,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Sw => {
             // Stores word from rt, to memory address (base + offset). If the address is not word-aligned, an address error exception occurs.
-            let address = codegen.base_plus_offset(instr, "sw_addr");
+            let address = codegen.base_plus_offset(i64_type, instr, "sw_addr");
             codegen.build_if(
                 "sw_addr_invalid",
                 {
@@ -1638,7 +1643,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Sh => {
             // Stores halfword from rt, to memory address (base + offset)
-            let address = codegen.base_plus_offset(instr, "sh_addr");
+            let address = codegen.base_plus_offset(i64_type, instr, "sh_addr");
             let target = codegen.read_general_register(i16_type, instr.rt());
             codegen.write_memory(address, target);
         }
@@ -1646,34 +1651,34 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
         Mnenomic::Sb => {
             // Stores least-significant byte from rt, to memory address (base + offset)
             let target = codegen.read_general_register(i8_type, instr.rt());
-            let address = codegen.base_plus_offset(instr, "sb_addr");
+            let address = codegen.base_plus_offset(i64_type, instr, "sb_addr");
             codegen.write_memory(address, target);
         }
 
         Mnenomic::Sd => {
             // Stores doubleword from rt, to memory address (base + offset)
             let target = codegen.read_general_register(i64_type, instr.rt());
-            let address = codegen.base_plus_offset(instr, "sd_addr");
+            let address = codegen.base_plus_offset(i64_type, instr, "sd_addr");
             codegen.write_memory(address, target);
         }
 
         Mnenomic::Ld => {
             // Loads doubleword stored at memory address (base + offset), stores doubleword in rt
-            let address = codegen.base_plus_offset(instr, "ld_addr");
+            let address = codegen.base_plus_offset(i64_type, instr, "ld_addr");
             let value = codegen.read_memory(i64_type, address);
             codegen.write_general_register(instr.rt(), value);
         }
 
         Mnenomic::Lb => {
             // Loads byte stored at memory address (base + offset), stores sign-extended byte in rt
-            let address = codegen.base_plus_offset(instr, "lb_addr");
+            let address = codegen.base_plus_offset(i64_type, instr, "lb_addr");
             let value = codegen.sign_extend_to(i64_type, codegen.read_memory(i8_type, address));
             codegen.write_general_register(instr.rt(), value);
         }
 
         Mnenomic::Lbu => {
             // Loads byte stored at memory address (base + offset), stores zero-extended byte in rt
-            let address = codegen.base_plus_offset(instr, "lbu_addr");
+            let address = codegen.base_plus_offset(i64_type, instr, "lbu_addr");
             let value = codegen.zero_extend_to(i64_type, codegen.read_memory(i8_type, address));
             codegen.write_general_register(instr.rt(), value);
         }
@@ -1681,7 +1686,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
         Mnenomic::Lw => {
             // Loads word stored at memory address (base + offset), stores sign-extended word in rt.
             // If the address is not aligned to 4 bytes, or the upper 32 bits of the address are not zero, an address error exception occurs.
-            let address = codegen.base_plus_offset(instr, "lw_addr");
+            let address = codegen.base_plus_offset(i64_type, instr, "lw_addr");
             codegen.build_if(
                 "lw_addr_invalid",
                 {
@@ -1706,21 +1711,21 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Lwu => {
             // Loads word stored at memory address (base + offset), stores zero-extended word in rt
-            let address = codegen.base_plus_offset(instr, "lwu_addr");
+            let address = codegen.base_plus_offset(i64_type, instr, "lwu_addr");
             let value = codegen.zero_extend_to(i64_type, codegen.read_memory(i32_type, address));
             codegen.write_general_register(instr.rt(), value);
         }
 
         Mnenomic::Lh => {
             // Loads halfword stored at memory address (base + offset), stores sign-extended halfword in rt
-            let address = codegen.base_plus_offset(instr, "lh_addr");
+            let address = codegen.base_plus_offset(i64_type, instr, "lh_addr");
             let value = codegen.sign_extend_to(i64_type, codegen.read_memory(i16_type, address));
             codegen.write_general_register(instr.rt(), value);
         }
 
         Mnenomic::Lhu => {
             // Loads halfword stored at memory address (base + offset), stores zero-extended halfword in rt
-            let address = codegen.base_plus_offset(instr, "lhu_addr");
+            let address = codegen.base_plus_offset(i64_type, instr, "lhu_addr");
             let value = codegen.zero_extend_to(i64_type, codegen.read_memory(i16_type, address));
             codegen.write_general_register(instr.rt(), value);
         }
@@ -1901,7 +1906,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
         Mnenomic::Ldc1 => {
             // Copies double-word stored at memory address (base + offset), to CP1 register ft.
             codegen.assert_coprocessor_usable(1);
-            let addr = codegen.base_plus_offset(instr, "ldc1_addr");
+            let addr = codegen.base_plus_offset(i64_type, instr, "ldc1_addr");
             let value = codegen.read_memory(i64_type, addr);
             codegen.write_fpu_register(f64_size, instr.ft(), value);
         }
@@ -1909,7 +1914,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
         Mnenomic::Lwc1 => {
             // Copies word stored at memory address (base + offset), to CP1 register ft.
             codegen.assert_coprocessor_usable(1);
-            let addr = codegen.base_plus_offset(instr, "lwc1_addr");
+            let addr = codegen.base_plus_offset(i64_type, instr, "lwc1_addr");
             let value = codegen.read_memory(i32_type, addr);
             // TODO: This should go in the upper/lower 32 bits depending on the FR field in CP0 Status
             codegen.write_fpu_register(f32_size, instr.ft(), value);
@@ -1919,7 +1924,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
             // Stores word at CP1 register ft, to memory address (base + offset)
             codegen.assert_coprocessor_usable(1);
             let value = codegen.read_fpu_register(i32_type, instr.ft());
-            let addr = codegen.base_plus_offset(instr, "swc1_addr");
+            let addr = codegen.base_plus_offset(i64_type, instr, "swc1_addr");
             codegen.write_memory(addr, value);
         }
 
@@ -1927,7 +1932,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
             // Stores double-word at CP1 register ft, to memory address (base + offset)
             codegen.assert_coprocessor_usable(1);
             let value = codegen.read_fpu_register(i64_type, instr.ft());
-            let addr = codegen.base_plus_offset(instr, "sdc1_addr");
+            let addr = codegen.base_plus_offset(i64_type, instr, "sdc1_addr");
             codegen.write_memory(addr, value);
         }
 
@@ -2042,9 +2047,10 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
             let shift = i32_type.const_int(register::cpu::fpu::ControlStatus::CONDITION_BIT, false);
             let mask = codegen.builder.build_left_shift(cmp, shift, "c_cond_shift");
 
-            let fcr31 = codegen.read_register(i32_type, register::cpu::FpuControl::ControlStatus);
+            let fcr31 =
+                codegen.read_cpu_register(i32_type, register::cpu::FpuControl::ControlStatus);
             let fcr_with_cmp = codegen.builder.build_and(fcr31, mask, "c_cond_mask");
-            codegen.write_register(register::cpu::FpuControl::ControlStatus, fcr_with_cmp);
+            codegen.write_cpu_register(register::cpu::FpuControl::ControlStatus, fcr_with_cmp);
         }
 
         _ => {

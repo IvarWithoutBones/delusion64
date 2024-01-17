@@ -7,7 +7,7 @@ pub mod control;
 pub mod special;
 
 #[doc(inline)]
-pub use super::shared::GeneralPurpose;
+pub use super::GeneralPurpose;
 
 /// The RSP's control registers, mapped to coprocessor 0 as well as the CPU's address space via MMIO.
 #[derive(EnumCount, EnumIter, EnumVariantNames, FromRepr, Debug, PartialEq, Eq, Clone, Copy)]

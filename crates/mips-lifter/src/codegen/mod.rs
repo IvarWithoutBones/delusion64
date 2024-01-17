@@ -19,7 +19,7 @@ use inkwell::{
     },
     AtomicOrdering,
 };
-use mips_decomp::Exception;
+use mips_decomp::{instruction::ParsedInstruction, register, Exception};
 use std::collections::HashMap;
 use tartan_bitfield::bitfield;
 
@@ -528,6 +528,21 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
        Register access helpers, to assist implementing target-specific code.
     */
 
+    pub fn base_plus_offset(
+        &self,
+        ty: IntType<'ctx>,
+        instr: &ParsedInstruction,
+        add_name: &str,
+    ) -> IntValue<'ctx>
+    where
+        <T::Registers as RegisterStorage>::RegisterID: From<register::GeneralPurpose>,
+    {
+        let i16_type = self.context.i16_type();
+        let base = self.read_general_register(ty, instr.base());
+        let offset = self.sign_extend_to(ty, i16_type.const_int(u64::from(instr.offset()), true));
+        self.builder.build_int_add(base, offset, add_name)
+    }
+
     /// If the alignment of atomic load/store instructions is not set LLVM will segfault.
     /// This function sets it to the ABI required alignment.
     fn set_abi_alignment(&self, instr: InstructionValue<'ctx>, ty: &dyn AnyType<'ctx>) {
@@ -591,6 +606,35 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         let registers = &self.globals().registers;
         let ptr = registers.pointer_value(self, &reg);
         self.write_register_pointer(value.as_basic_value_enum(), ptr, reg);
+    }
+
+    /// Read the general-purpose register (GPR) at the given index.
+    /// If the `ty` is less than the register width the value will be truncated, and the lower bits returned.
+    pub fn read_general_register(&self, ty: IntType<'ctx>, index: impl Into<u64>) -> IntValue<'ctx>
+    where
+        <T::Registers as RegisterStorage>::RegisterID: From<register::GeneralPurpose>,
+    {
+        let index = u8::try_from(index.into()).expect("index must be less than 32");
+        let reg = register::GeneralPurpose::from_repr(index).unwrap();
+        if reg == register::GeneralPurpose::Zero {
+            // Register zero is hardwired to zero.
+            ty.const_zero()
+        } else {
+            self.read_register_raw(ty, reg)
+        }
+    }
+
+    /// Writes the given value to the general-purpose register (GPR) at the given index.
+    pub fn write_general_register(&self, index: impl Into<u64>, value: IntValue<'ctx>)
+    where
+        <T::Registers as RegisterStorage>::RegisterID: From<register::GeneralPurpose>,
+    {
+        let index = u8::try_from(index.into()).expect("index must be less than 32");
+        let reg = register::cpu::GeneralPurpose::from_repr(index).unwrap();
+        if reg != register::cpu::GeneralPurpose::Zero {
+            // Register zero is hardwired to zero.
+            self.write_register_raw(reg, value);
+        }
     }
 
     pub fn read_program_counter(&self) -> IntValue<'ctx> {
