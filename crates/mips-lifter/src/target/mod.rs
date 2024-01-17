@@ -33,12 +33,15 @@ macro_rules! impl_reg_index {
 pub mod cpu;
 pub mod rsp;
 
-/// The register ID type for the given target.
-pub(crate) type RegisterID<'ctx, T> =
-    <<<T as Target>::Registers as RegisterStorage>::Globals<'ctx> as Globals<'ctx>>::RegisterID;
+pub(crate) trait RegisterID: Sized + fmt::Debug {
+    const PROGRAM_COUNTER: Self;
+
+    fn name(&self) -> &'static str;
+}
 
 pub(crate) trait RegisterStorage: fmt::Debug {
-    type Globals<'ctx>: Globals<'ctx>;
+    type RegisterID: RegisterID;
+    type Globals<'ctx>: Globals<'ctx, RegisterID = Self::RegisterID>;
 
     fn read_program_counter(&self) -> u64;
 
@@ -50,17 +53,15 @@ pub(crate) trait RegisterStorage: fmt::Debug {
 }
 
 pub(crate) trait Globals<'ctx>: fmt::Debug {
-    type RegisterID: fmt::Debug;
-
-    const PROGRAM_COUNTER_ID: Self::RegisterID;
+    type RegisterID: RegisterID;
 
     fn pointer_value<T: Target>(
         &self,
         codegen: &CodeGen<'ctx, T>,
-        index: &Self::RegisterID,
+        reg: &Self::RegisterID,
     ) -> PointerValue<'ctx>;
 
-    fn is_atomic(&self, bank: Self::RegisterID) -> bool;
+    fn is_atomic(&self, reg: Self::RegisterID) -> bool;
 }
 
 pub(crate) trait Memory: Default {

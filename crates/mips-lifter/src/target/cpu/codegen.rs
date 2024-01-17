@@ -137,6 +137,7 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
     pub fn read_fpu_register<T>(&self, bit_width: impl BitWidth, index: impl Into<u64>) -> T
     where
         T: NumericValue<'ctx>,
+        T::Tag: Clone,
     {
         let index = u8::try_from(index.into()).expect("index must be less than 32");
         let reg = register::cpu::Fpu::from_repr(index).unwrap();
@@ -195,7 +196,7 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
         let reg = register::cpu::GeneralPurpose::from_repr(index).unwrap();
         if reg != register::cpu::GeneralPurpose::Zero {
             // Register zero is hardwired to zero.
-            self.write_register_raw(reg.into(), value);
+            self.write_register_raw(reg, value);
         }
     }
 
@@ -295,10 +296,10 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
             }
         }
 
-        self.write_register_raw(reg.into(), value);
+        self.write_register_raw(reg, value);
         if reg != RESERVED_CP0_REGISTER_LATCH {
             // Any CP0 register write sets the reserved latch as well as the target register.
-            self.write_register_raw(RESERVED_CP0_REGISTER_LATCH.into(), value);
+            self.write_register_raw(RESERVED_CP0_REGISTER_LATCH, value);
         }
     }
 
@@ -323,7 +324,7 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
                     register::cpu::fpu::ControlStatus::WRITE_MASK,
                     "fpu_control_masked",
                 );
-                self.write_register_raw(reg.into(), value);
+                self.write_register_raw(reg, value);
             }
 
             // Read-only
@@ -335,13 +336,13 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
     }
 
     pub fn write_special_register(&self, reg: register::cpu::Special, value: IntValue<'ctx>) {
-        self.write_register_raw(reg.into(), value);
+        self.write_register_raw(reg, value);
     }
 
     /// Write the coprocessor 2 (CP2) register latch.
     /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits returned.
     pub fn write_cp2_register(&self, value: IntValue<'ctx>) {
-        self.write_register_raw(CP2_REGISTER_LATCH.into(), value);
+        self.write_register_raw(CP2_REGISTER_LATCH, value);
     }
 
     pub fn write_register(&self, reg: impl Into<Register>, value: IntValue<'ctx>) {

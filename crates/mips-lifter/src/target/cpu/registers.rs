@@ -10,6 +10,29 @@ use inkwell::{execution_engine::ExecutionEngine, module::Module, values::Pointer
 use mips_decomp::register;
 use std::fmt;
 
+/// A single MIPS VR4300 register.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub(crate) struct RegisterID(pub register::cpu::Register);
+
+impl target::RegisterID for RegisterID {
+    const PROGRAM_COUNTER: Self =
+        Self(register::cpu::Register::Special(register::cpu::Special::Pc));
+
+    fn name(&self) -> &'static str {
+        self.0.name()
+    }
+}
+
+impl<T> From<T> for RegisterID
+where
+    T: Into<register::cpu::Register>,
+{
+    fn from(value: T) -> Self {
+        Self(value.into())
+    }
+}
+
 /// The standard MIPS VR4300 registers.
 #[derive(Default, Clone, PartialEq)]
 pub struct Registers {
@@ -157,6 +180,7 @@ impl fmt::Debug for Registers {
 }
 
 impl target::RegisterStorage for Registers {
+    type RegisterID = RegisterID;
     type Globals<'ctx> = Globals<'ctx>;
 
     fn read_program_counter(&self) -> u64 {
@@ -199,9 +223,6 @@ pub struct Globals<'ctx> {
 impl<'ctx> target::Globals<'ctx> for Globals<'ctx> {
     type RegisterID = RegisterID;
 
-    const PROGRAM_COUNTER_ID: Self::RegisterID =
-        RegisterID(register::cpu::Register::Special(register::cpu::Special::Pc));
-
     fn pointer_value<T: target::Target>(
         &self,
         codegen: &CodeGen<'ctx, T>,
@@ -235,19 +256,5 @@ impl<'ctx> target::Globals<'ctx> for Globals<'ctx> {
             register::cpu::Register::Fpu(_) => self.fpu.is_atomic(),
             register::cpu::Register::FpuControl(_) => self.fpu_control.is_atomic(),
         }
-    }
-}
-
-/// A singular MIPS VR4300 register.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(transparent)]
-pub(crate) struct RegisterID(pub register::cpu::Register);
-
-impl<T> From<T> for RegisterID
-where
-    T: Into<register::cpu::Register>,
-{
-    fn from(value: T) -> Self {
-        Self(value.into())
     }
 }

@@ -2,6 +2,27 @@ use crate::{runtime::register_bank::RegisterBankMapping, target, RegIndex, Regis
 use mips_decomp::register::rsp as register;
 use std::fmt;
 
+/// A single RSP register.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub(crate) struct RegisterID(register::Register);
+
+impl target::RegisterID for RegisterID {
+    const PROGRAM_COUNTER: Self = Self(register::Register::Special(
+        register::Special::ProgramCounter,
+    ));
+
+    fn name(&self) -> &'static str {
+        self.0.name()
+    }
+}
+
+impl<T: Into<register::Register>> From<T> for RegisterID {
+    fn from(value: T) -> Self {
+        Self(value.into())
+    }
+}
+
 #[derive(Default)]
 pub struct Registers {
     pub general_purpose: RegisterBank<u32, { register::GeneralPurpose::count() }>,
@@ -136,6 +157,7 @@ impl fmt::Debug for Registers {
 }
 
 impl target::RegisterStorage for Registers {
+    type RegisterID = RegisterID;
     type Globals<'ctx> = RegisterGlobals<'ctx>;
 
     fn read_program_counter(&self) -> u64 {
@@ -167,56 +189,38 @@ pub(crate) struct RegisterGlobals<'ctx> {
 }
 
 impl<'ctx> target::Globals<'ctx> for RegisterGlobals<'ctx> {
-    type RegisterID = register::Register;
-
-    const PROGRAM_COUNTER_ID: Self::RegisterID =
-        register::Register::Special(register::Special::ProgramCounter);
+    type RegisterID = RegisterID;
 
     fn pointer_value<T: target::Target>(
         &self,
         codegen: &crate::codegen::CodeGen<'ctx, T>,
-        index: &Self::RegisterID,
+        reg: &Self::RegisterID,
     ) -> inkwell::values::PointerValue<'ctx> {
         let i32_type = codegen.context.i32_type();
         let i64_type = codegen.context.i64_type();
-        match index {
-            register::Register::GeneralPurpose(_) => unsafe {
-                codegen.builder.build_in_bounds_gep(
-                    i32_type,
-                    self.general_purpose.pointer_value(),
-                    &[i32_type.const_int(index.to_repr() as u64, false)],
-                    &format!("{index:?}_"),
-                )
-            },
-            register::Register::Control(_) => unsafe {
-                codegen.builder.build_in_bounds_gep(
-                    i32_type,
-                    self.control.pointer_value(),
-                    &[i32_type.const_int(index.to_repr() as u64, false)],
-                    &format!("{index:?}_"),
-                )
-            },
-            register::Register::Vector(_) => unsafe {
-                codegen.builder.build_in_bounds_gep(
-                    i64_type,
-                    self.vector.pointer_value(),
-                    &[i64_type.const_int(index.to_repr() as u64, false)],
-                    &format!("{index:?}_"),
-                )
-            },
-            register::Register::Special(_) => unsafe {
-                codegen.builder.build_in_bounds_gep(
-                    i64_type,
-                    self.special.pointer_value(),
-                    &[i64_type.const_int(index.to_repr() as u64, false)],
-                    &format!("{index:?}_"),
-                )
-            },
+        let i128_type = codegen.context.i128_type();
+
+        let (ty, ptr) = match reg.0 {
+            register::Register::Control(_) => (i32_type, self.control.pointer_value()),
+            register::Register::Vector(_) => (i128_type, self.vector.pointer_value()),
+            register::Register::Special(_) => (i64_type, self.special.pointer_value()),
+            register::Register::GeneralPurpose(_) => {
+                (i32_type, self.general_purpose.pointer_value())
+            }
+        };
+
+        unsafe {
+            codegen.builder.build_in_bounds_gep(
+                ty,
+                ptr,
+                &[ty.const_int(reg.0.to_repr() as u64, false)],
+                reg.0.name(),
+            )
         }
     }
 
     fn is_atomic(&self, reg: Self::RegisterID) -> bool {
-        match reg {
+        match reg.0 {
             register::Register::GeneralPurpose(_) => self.general_purpose.is_atomic(),
             register::Register::Control(_) => self.control.is_atomic(),
             register::Register::Vector(_) => self.vector.is_atomic(),

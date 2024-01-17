@@ -12,10 +12,10 @@ use inkwell::{
     context::Context,
     execution_engine::ExecutionEngine,
     module::Module,
-    types::{BasicType, FloatType, IntType},
+    types::{AnyType, BasicType, FloatType, IntType},
     values::{
         BasicValue, BasicValueEnum, CallSiteValue, FloatValue, FunctionValue, GlobalValue,
-        IntValue, PointerValue,
+        InstructionValue, IntValue, PointerValue,
     },
     AtomicOrdering,
 };
@@ -528,22 +528,31 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
        Register access helpers, to assist implementing target-specific code.
     */
 
+    /// If the alignment of atomic load/store instructions is not set LLVM will segfault.
+    /// This function sets it to the ABI required alignment.
+    fn set_abi_alignment(&self, instr: InstructionValue<'ctx>, ty: &dyn AnyType<'ctx>) {
+        let align = self
+            .execution_engine
+            .get_target_data()
+            .get_abi_alignment(ty);
+        instr.set_alignment(align).expect("alignment is valid");
+    }
+
     pub(crate) fn read_register_pointer(
         &self,
         ptr: PointerValue<'ctx>,
-        ty: impl BasicType<'ctx>,
-        reg: RegisterID<'ctx, T>,
+        ty: impl BasicType<'ctx> + Clone,
+        reg: <T::Registers as RegisterStorage>::RegisterID,
     ) -> BasicValueEnum<'ctx> {
-        // TODO: get the registers name
-        let value = self.builder.build_load(ty, ptr, "reg_name");
+        let name = &format!("{}_", reg.name());
+        let value = self.builder.build_load(ty.clone(), ptr, name);
         if self.globals().registers.is_atomic(reg) {
             let i = value
                 .as_instruction_value()
                 .expect("build_load returns an InstructionValue");
-            i.set_atomic_ordering(AtomicOrdering::Unordered)
+            i.set_atomic_ordering(AtomicOrdering::Monotonic)
                 .expect("load instructions can be atomic");
-            // If the alignment is not set LLVM will segfault. Underestimating the alignment produces slower code, but is safe.
-            i.set_alignment(1).expect("alignment is valid");
+            self.set_abi_alignment(i, &ty);
         }
         value
     }
@@ -552,21 +561,20 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         &self,
         value: BasicValueEnum<'ctx>,
         ptr: PointerValue<'ctx>,
-        reg: RegisterID<'ctx, T>,
+        reg: <T::Registers as RegisterStorage>::RegisterID,
     ) {
-        let v = self.builder.build_store(ptr, value);
+        let i = self.builder.build_store(ptr, value);
         if self.globals().registers.is_atomic(reg) {
-            v.set_atomic_ordering(AtomicOrdering::Unordered)
+            i.set_atomic_ordering(AtomicOrdering::Monotonic)
                 .expect("store instructions can be atomic");
-            // If the alignment is not set LLVM will segfault. Underestimating the alignment produces slower code, but is safe.
-            v.set_alignment(1).expect("alignment is valid");
+            self.set_abi_alignment(i, &value.get_type());
         }
     }
 
     pub(crate) fn read_register_raw(
         &self,
         ty: IntType<'ctx>,
-        reg: impl Into<RegisterID<'ctx, T>>,
+        reg: impl Into<<T::Registers as RegisterStorage>::RegisterID>,
     ) -> IntValue<'ctx> {
         let reg = reg.into();
         let registers = &self.globals().registers;
@@ -574,19 +582,24 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         self.read_register_pointer(ptr, ty, reg).into_int_value()
     }
 
-    pub(crate) fn write_register_raw(&self, reg: RegisterID<'ctx, T>, value: IntValue<'ctx>) {
+    pub(crate) fn write_register_raw(
+        &self,
+        reg: impl Into<<T::Registers as RegisterStorage>::RegisterID>,
+        value: IntValue<'ctx>,
+    ) {
+        let reg = reg.into();
         let registers = &self.globals().registers;
         let ptr = registers.pointer_value(self, &reg);
         self.write_register_pointer(value.as_basic_value_enum(), ptr, reg);
     }
 
     pub fn read_program_counter(&self) -> IntValue<'ctx> {
-        let pc_id = <<T::Registers as target::RegisterStorage>::Globals<'ctx> as target::Globals>::PROGRAM_COUNTER_ID;
+        let pc_id = <<T::Registers as target::RegisterStorage>::RegisterID as target::RegisterID>::PROGRAM_COUNTER;
         self.read_register_raw(self.context.i64_type(), pc_id)
     }
 
     pub fn write_program_counter(&self, value: u64) {
-        let pc_id = <<T::Registers as target::RegisterStorage>::Globals<'ctx> as target::Globals>::PROGRAM_COUNTER_ID;
+        let pc_id = <<T::Registers as target::RegisterStorage>::RegisterID as target::RegisterID>::PROGRAM_COUNTER;
         let value = self.context.i64_type().const_int(value, false);
         self.write_register_raw(pc_id, value);
     }

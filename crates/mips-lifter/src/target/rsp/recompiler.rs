@@ -33,9 +33,7 @@ pub(crate) fn compile_instruction(codegen: &CodeGen<Rsp>, instr: &ParsedInstruct
             );
             let result = codegen.builder.build_left_shift(target, shift, "sll_shift");
             codegen.write_register_raw(
-                register::GeneralPurpose::from_repr(instr.rd() as u8)
-                    .unwrap()
-                    .into(),
+                register::GeneralPurpose::from_repr(instr.rd() as u8).unwrap(),
                 result,
             );
         }
@@ -50,9 +48,7 @@ pub(crate) fn compile_instruction(codegen: &CodeGen<Rsp>, instr: &ParsedInstruct
 
             let result = codegen.builder.build_or(source, immediate, "ori_res");
             codegen.write_register_raw(
-                register::GeneralPurpose::from_repr(instr.rt() as u8)
-                    .unwrap()
-                    .into(),
+                register::GeneralPurpose::from_repr(instr.rt() as u8).unwrap(),
                 result,
             );
         }
