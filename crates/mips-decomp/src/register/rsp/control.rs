@@ -1,9 +1,20 @@
-use crate::MemoryBank;
-use n64_common::{
-    utils::tartan_bitfield::{bitfield, bitfield_without_debug},
-    InterruptDevice, InterruptRequest,
-};
+//! The RSP's control registers, corresponding to a value in [`Control`].
+
+use super::Control;
 use std::fmt;
+use tartan_bitfield::{bitfield, bitfield_without_debug};
+
+/// The bank of memory accessed by a DMA transfer
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum MemoryBank {
+    IMem,
+    DMem,
+}
+
+impl MemoryBank {
+    /// The sizes of a bank of memory, in bytes.
+    pub const LEN: usize = 0x1000;
+}
 
 bitfield_without_debug! {
     /// Address in IMEM/DMEM for a DMA transfer.
@@ -15,7 +26,7 @@ bitfield_without_debug! {
 }
 
 impl DmaSpAddress {
-    pub const OFFSET: usize = 0x00;
+    pub const OFFSET: usize = Control::DmaSpAddress.offset();
 
     /// DMEM or IMEM address used in SP DMAs.
     #[must_use]
@@ -23,7 +34,7 @@ impl DmaSpAddress {
         self.unmasked_address() & !0b111
     }
 
-    /// Bank accessed by SP DMA transfers
+    /// The memory bank accessed by SP DMA transfers.
     #[must_use]
     pub fn bank(self) -> MemoryBank {
         if self.raw_bank() {
@@ -33,9 +44,10 @@ impl DmaSpAddress {
         }
     }
 
+    /// Increment the address by 8 bytes, wrapping if necessary.
     pub fn increment(&mut self) {
         self.set_unmasked_address(self.address() + 8);
-        if self.address() as usize > self.bank().len() {
+        if self.address() as usize > MemoryBank::LEN {
             // Overflows wrap around within the same bank
             self.set_unmasked_address(0);
         }
@@ -60,14 +72,15 @@ bitfield_without_debug! {
 }
 
 impl DmaRdramAddress {
-    pub const OFFSET: usize = 0x04;
+    pub const OFFSET: usize = Control::DmaRdramAddress.offset();
 
-    /// RDRAM address used in SP DMAs
+    /// RDRAM address used in SP DMAs.
     #[must_use]
     pub fn address(self) -> u32 {
         self.unmasked_address() & !0b111
     }
 
+    /// Increment the address by 8 bytes.
     pub fn increment(&mut self) {
         self.set_unmasked_address(self.address() + 8);
     }
@@ -124,23 +137,23 @@ impl DmaLength {
 pub struct DmaReadLength(DmaLength);
 
 impl DmaReadLength {
-    pub const OFFSET: usize = 0x08;
+    pub const OFFSET: usize = Control::DmaReadLength.offset();
 }
 
 impl DmaReadLength {
-    /// Number of bytes to transfer for each row minus 1
+    /// Number of bytes to transfer for each row, minus 1.
     #[must_use]
     pub fn length(self) -> u32 {
         self.0.length()
     }
 
-    /// Number of bytes to skip in RDRAM after each row
+    /// Number of bytes to skip in RDRAM after each row.
     #[must_use]
     pub fn skip(self) -> u32 {
         self.0.skip()
     }
 
-    /// Decrement the length counter by 8 bytes
+    /// Decrement the length counter by 8 bytes.
     pub fn decrement(&mut self) {
         self.0.decrement();
     }
@@ -175,7 +188,7 @@ impl From<DmaReadLength> for u32 {
 pub struct DmaWriteLength(DmaLength);
 
 impl DmaWriteLength {
-    pub const OFFSET: usize = 0x0C;
+    pub const OFFSET: usize = Control::DmaWriteLength.offset();
 }
 
 impl DmaWriteLength {
@@ -225,6 +238,7 @@ impl From<DmaWriteLength> for u32 {
 pub struct Signals([bool; 8]);
 
 impl Signals {
+    /// Write the given value from [`StatusWrite::raw_signals`] as the signals field of [`Status`].
     fn write(mut self, raw: u16) -> Self {
         // When writing, two bits are used per signal, if both are set no change occurs.
         // 0: Clear signal
@@ -263,11 +277,18 @@ impl From<Signals> for u8 {
     }
 }
 
+/// A request to raise or lower an interrupt.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum InterruptRequest {
+    Raise,
+    Lower,
+}
+
 bitfield! {
     /// The RSP status register.
-    /// This definition is only accurate when reading. When writing, use the [`SpStatus::write`] method to correctly apply changes.
+    /// This definition is only accurate when reading. When writing, use [`SpStatusWrite`] or the [`SpStatus::write`] method to correctly apply changes.
     /// See [n64brew](https://n64brew.dev/wiki/Reality_Signal_Processor/Interface#SP_STATUS) for more information.
-    pub struct SpStatus(u32) {
+    pub struct StatusRead(u32) {
         /// Indicates whether the RSP is currently running, or halted
         [0] pub halted,
         /// Set when the RSP executes a BREAK instruction
@@ -288,41 +309,49 @@ bitfield! {
 }
 
 bitfield! {
-    /// This definition is only accurate when writing.
+    /// The RSP status register.
+    /// This definition is only accurate when writing. When reading, use [`SpStatus`] instead.
     /// See [n64brew](https://n64brew.dev/wiki/Reality_Signal_Processor/Interface#SP_STATUS) for more information.
-    struct SpStatusWrite(u32) {
+    pub struct StatusWrite(u32) {
         /// Start running RSP code from the current RSP PC, and clear the [`SpStatus::halted`] flag
-        [0] clear_halted,
-        /// Pause execution of RSP code, and set the [`SpStatus::halted`] flag
-        [1] set_halted,
-        /// Clear the [`SpStatus::broke`] flag
-        [2] clear_broke,
+        [0] pub clear_halted,
+        /// Pause execution of RSP code, and set the [`SpStatus::halted`] pub flag
+        [1] pub set_halted,
+        /// Clear the [`SpStatus::broke`] pub flag
+        [2] pub clear_broke,
         /// Acknowledge an RSP MI interrupt
-        [3] clear_interrupt,
+        [3] pub clear_interrupt,
         /// Manually trigger an RSP MI interrupt
-        [4] set_interrupt,
-        /// Disable single-step mode, and clear the [`SpStatus::single_step`] flag
-        [5] clear_single_step,
-        /// Enable single-step mode, and set the [`SpStatus::single_step`] flag. In single-step mode, RSP auto-halts itself after a single opcode is ran
-        [6] set_single_step,
+        [4] pub set_interrupt,
+        /// Disable single-step mode, and clear the [`SpStatus::single_step`] pub flag
+        [5] pub clear_single_step,
+        /// Enable single-step mode, and set the [`SpStatus::single_step`] pub flag. In single-step mode, RSP auto-halts itself after a single opcode is ran
+        [6] pub set_single_step,
         /// Disable triggering an RSP MI interrupt when the BREAK instruction is ran
-        [7] clear_interrupt_break,
+        [7] pub clear_interrupt_break,
         /// Enable triggering an RSP MI interrupt when the BREAK instruction is ran
-        [8] set_interrupt_break,
+        [8] pub set_interrupt_break,
         /// Set or clear state bits that can freely be used by software. Must be written using [`Signals::write`]
-        [9..=24] raw_signals: u16,
+        [9..=24] pub raw_signals: u16,
     }
 }
 
-impl SpStatus {
-    pub const OFFSET: usize = 0x10;
+impl StatusRead {
+    pub const OFFSET: usize = Control::Status.offset();
 
+    #[must_use]
     pub fn new() -> Self {
         Self::default().with_halted(true)
     }
 
-    pub fn write(&mut self, raw: u32) -> Option<InterruptRequest> {
-        let x = SpStatusWrite(raw);
+    #[must_use]
+    pub fn raw(&self) -> u32 {
+        self.0
+    }
+
+    /// Write the given value into the register, correctly applying changes.
+    pub fn write(&mut self, x: impl Into<StatusWrite>) -> Option<InterruptRequest> {
+        let x = x.into();
         self.set_signals(self.signals().write(x.raw_signals()));
 
         if x.clear_broke() {
@@ -347,9 +376,9 @@ impl SpStatus {
         }
 
         if x.clear_interrupt() && !x.set_interrupt() {
-            Some(InterruptRequest::Lower(InterruptDevice::Rsp))
+            Some(InterruptRequest::Lower)
         } else if x.set_interrupt() && !x.clear_interrupt() {
-            Some(InterruptRequest::Raise(InterruptDevice::Rsp))
+            Some(InterruptRequest::Raise)
         } else {
             None
         }
@@ -359,153 +388,51 @@ impl SpStatus {
 bitfield! {
     /// Report whether there is a pending DMA transfer.
     /// See [n64brew](https://n64brew.dev/wiki/Reality_Signal_Processor/Interface#SP_DMA_FULL) for more information.
-    pub struct SpDmaFull(u32) {
-        /// Mirror of [`SpStatus::dma_full`]
+    pub struct DmaFull(u32) {
+        /// Mirror of [`StatusRead::dma_full`]
         [0] pub dma_full,
     }
 }
 
-impl SpDmaFull {
-    pub const OFFSET: usize = 0x14;
+impl DmaFull {
+    pub const OFFSET: usize = Control::DmaFull.offset();
 }
 
 bitfield! {
     /// Report whether there is a DMA transfer in progress.
     /// See [n64brew](https://n64brew.dev/wiki/Reality_Signal_Processor/Interface#SP_DMA_BUSY) for more information.
-    pub struct SpDmaBusy(u32) {
-        /// Mirror of [`SpStatus::dma_busy`]
+    pub struct DmaBusy(u32) {
+        /// Mirror of [`StatusRead::dma_busy`]
         [0] pub dma_busy,
     }
 }
 
-impl SpDmaBusy {
-    pub const OFFSET: usize = 0x18;
+impl DmaBusy {
+    pub const OFFSET: usize = Control::DmaBusy.offset();
 }
 
 bitfield! {
     /// Register to assist implementing a simple mutex between VR4300 and RSP.
     /// See [n64brew](https://n64brew.dev/wiki/Reality_Signal_Processor/Interface#SP_SEMAPHORE) for more information.
-    pub struct SpSemaphore(u32) {
+    pub struct Semaphore(u32) {
         /// After each read, this is always automatically set to true while returning the previous value.
         /// When writing, it is set to false, regardless of the value written.
-        [0] pub semaphore,
+        [0] semaphore,
     }
 }
 
-impl SpSemaphore {
-    pub const OFFSET: usize = 0x1C;
+impl Semaphore {
+    pub const OFFSET: usize = Control::Semaphore.offset();
 
-    pub fn write(&mut self, _value: u32) {
+    /// Resets the semaphore to false.
+    pub fn write(&mut self) {
         self.set_semaphore(false);
     }
 
+    /// Returns the semaphore, and sets it to true.
     pub fn read(&mut self) -> bool {
         let res = self.semaphore();
         self.set_semaphore(true);
         res
-    }
-}
-
-bitfield! {
-    /// The memory-mapped RSP program counter.
-    /// See [n64brew](https://n64brew.dev/wiki/Reality_Signal_Processor/Interface#RSP_PC_register) for more information.
-    pub struct SpProgramCounter(u32) {
-        [0..=11] unmasked_pc: u32,
-    }
-}
-
-impl SpProgramCounter {
-    pub const OFFSET: usize = 0x40000; // 0x0408_0000
-
-    pub fn write(&mut self, value: u32) {
-        self.set_unmasked_pc(value & !0b11);
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn read_semaphore() {
-        let mut semaphore = SpSemaphore::default();
-        assert!(!semaphore.read());
-        assert!(semaphore.read());
-    }
-
-    #[test]
-    fn write_signals() {
-        let set_all_raw = 0b1010_1010_1010_1010;
-        let mut signals = Signals([false; 8]);
-        signals = signals.write(set_all_raw);
-        assert_eq!(signals.0, [true; 8]);
-
-        let clear_all_raw = 0b0101_0101_0101_0101;
-        let mut signals = Signals([false; 8]);
-        signals = signals.write(clear_all_raw);
-        assert_eq!(signals.0, [false; 8]);
-
-        let set_msb_raw = 0b1000_0000_0000_0000;
-        let mut signals = Signals([false; 8]);
-        signals = signals.write(set_msb_raw);
-        assert_eq!(
-            signals.0,
-            [false, false, false, false, false, false, false, true]
-        );
-    }
-
-    #[test]
-    fn write_sp_status() {
-        let mut status = SpStatus::default().with_interrupt_break(true);
-        let new = SpStatusWrite::default().with_clear_interrupt_break(true);
-        let maybe_irq_change = status.write(new.into());
-        assert!(!status.interrupt_break());
-        assert!(maybe_irq_change.is_none());
-
-        let mut status = SpStatus::default();
-        let new = SpStatusWrite::default().with_set_interrupt_break(true);
-        let maybe_irq_change = status.write(new.into());
-        assert!(status.interrupt_break());
-        assert!(maybe_irq_change.is_none());
-
-        let mut status = SpStatus::default();
-        let new = SpStatusWrite::default().with_set_interrupt(true);
-        let maybe_irq_change = status.write(new.into());
-        assert!(maybe_irq_change == Some(InterruptRequest::Raise(InterruptDevice::Rsp)));
-
-        let mut status = SpStatus::default();
-        let new = SpStatusWrite::default().with_clear_interrupt(true);
-        let maybe_irq_change = status.write(new.into());
-        assert!(maybe_irq_change == Some(InterruptRequest::Lower(InterruptDevice::Rsp)));
-
-        let mut status = SpStatus::default().with_interrupt_break(true);
-        let new = SpStatusWrite::default().with_set_interrupt(true);
-        let maybe_irq_change = status.write(new.into());
-        assert!(status.interrupt_break());
-        assert!(maybe_irq_change == Some(InterruptRequest::Raise(InterruptDevice::Rsp)));
-    }
-
-    #[test]
-    fn dma_len() {
-        for i in 0..=7 {
-            let read = DmaReadLength::default().0.with_unmasked_length(i);
-            assert_eq!(read.length(), 8);
-            let write = DmaWriteLength::default().0.with_unmasked_length(i);
-            assert_eq!(write.length(), 8);
-        }
-
-        for i in 8..=15 {
-            let read = DmaReadLength::default().0.with_unmasked_length(i);
-            assert_eq!(read.length(), 16);
-            let write = DmaWriteLength::default().0.with_unmasked_length(i);
-            assert_eq!(write.length(), 16);
-        }
-
-        for i in 16..=23 {
-            let read = DmaReadLength::default().0.with_unmasked_length(i);
-            assert_eq!(read.length(), 24);
-            let write = DmaWriteLength::default().0.with_unmasked_length(i);
-            assert_eq!(write.length(), 24);
-        }
     }
 }

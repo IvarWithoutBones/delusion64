@@ -1,7 +1,7 @@
 use crate::{
     codegen::CodeGen,
     runtime::RuntimeFunction,
-    target::{cpu::codegen::Overflow, Cpu},
+    target::{cpu::codegen::Overflow, cpu::Cpu},
 };
 use inkwell::{
     values::{FloatValue, IntValue},
@@ -110,7 +110,7 @@ fn evaluate_jump<'ctx>(
 
         Mnenomic::Jal => {
             // Jump to target address, stores return address in r31 (ra)
-            codegen.write_register(register::GeneralPurpose::Ra, return_address);
+            codegen.write_register(register::cpu::GeneralPurpose::Ra, return_address);
             JumpTarget::Constant(jump_address(delay_slot_pc, instr.immediate()))
         }
 
@@ -126,7 +126,7 @@ fn evaluate_jump<'ctx>(
                 || {
                     // The exception occurs during the instruction fetch stage after finishing the jump instruction.
                     // We set PC to the address of the instruction that caused the exception, so EPC is set accordingly.
-                    codegen.write_register(register::Special::Pc, source);
+                    codegen.write_register(register::cpu::Special::Pc, source);
                     codegen.throw_exception(Exception::AddressLoad, None, Some(source));
                 },
             );
@@ -183,7 +183,7 @@ fn evaluate_branch<'ctx>(
         Mnenomic::Bgezal | Mnenomic::Bgezall => {
             // If rs is greater than or equal to zero, branch to address. Unconditionally stores return address to r31 (ra).
             let return_address = i64_type.const_int(delay_slot_pc + INSTRUCTION_SIZE as u64, false);
-            codegen.write_register(register::GeneralPurpose::Ra, return_address);
+            codegen.write_register(register::cpu::GeneralPurpose::Ra, return_address);
             let source = codegen.read_general_register(i64_type, instr.rs());
             (IntPredicate::SGE, source, i64_type.const_zero())
         }
@@ -197,7 +197,7 @@ fn evaluate_branch<'ctx>(
         Mnenomic::Bltzal | Mnenomic::Bltzall => {
             // If rs is less than zero, branch to address. Unconditionally stores return address to r31 (ra).
             let return_address = i64_type.const_int(delay_slot_pc + INSTRUCTION_SIZE as u64, false);
-            codegen.write_register(register::GeneralPurpose::Ra, return_address);
+            codegen.write_register(register::cpu::GeneralPurpose::Ra, return_address);
             let source = codegen.read_general_register(i64_type, instr.rs());
             (IntPredicate::SLT, source, i64_type.const_zero())
         }
@@ -210,16 +210,18 @@ fn evaluate_branch<'ctx>(
 
         Mnenomic::Bc1t | Mnenomic::Bc1tl => {
             // If the last floating-point compare is true, branch to address.
-            let source = codegen.read_register(i64_type, register::Fpu::F31);
-            let mask = i64_type.const_int(1 << register::fpu::ControlStatus::CONDITION_BIT, false);
+            let source = codegen.read_register(i64_type, register::cpu::Fpu::F31);
+            let mask =
+                i64_type.const_int(1 << register::cpu::fpu::ControlStatus::CONDITION_BIT, false);
             let masked = codegen.builder.build_and(source, mask, "bc1t_mask");
             (IntPredicate::NE, masked, i64_type.const_zero())
         }
 
         Mnenomic::Bc1f | Mnenomic::Bc1fl => {
             // If the last floating-point compare is false, branch to address.
-            let source = codegen.read_register(i64_type, register::Fpu::F31);
-            let mask = i64_type.const_int(1 << register::fpu::ControlStatus::CONDITION_BIT, false);
+            let source = codegen.read_register(i64_type, register::cpu::Fpu::F31);
+            let mask =
+                i64_type.const_int(1 << register::cpu::fpu::ControlStatus::CONDITION_BIT, false);
             let masked = codegen.builder.build_and(source, mask, "bc1t_mask");
             (IntPredicate::EQ, masked, i64_type.const_zero())
         }
@@ -383,9 +385,9 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Eret => {
             // Return from interrupt, exception, or error exception. Unsets the LL bit.
-            codegen.write_register(register::Special::LoadLink, bool_type.const_zero());
+            codegen.write_register(register::cpu::Special::LoadLink, bool_type.const_zero());
 
-            let status = codegen.read_register(i64_type, register::Cp0::Status);
+            let status = codegen.read_register(i64_type, register::cpu::Cp0::Status);
             let erl_mask = i64_type.const_int(0b100, false);
             let erl_set = {
                 let status = codegen.builder.build_and(status, erl_mask, "eret_erl_mask");
@@ -399,18 +401,18 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                     // Clear the ERL bit of the CP0 register Status to zero.
                     let not_erl = erl_mask.const_not();
                     let new_status = codegen.builder.build_and(status, not_erl, "eret_clear_erl");
-                    codegen.write_register(register::Cp0::Status, new_status);
+                    codegen.write_register(register::cpu::Cp0::Status, new_status);
                     // Load the contents of the CP0 register ErrorEPC to the PC
-                    let error_epc = codegen.read_register(i64_type, register::Cp0::ErrorEPC);
+                    let error_epc = codegen.read_register(i64_type, register::cpu::Cp0::ErrorEPC);
                     codegen.build_dynamic_jump(error_epc);
                 },
                 || {
                     // Clear the EXL bit of the CP0 register Status to zero.
                     let not_exl = i64_type.const_int(0b10, false).const_not();
                     let new_status = codegen.builder.build_and(status, not_exl, "eret_clear_exl");
-                    codegen.write_register(register::Cp0::Status, new_status);
+                    codegen.write_register(register::cpu::Cp0::Status, new_status);
                     // Load the contents of the CP0 register EPC to the PC
-                    let epc = codegen.read_register(i64_type, register::Cp0::EPC);
+                    let epc = codegen.read_register(i64_type, register::cpu::Cp0::EPC);
                     codegen.build_dynamic_jump(epc);
                 },
             );
@@ -424,13 +426,13 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Tlbwi => {
             // Stores the contents of EntryHi and EntryLo registers into the TLB entry pointed at by the Index register
-            let index = codegen.read_register(i64_type, register::Cp0::Index);
+            let index = codegen.read_register(i64_type, register::cpu::Cp0::Index);
             env_call!(codegen, RuntimeFunction::WriteTlbEntry, [index]);
         }
 
         Mnenomic::Tlbr => {
             // Loads EntryHi and EntryLo registers with the TLB entry pointed at by the Index register.
-            let index = codegen.read_register(i64_type, register::Cp0::Index);
+            let index = codegen.read_register(i64_type, register::cpu::Cp0::Index);
             env_call!(codegen, RuntimeFunction::ReadTlbEntry, [index]);
         }
 
@@ -446,10 +448,10 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                     let enable = {
                         let value = {
                             let shift = i64_type
-                                .const_int(register::fpu::ControlStatus::ENABLE_SHIFT, false);
+                                .const_int(register::cpu::fpu::ControlStatus::ENABLE_SHIFT, false);
                             let value = codegen.build_mask(
                                 target,
-                                register::fpu::ControlStatus::ENABLE_MASK,
+                                register::cpu::fpu::ControlStatus::ENABLE_MASK,
                                 "ctc1_control_status_enable_",
                             );
                             codegen.builder.build_right_shift(
@@ -462,7 +464,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
                         // Unimplemented operation is always enabled, there is no control bit.
                         let unimplemented = i64_type.const_int(
-                            1 << register::fpu::ControlStatus::UNIMPLEMENTED_OPERATION_OFFSET,
+                            1 << register::cpu::fpu::ControlStatus::UNIMPLEMENTED_OPERATION_OFFSET,
                             false,
                         );
                         codegen.builder.build_or(
@@ -473,11 +475,11 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                     };
 
                     let cause = {
-                        let shift =
-                            i64_type.const_int(register::fpu::ControlStatus::CAUSE_SHIFT, false);
+                        let shift = i64_type
+                            .const_int(register::cpu::fpu::ControlStatus::CAUSE_SHIFT, false);
                         let value = codegen.build_mask(
                             target,
-                            register::fpu::ControlStatus::CAUSE_MASK,
+                            register::cpu::fpu::ControlStatus::CAUSE_MASK,
                             "ctc1_control_status_cause_",
                         );
                         codegen.builder.build_right_shift(
@@ -552,13 +554,13 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
         Mnenomic::Mtlo => {
             // Copy contents of rs to register LO
             let target = codegen.read_general_register(i64_type, instr.rs());
-            codegen.write_register(register::Special::Lo, target);
+            codegen.write_register(register::cpu::Special::Lo, target);
         }
 
         Mnenomic::Mthi => {
             // Copy contents of rs to register HI
             let target = codegen.read_general_register(i64_type, instr.rs());
-            codegen.write_register(register::Special::Hi, target);
+            codegen.write_register(register::cpu::Special::Hi, target);
         }
 
         Mnenomic::Mtc0 => {
@@ -654,7 +656,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Sc => {
             // If LL bit is set, stores contents of rt, to memory address (base + offset), truncated to 32-bits
-            let ll_bit = codegen.read_register(bool_type, register::Special::LoadLink);
+            let ll_bit = codegen.read_register(bool_type, register::cpu::Special::LoadLink);
             codegen.build_if("sc_ll_set", cmp!(codegen, ll_bit == 1), || {
                 let addr = codegen.base_plus_offset(instr, "sc_addr");
                 let value = codegen.read_general_register(i32_type, instr.rt());
@@ -664,7 +666,7 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
         Mnenomic::Scd => {
             // If LL bit is set, stores contents of rt, to memory address (base + offset)
-            let ll_bit = codegen.read_register(bool_type, register::Special::LoadLink);
+            let ll_bit = codegen.read_register(bool_type, register::cpu::Special::LoadLink);
             codegen.build_if("scd_ll_set", cmp!(codegen, ll_bit == 1), || {
                 let addr = codegen.base_plus_offset(instr, "scd_addr");
                 let value = codegen.read_general_register(i64_type, instr.rt());
@@ -678,7 +680,10 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
             let value = codegen.read_memory(i32_type, addr);
             let sign_extended = codegen.sign_extend_to(i64_type, value);
             codegen.write_general_register(instr.rt(), sign_extended);
-            codegen.write_register(register::Special::LoadLink, bool_type.const_int(1, false));
+            codegen.write_register(
+                register::cpu::Special::LoadLink,
+                bool_type.const_int(1, false),
+            );
         }
 
         Mnenomic::And => {
@@ -757,14 +762,19 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                 "div_zero_divisor",
                 cmp!(codegen, target == 0),
                 || {
-                    codegen.write_register(register::Special::Hi, source);
+                    codegen.write_register(register::cpu::Special::Hi, source);
                     codegen.build_if_else(
                         "div_dividend_positive",
                         cmps!(codegen, source >= 0),
-                        || codegen.write_register(register::Special::Lo, i64_type.const_all_ones()),
                         || {
                             codegen.write_register(
-                                register::Special::Lo,
+                                register::cpu::Special::Lo,
+                                i64_type.const_all_ones(),
+                            );
+                        },
+                        || {
+                            codegen.write_register(
+                                register::cpu::Special::Lo,
                                 i64_type.const_int(1, false),
                             );
                         },
@@ -791,8 +801,8 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                         ),
                     );
 
-                    codegen.write_register(register::Special::Lo, quotient);
-                    codegen.write_register(register::Special::Hi, remainder);
+                    codegen.write_register(register::cpu::Special::Lo, quotient);
+                    codegen.write_register(register::cpu::Special::Hi, remainder);
                 },
             );
         }
@@ -806,9 +816,9 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                 "divu_zero_divisor",
                 cmp!(codegen, target == 0),
                 || {
-                    codegen.write_register(register::Special::Lo, i64_type.const_all_ones());
+                    codegen.write_register(register::cpu::Special::Lo, i64_type.const_all_ones());
                     codegen.write_register(
-                        register::Special::Hi,
+                        register::cpu::Special::Hi,
                         codegen.sign_extend_to(i64_type, source),
                     );
                 },
@@ -833,8 +843,8 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                         ),
                     );
 
-                    codegen.write_register(register::Special::Lo, quotient);
-                    codegen.write_register(register::Special::Hi, remainder);
+                    codegen.write_register(register::cpu::Special::Lo, quotient);
+                    codegen.write_register(register::cpu::Special::Hi, remainder);
                 },
             );
         }
@@ -848,14 +858,19 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                 "ddiv_valid_divisor",
                 cmp!(codegen, target == 0),
                 || {
-                    codegen.write_register(register::Special::Hi, source);
+                    codegen.write_register(register::cpu::Special::Hi, source);
                     codegen.build_if_else(
                         "ddiv_dividend_positive",
                         cmps!(codegen, source >= 0),
-                        || codegen.write_register(register::Special::Lo, i64_type.const_all_ones()),
                         || {
                             codegen.write_register(
-                                register::Special::Lo,
+                                register::cpu::Special::Lo,
+                                i64_type.const_all_ones(),
+                            );
+                        },
+                        || {
+                            codegen.write_register(
+                                register::cpu::Special::Lo,
                                 i64_type.const_int(1, false),
                             );
                         },
@@ -872,8 +887,9 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                         "ddiv_dividend_min_int",
                         is_min,
                         || {
-                            codegen.write_register(register::Special::Hi, i64_type.const_zero());
-                            codegen.write_register(register::Special::Lo, source);
+                            codegen
+                                .write_register(register::cpu::Special::Hi, i64_type.const_zero());
+                            codegen.write_register(register::cpu::Special::Lo, source);
                         },
                         || {
                             let quotient = codegen.builder.build_int_signed_div(
@@ -887,8 +903,8 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                                 "ddiv_remainder",
                             );
 
-                            codegen.write_register(register::Special::Lo, quotient);
-                            codegen.write_register(register::Special::Hi, remainder);
+                            codegen.write_register(register::cpu::Special::Lo, quotient);
+                            codegen.write_register(register::cpu::Special::Hi, remainder);
                         },
                     );
                 },
@@ -904,8 +920,8 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                 "ddivu_zero_divisor",
                 cmp!(codegen, target == 0),
                 || {
-                    codegen.write_register(register::Special::Hi, source);
-                    codegen.write_register(register::Special::Lo, i64_type.const_all_ones());
+                    codegen.write_register(register::cpu::Special::Hi, source);
+                    codegen.write_register(register::cpu::Special::Lo, i64_type.const_all_ones());
                 },
                 || {
                     let quotient =
@@ -917,8 +933,8 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                             .builder
                             .build_int_unsigned_rem(source, target, "ddivu_remainder");
 
-                    codegen.write_register(register::Special::Lo, quotient);
-                    codegen.write_register(register::Special::Hi, remainder);
+                    codegen.write_register(register::cpu::Special::Lo, quotient);
+                    codegen.write_register(register::cpu::Special::Hi, remainder);
                 },
             );
         }
@@ -1135,8 +1151,14 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
             let (hi, lo) =
                 codegen.split(codegen.builder.build_int_mul(source, target, "dmult_res"));
-            codegen.write_register(register::Special::Hi, codegen.sign_extend_to(i64_type, hi));
-            codegen.write_register(register::Special::Lo, codegen.sign_extend_to(i64_type, lo));
+            codegen.write_register(
+                register::cpu::Special::Hi,
+                codegen.sign_extend_to(i64_type, hi),
+            );
+            codegen.write_register(
+                register::cpu::Special::Lo,
+                codegen.sign_extend_to(i64_type, lo),
+            );
         }
 
         Mnenomic::Dmultu => {
@@ -1152,8 +1174,14 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
             let (hi, lo) =
                 codegen.split(codegen.builder.build_int_mul(source, target, "dmultu_res"));
-            codegen.write_register(register::Special::Hi, codegen.sign_extend_to(i64_type, hi));
-            codegen.write_register(register::Special::Lo, codegen.sign_extend_to(i64_type, lo));
+            codegen.write_register(
+                register::cpu::Special::Hi,
+                codegen.sign_extend_to(i64_type, hi),
+            );
+            codegen.write_register(
+                register::cpu::Special::Lo,
+                codegen.sign_extend_to(i64_type, lo),
+            );
         }
 
         Mnenomic::Mult => {
@@ -1168,8 +1196,14 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
             );
 
             let (hi, lo) = codegen.split(codegen.builder.build_int_mul(source, target, "mult_res"));
-            codegen.write_register(register::Special::Hi, codegen.sign_extend_to(i64_type, hi));
-            codegen.write_register(register::Special::Lo, codegen.sign_extend_to(i64_type, lo));
+            codegen.write_register(
+                register::cpu::Special::Hi,
+                codegen.sign_extend_to(i64_type, hi),
+            );
+            codegen.write_register(
+                register::cpu::Special::Lo,
+                codegen.sign_extend_to(i64_type, lo),
+            );
         }
 
         Mnenomic::Multu => {
@@ -1185,21 +1219,27 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
 
             let (hi, lo) =
                 codegen.split(codegen.builder.build_int_mul(source, target, "multu_res"));
-            codegen.write_register(register::Special::Hi, codegen.sign_extend_to(i64_type, hi));
-            codegen.write_register(register::Special::Lo, codegen.sign_extend_to(i64_type, lo));
+            codegen.write_register(
+                register::cpu::Special::Hi,
+                codegen.sign_extend_to(i64_type, hi),
+            );
+            codegen.write_register(
+                register::cpu::Special::Lo,
+                codegen.sign_extend_to(i64_type, lo),
+            );
         }
 
         Mnenomic::Mflo => {
             // Copy contents of register LO to rd
             // This should produce incorrect results if any of the two following instructions modify LO register, probably fine to ignore.
-            let lo = codegen.read_register(i64_type, register::Special::Lo);
+            let lo = codegen.read_register(i64_type, register::cpu::Special::Lo);
             codegen.write_general_register(instr.rd(), lo);
         }
 
         Mnenomic::Mfhi => {
             // Copy contents of register HI to rd
             // This should produce incorrect results if any of the two following instructions modify LO register, probably fine to ignore.
-            let hi = codegen.read_register(i64_type, register::Special::Hi);
+            let hi = codegen.read_register(i64_type, register::cpu::Special::Hi);
             codegen.write_general_register(instr.rd(), hi);
         }
 
@@ -1999,12 +2039,12 @@ pub fn compile_instruction(codegen: &CodeGen<Cpu>, instr: &ParsedInstruction) ->
                 .builder
                 .build_float_compare(cond, source, target, "c_cond_res");
 
-            let shift = i32_type.const_int(register::fpu::ControlStatus::CONDITION_BIT, false);
+            let shift = i32_type.const_int(register::cpu::fpu::ControlStatus::CONDITION_BIT, false);
             let mask = codegen.builder.build_left_shift(cmp, shift, "c_cond_shift");
 
-            let fcr31 = codegen.read_register(i32_type, register::FpuControl::ControlStatus);
+            let fcr31 = codegen.read_register(i32_type, register::cpu::FpuControl::ControlStatus);
             let fcr_with_cmp = codegen.builder.build_and(fcr31, mask, "c_cond_mask");
-            codegen.write_register(register::FpuControl::ControlStatus, fcr_with_cmp);
+            codegen.write_register(register::cpu::FpuControl::ControlStatus, fcr_with_cmp);
         }
 
         _ => {

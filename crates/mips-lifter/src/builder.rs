@@ -3,7 +3,11 @@
 use crate::{
     gdb, run,
     runtime::{self, bus::Bus},
-    target::{cpu, Cpu, Rsp, Target, rsp},
+    target::{
+        cpu::{self, Cpu},
+        rsp::{self, Rsp},
+        Target,
+    },
 };
 
 pub struct JitBuilder<const READY: bool, T: Target, B: Bus>

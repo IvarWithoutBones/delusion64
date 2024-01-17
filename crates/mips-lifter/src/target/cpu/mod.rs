@@ -15,11 +15,12 @@ mod recompiler;
 mod registers;
 mod runtime;
 
+pub use mips_decomp::register::cpu as register;
 pub use registers::Registers;
 
 #[derive(Default)]
 #[repr(transparent)]
-pub struct Memory {
+pub(crate) struct Memory {
     pub tlb: TranslationLookasideBuffer,
 }
 

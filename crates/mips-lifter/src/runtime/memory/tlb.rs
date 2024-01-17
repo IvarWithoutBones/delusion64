@@ -1,7 +1,7 @@
 use crate::{runtime::register_bank::RegIndex, target};
 use mips_decomp::register::{
     self,
-    cp0::{Bits, EntryHi, EntryLo, Index, OperatingMode, PageMask},
+    cpu::cp0::{Bits, EntryHi, EntryLo, Index, OperatingMode, PageMask},
 };
 use std::ops::Range;
 use tartan_bitfield::bitfield;
@@ -167,12 +167,12 @@ impl TranslationLookasideBuffer {
 
         // The ASID should only be checked if the global bit is not set on both EntryLo registers of CP0.
         let hi = [
-            regs.read(register::Cp0::EntryLo0),
-            regs.read(register::Cp0::EntryLo1),
+            regs.read(register::cpu::Cp0::EntryLo0),
+            regs.read(register::cpu::Cp0::EntryLo1),
         ]
         .iter()
         .all(|lo| EntryLo::new(*lo).global())
-        .then(|| EntryHi::new(regs.read(register::Cp0::EntryHi)));
+        .then(|| EntryHi::new(regs.read(register::cpu::Cp0::EntryHi)));
         let vaddr = VirtualAddress(vaddr);
         let bits = Bits::from(regs);
 
@@ -185,9 +185,9 @@ impl TranslationLookasideBuffer {
 
     pub fn probe(&mut self, regs: &target::cpu::Registers) -> Index {
         let bits = Bits::from(regs);
-        let hi = EntryHi::new(regs.read(register::Cp0::EntryHi));
+        let hi = EntryHi::new(regs.read(register::cpu::Cp0::EntryHi));
 
-        let mut index = Index::new(regs.read(register::Cp0::Index) as u32);
+        let mut index = Index::new(regs.read(register::cpu::Cp0::Index) as u32);
         let mut found = false;
         for (i, entry) in self.entries.iter().enumerate() {
             if entry.hi.virtual_page_number(bits) != hi.virtual_page_number(bits) {
@@ -210,15 +210,15 @@ impl TranslationLookasideBuffer {
         registers: &mut target::cpu::Registers,
     ) -> Option<()> {
         self.entries.get(index).map(|entry| {
-            registers.write(register::Cp0::EntryHi, entry.hi.into());
+            registers.write(register::cpu::Cp0::EntryHi, entry.hi.into());
             // For TLBR: The G bit read from the TLB is written into both of the EntryLo0 and EntryLo1 registers.
             let global = entry.hi.global();
             registers.write(
-                register::Cp0::EntryLo0,
+                register::cpu::Cp0::EntryLo0,
                 entry.lo[0].clone().with_global(global).into(),
             );
             registers.write(
-                register::Cp0::EntryLo1,
+                register::cpu::Cp0::EntryLo1,
                 entry.lo[1].clone().with_global(global).into(),
             );
         })
@@ -227,11 +227,11 @@ impl TranslationLookasideBuffer {
     pub fn write_entry(&mut self, index: usize, registers: &target::cpu::Registers) -> Option<()> {
         self.entries.get_mut(index).map(|entry| {
             *entry = Entry {
-                page_mask: PageMask::new(registers.read(register::Cp0::PageMask) as u32),
-                hi: EntryHi::new(registers.read(register::Cp0::EntryHi)),
+                page_mask: PageMask::new(registers.read(register::cpu::Cp0::PageMask) as u32),
+                hi: EntryHi::new(registers.read(register::cpu::Cp0::EntryHi)),
                 lo: [
-                    EntryLo::new(registers.read(register::Cp0::EntryLo0)),
-                    EntryLo::new(registers.read(register::Cp0::EntryLo1)),
+                    EntryLo::new(registers.read(register::cpu::Cp0::EntryLo0)),
+                    EntryLo::new(registers.read(register::cpu::Cp0::EntryLo1)),
                 ],
             }
         })

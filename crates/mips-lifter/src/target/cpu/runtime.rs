@@ -4,7 +4,7 @@ use crate::runtime::{
     TargetDependantCallbacks,
 };
 use mips_decomp::{
-    register::{self, cp0::Bits},
+    register::{self, cpu::cp0::Bits},
     Exception, INSTRUCTION_SIZE,
 };
 
@@ -14,11 +14,11 @@ impl<B: Bus> Environment<'_, Cpu, B> {
     fn update_count(&mut self, instructions: usize) {
         // Trigger an timer interrupt if it would happen anywhere in this block.
         // We're doing this ahead of time to avoid trapping into the runtime environment to check on every instruction.
-        let old_count = self.registers.read(register::Cp0::Count) as u32;
-        let compare = self.registers.read(register::Cp0::Compare) as u32;
+        let old_count = self.registers.read(register::cpu::Cp0::Count) as u32;
+        let compare = self.registers.read(register::cpu::Cp0::Compare) as u32;
         let new_count = old_count.wrapping_add(8 * instructions as u32);
         self.registers
-            .write(register::Cp0::Count, u64::from(new_count));
+            .write(register::cpu::Cp0::Count, u64::from(new_count));
         if old_count < compare && new_count >= compare {
             let cause = self.registers.cause();
             let ip = cause.interrupt_pending().with_timer(true);
@@ -48,12 +48,12 @@ impl<B: Bus> Environment<'_, Cpu, B> {
         if !self.registers.status().exception_level() {
             let new_status: u32 = self.registers.status().with_exception_level(true).into();
             self.registers
-                .write(register::Cp0::Status, u64::from(new_status));
+                .write(register::cpu::Cp0::Status, u64::from(new_status));
 
             // If we are inside of a delay slot BadVAddr should be the address of the previous instruction,
             // so that we dont skip over the branch when we return from the exception. Notify the CPU of this by setting the BD bit.
             let pc = {
-                let mut pc = self.registers.read(register::Special::Pc);
+                let mut pc = self.registers.read(register::cpu::Special::Pc);
                 if self.flags().inside_delay_slot() {
                     pc -= INSTRUCTION_SIZE as u64;
                     cause.set_branch_delay(true);
@@ -67,11 +67,11 @@ impl<B: Bus> Environment<'_, Cpu, B> {
                     pc as i32 as u64
                 }
             };
-            self.registers.write(register::Cp0::EPC, pc);
+            self.registers.write(register::cpu::Cp0::EPC, pc);
         }
 
         self.registers
-            .write(register::Cp0::Cause, u64::from(cause.raw()));
+            .write(register::cpu::Cp0::Cause, u64::from(cause.raw()));
         unsafe { self.get_function_ptr(exception.vector() as u64) }
     }
 
@@ -91,13 +91,15 @@ impl<B: Bus> Environment<'_, Cpu, B> {
         });
 
         if has_bad_vaddr {
-            self.registers.write(register::Cp0::BadVAddr, bad_vaddr);
+            self.registers
+                .write(register::cpu::Cp0::BadVAddr, bad_vaddr);
             let vaddr = tlb::VirtualAddress::new(bad_vaddr);
             let vpn = vaddr.virtual_page_number(self.registers.page_mask(), Bits::default());
 
             {
                 let context = self.registers.context().with_bad_virtual_page_number(vpn);
-                self.registers.write(register::Cp0::Context, context.into());
+                self.registers
+                    .write(register::cpu::Cp0::Context, context.into());
 
                 let xcontext = self
                     .registers
@@ -105,7 +107,7 @@ impl<B: Bus> Environment<'_, Cpu, B> {
                     .with_bad_virtual_page_number(vpn)
                     .with_address_space_id(vaddr.mode_64().into());
                 self.registers
-                    .write(register::Cp0::XContext, xcontext.into());
+                    .write(register::cpu::Cp0::XContext, xcontext.into());
             }
         }
 
@@ -115,7 +117,8 @@ impl<B: Bus> Environment<'_, Cpu, B> {
 
     unsafe extern "C" fn probe_tlb_entry(&mut self) {
         let probe = self.memory.tlb.probe(&self.registers);
-        self.registers.write(register::Cp0::Index, probe.into());
+        self.registers
+            .write(register::cpu::Cp0::Index, probe.into());
     }
 
     unsafe extern "C" fn read_tlb_entry(&mut self, index: u64) {

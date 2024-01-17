@@ -554,7 +554,7 @@ impl Instruction {
                     if let Some((next_op, _signed)) = self.operands.get(i + 1) {
                         // Show the base and offset grouped together, for example `lw s8, sp(4)`
                         if next_op == &Operand::Base {
-                            let base = register::GeneralPurpose::name_from_index(
+                            let base = register::cpu::GeneralPurpose::name_from_index(
                                 self.pattern.get(*next_op, raw).unwrap() as _,
                             );
 
@@ -569,19 +569,19 @@ impl Instruction {
                 }
 
                 Operand::FloatControlRegister => {
-                    result.push_str(register::FpuControl::name_from_index(num as usize))
+                    result.push_str(register::cpu::FpuControl::name_from_index(num as usize))
                 }
 
                 Operand::Destination if self.mnenomic.uses_cp0_destination() => {
-                    result.push_str(register::Cp0::name_from_index(num as _));
+                    result.push_str(register::cpu::Cp0::name_from_index(num as _));
                 }
 
                 _ if op.is_general_purpose_register() => {
-                    result.push_str(register::GeneralPurpose::name_from_index(num as _));
+                    result.push_str(register::cpu::GeneralPurpose::name_from_index(num as _));
                 }
 
                 _ if op.is_fpu_register() => {
-                    result.push_str(register::Fpu::name_from_index(num as _));
+                    result.push_str(register::cpu::Fpu::name_from_index(num as _));
                 }
 
                 _ => result.push_str(&sign.format(num)),

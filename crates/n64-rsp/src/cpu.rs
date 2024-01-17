@@ -1,6 +1,6 @@
 #![allow(dead_code, clippy::cast_possible_truncation)]
 
-use crate::{MemoryBank, RspError};
+use crate::{MemoryBankHandle, RspError};
 use mips_lifter::{
     runtime::bus::{Bus as BusInterface, BusResult, Int, PhysicalAddress},
     JitBuilder, RegisterBank,
@@ -8,7 +8,7 @@ use mips_lifter::{
 use std::{
     sync::{
         atomic::{self, AtomicU32, AtomicU64, AtomicUsize},
-        Arc, RwLock,
+        Arc,
     },
     thread::JoinHandle,
 };
@@ -16,16 +16,13 @@ use std::{
 pub struct Handle {
     thread: JoinHandle<Bus>,
     cycle_budget: Arc<AtomicUsize>,
-    cp0_registers: RegisterBank<u32, 32>,
+    cp0_registers: RegisterBank<u32, 8>,
     pc: RegisterBank<u64, 1>,
 }
 
 impl Handle {
     #[allow(clippy::similar_names)]
-    pub fn new(
-        dmem: Arc<RwLock<Box<[u8; MemoryBank::DMem.len()]>>>,
-        imem: Arc<RwLock<Box<[u8; MemoryBank::IMem.len()]>>>,
-    ) -> Self {
+    pub fn new(dmem: MemoryBankHandle, imem: MemoryBankHandle) -> Self {
         let default_regs = Box::new(std::array::from_fn(|_| AtomicU32::default()));
         let cp0_registers = RegisterBank::new_shared(default_regs);
         let registers_for_bus = cp0_registers.share().unwrap();
@@ -73,8 +70,8 @@ impl Handle {
 }
 
 struct Bus {
-    dmem: Arc<RwLock<Box<[u8; MemoryBank::DMem.len()]>>>,
-    imem: Arc<RwLock<Box<[u8; MemoryBank::IMem.len()]>>>,
+    dmem: MemoryBankHandle,
+    imem: MemoryBankHandle,
     cycle_budget: Arc<AtomicUsize>,
     cycles_ran: usize,
 }
@@ -82,11 +79,11 @@ struct Bus {
 impl Bus {
     #[allow(clippy::similar_names)]
     pub fn new(
-        cp0_regs: RegisterBank<u32, 32>,
+        cp0_regs: RegisterBank<u32, 8>,
         pc: RegisterBank<u64, 1>,
         cycle_budget: Arc<AtomicUsize>,
-        dmem: Arc<RwLock<Box<[u8; MemoryBank::DMem.len()]>>>,
-        imem: Arc<RwLock<Box<[u8; MemoryBank::IMem.len()]>>>,
+        dmem: MemoryBankHandle,
+        imem: MemoryBankHandle,
     ) -> Self {
         while cycle_budget.load(atomic::Ordering::Relaxed) == 0 {
             // TODO crude way to wait for !SP_STATUS.halted
@@ -100,8 +97,8 @@ impl Bus {
             cycles_ran: 0,
         };
 
-        let regs = mips_lifter::target::RspRegisters {
-            cp0: cp0_regs,
+        let regs = mips_lifter::target::rsp::Registers {
+            control: cp0_regs,
             special: pc,
             ..Default::default()
         };

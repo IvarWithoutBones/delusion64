@@ -1,6 +1,6 @@
 use self::command::{Command, MonitorCommand, MonitorCommandMap};
 use super::{memory::tlb::AccessMode, Bus, Environment, GdbIntegration, ValidRuntime};
-use crate::target::{Cpu, Memory, Target};
+use crate::target::{cpu::Cpu, Memory, Target};
 use gdbstub::{
     conn::ConnectionExt,
     stub::{state_machine::GdbStubStateMachine, GdbStub, SingleThreadStopReason},

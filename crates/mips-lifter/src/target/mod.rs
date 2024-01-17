@@ -11,11 +11,27 @@ use crate::{
 use inkwell::{execution_engine::ExecutionEngine, module::Module, values::PointerValue};
 use std::fmt;
 
-pub(crate) mod cpu;
-pub(crate) mod rsp;
+/// Helper for implementing the `RegIndex` trait for a target.
+macro_rules! impl_reg_index {
+    ($target:path, $(($ty:ty, $output:ty, $field:ident)),*) => {
+        $(
+            impl crate::runtime::register_bank::RegIndex<$ty> for $target {
+                type Output = $output;
 
-pub use cpu::{Cpu, Registers as CpuRegisters};
-pub use rsp::{Registers as RspRegisters, Rsp};
+                fn read(&self, index: $ty) -> Self::Output {
+                    self.$field.read_relaxed(index.into()).unwrap()
+                }
+
+                fn write(&mut self, index: $ty, value: Self::Output) {
+                    self.$field.write_relaxed(index.into(), value).unwrap()
+                }
+            }
+        )*
+    };
+}
+
+pub mod cpu;
+pub mod rsp;
 
 /// The register ID type for the given target.
 pub(crate) type RegisterID<'ctx, T> =
@@ -53,16 +69,21 @@ pub(crate) trait Memory: Default {
     fn virtual_to_physical_address(
         &self,
         vaddr: u64,
-        access_mode: AccessMode,
-        registers: &Self::Registers,
-    ) -> Result<PhysicalAddress, TranslationError>;
+        _access_mode: AccessMode,
+        _registers: &Self::Registers,
+    ) -> Result<PhysicalAddress, TranslationError> {
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(vaddr as PhysicalAddress)
+    }
 
     fn physical_to_virtual_address(
         &self,
         paddr: PhysicalAddress,
-        access_mode: AccessMode,
-        registers: &Self::Registers,
-    ) -> Result<u64, TranslationError>;
+        _access_mode: AccessMode,
+        _registers: &Self::Registers,
+    ) -> Result<u64, TranslationError> {
+        Ok(u64::from(paddr))
+    }
 }
 
 pub(crate) trait Instruction: fmt::Debug + fmt::Display + TryFrom<u32> + Clone {

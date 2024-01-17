@@ -1,12 +1,12 @@
-use n64_common::memory::Section;
-
-use self::definitions::{
-    DmaRdramAddress, DmaReadLength, DmaSpAddress, DmaWriteLength, SpDmaBusy, SpDmaFull,
-    SpProgramCounter, SpSemaphore, SpStatus,
+use crate::{dma, RspError, RspResult, SideEffects};
+use mips_lifter::target::rsp::register::{
+    control::{
+        DmaBusy, DmaFull, DmaRdramAddress, DmaReadLength, DmaSpAddress, DmaWriteLength, MemoryBank,
+        Semaphore, StatusRead,
+    },
+    special::ProgramCounter,
 };
-use crate::{dma, MemoryBank, RspError, RspResult, SideEffects};
-
-pub(crate) mod definitions;
+use n64_common::memory::Section;
 
 #[derive(Debug)]
 struct DoubleBuffered<T> {
@@ -89,7 +89,11 @@ impl DmaRegisters {
                 {
                     let range = self.sp_address.address() as usize
                         ..(self.sp_address.address() + bytes) as usize;
-                    side_effects.set_dirty_section(self.sp_address.bank().as_section(), range);
+                    let section = match self.sp_address.bank() {
+                        MemoryBank::IMem => Section::RspIMemory,
+                        MemoryBank::DMem => Section::RspDMemory,
+                    };
+                    side_effects.set_dirty_section(section, range);
                 }
                 bytes
             }
@@ -128,19 +132,19 @@ impl DmaRegisters {
 #[derive(Debug, Default)]
 pub struct Registers {
     // Memory-mapped, not accessible to the RSP
-    sp_program_counter: SpProgramCounter,
+    sp_program_counter: ProgramCounter,
     // Internal state, accessible to the RSP via CP0 operations
     dma: DoubleBuffered<DmaRegisters>,
     // Note that [`SpDmaFull`] and [`SpDmaBusy`] are omitted here, since they're mirrors of [`SpStatus`]
-    sp_status: SpStatus,
-    sp_semaphore: SpSemaphore,
+    sp_status: StatusRead,
+    sp_semaphore: Semaphore,
 }
 
 impl Registers {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            sp_status: SpStatus::new(),
+            sp_status: StatusRead::new(),
             ..Default::default()
         }
     }
@@ -151,11 +155,11 @@ impl Registers {
             DmaRdramAddress::OFFSET => self.dma.current.dram_address.into(),
             DmaReadLength::OFFSET => self.dma.current.read_length.into(),
             DmaWriteLength::OFFSET => self.dma.current.write_length.into(),
-            SpStatus::OFFSET => self.sp_status.into(),
-            SpDmaFull::OFFSET => self.sp_status.dma_full().into(),
-            SpDmaBusy::OFFSET => self.sp_status.dma_busy().into(),
-            SpSemaphore::OFFSET => self.sp_semaphore.read().into(),
-            SpProgramCounter::OFFSET => self.sp_program_counter.into(),
+            StatusRead::OFFSET => self.sp_status.into(),
+            DmaFull::OFFSET => self.sp_status.dma_full().into(),
+            DmaBusy::OFFSET => self.sp_status.dma_busy().into(),
+            Semaphore::OFFSET => self.sp_semaphore.read().into(),
+            ProgramCounter::OFFSET => self.sp_program_counter.into(),
             _ => Err(RspError::RegisterOffsetOutOfBounds { offset })?,
         })
     }
@@ -181,13 +185,23 @@ impl Registers {
                 self.queue_dma(dma::Direction::ToRdram);
             }
 
-            SpDmaFull::OFFSET | SpDmaBusy::OFFSET => {
+            DmaFull::OFFSET | DmaBusy::OFFSET => {
                 // Read-only mirrors of [`SpStatus`]
             }
 
-            SpStatus::OFFSET => side_effects.interrupt = self.sp_status.write(value),
-            SpSemaphore::OFFSET => self.sp_semaphore.write(value),
-            SpProgramCounter::OFFSET => self.sp_program_counter.write(value),
+            StatusRead::OFFSET => {
+                side_effects.interrupt = self.sp_status.write(value).map(|req| match req {
+                    mips_lifter::target::rsp::register::control::InterruptRequest::Raise => {
+                        n64_common::InterruptRequest::Raise(n64_common::InterruptDevice::Rsp)
+                    }
+                    mips_lifter::target::rsp::register::control::InterruptRequest::Lower => {
+                        n64_common::InterruptRequest::Lower(n64_common::InterruptDevice::Rsp)
+                    }
+                });
+            }
+
+            Semaphore::OFFSET => self.sp_semaphore.write(),
+            ProgramCounter::OFFSET => self.sp_program_counter.write(value),
             _ => Err(RspError::RegisterOffsetOutOfBounds { offset })?,
         }
         Ok(side_effects)

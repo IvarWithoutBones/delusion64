@@ -14,7 +14,7 @@ fn write_be_bytes(values: impl IntoIterator<Item = u64>, write_byte: &mut impl F
 }
 
 fn copy_reg(
-    reg: impl Into<register::Register>,
+    reg: impl Into<register::cpu::Register>,
     src: &super::Registers,
     dst: &mut super::Registers,
 ) {
@@ -30,16 +30,16 @@ impl gdbstub::arch::RegId for RegisterID {
     fn from_raw_id(id: usize) -> Option<(Self, Option<std::num::NonZeroUsize>)> {
         #[allow(clippy::cast_possible_truncation)]
         let reg = RegisterID(match id {
-            0..=31 => register::GeneralPurpose::from_repr(id as u8)?.into(),
-            32 => register::Cp0::Status.into(),
-            33 => register::Special::Lo.into(),
-            34 => register::Special::Hi.into(),
-            35 => register::Cp0::BadVAddr.into(),
-            36 => register::Cp0::Cause.into(),
-            37 => register::Special::Pc.into(),
-            38..=69 => register::Fpu::from_repr((id - 38) as u8)?.into(),
-            70 => register::FpuControl::ControlStatus.into(),
-            71 => register::FpuControl::ImplementationRevision.into(),
+            0..=31 => register::cpu::GeneralPurpose::from_repr(id as u8)?.into(),
+            32 => register::cpu::Cp0::Status.into(),
+            33 => register::cpu::Special::Lo.into(),
+            34 => register::cpu::Special::Hi.into(),
+            35 => register::cpu::Cp0::BadVAddr.into(),
+            36 => register::cpu::Cp0::Cause.into(),
+            37 => register::cpu::Special::Pc.into(),
+            38..=69 => register::cpu::Fpu::from_repr((id - 38) as u8)?.into(),
+            70 => register::cpu::FpuControl::ControlStatus.into(),
+            71 => register::cpu::FpuControl::ImplementationRevision.into(),
             _ => None?,
         });
         let size = size_of::<u64>().try_into().expect("8 bytes is more than 0");
@@ -51,7 +51,7 @@ impl gdbstub::arch::Registers for super::Registers {
     type ProgramCounter = u64;
 
     fn pc(&self) -> Self::ProgramCounter {
-        self.read(register::Special::Pc)
+        self.read(register::cpu::Special::Pc)
     }
 
     // The order we serialize these in is important, it must match the register IDs in ascending order.
@@ -59,20 +59,20 @@ impl gdbstub::arch::Registers for super::Registers {
         write_be_bytes(self.general_purpose.iter_relaxed(), &mut write_byte); // 0..=31
         write_be_bytes(
             [
-                self.read(register::Cp0::Status),   // 32
-                self.read(register::Special::Lo),   // 33
-                self.read(register::Special::Hi),   // 34
-                self.read(register::Cp0::BadVAddr), // 35
-                self.read(register::Cp0::Cause),    // 36
-                self.read(register::Special::Pc),   // 37
+                self.read(register::cpu::Cp0::Status),   // 32
+                self.read(register::cpu::Special::Lo),   // 33
+                self.read(register::cpu::Special::Hi),   // 34
+                self.read(register::cpu::Cp0::BadVAddr), // 35
+                self.read(register::cpu::Cp0::Cause),    // 36
+                self.read(register::cpu::Special::Pc),   // 37
             ],
             &mut write_byte,
         );
         write_be_bytes(self.fpu.iter_relaxed(), &mut write_byte); // 38..=69
         write_be_bytes(
             [
-                self.read(register::FpuControl::ControlStatus), // 70
-                self.read(register::FpuControl::ImplementationRevision), // 71
+                self.read(register::cpu::FpuControl::ControlStatus), // 70
+                self.read(register::cpu::FpuControl::ImplementationRevision), // 71
             ],
             &mut write_byte,
         );
@@ -90,20 +90,20 @@ impl gdbstub::arch::Registers for super::Registers {
             self.general_purpose.write_relaxed(i, next()?).ok_or(())?;
         }
 
-        self.write(register::Cp0::Status, next()?); // 32
-        self.write(register::Special::Lo, next()?); // 33
-        self.write(register::Special::Hi, next()?); // 34
-        self.write(register::Cp0::BadVAddr, next()?); // 35
-        self.write(register::Cp0::Cause, next()?); // 36
-        self.write(register::Special::Pc, next()?); // 37
+        self.write(register::cpu::Cp0::Status, next()?); // 32
+        self.write(register::cpu::Special::Lo, next()?); // 33
+        self.write(register::cpu::Special::Hi, next()?); // 34
+        self.write(register::cpu::Cp0::BadVAddr, next()?); // 35
+        self.write(register::cpu::Cp0::Cause, next()?); // 36
+        self.write(register::cpu::Special::Pc, next()?); // 37
 
         // 38..=69
         for i in 0..=self.fpu.len() {
             self.fpu.write_relaxed(i, next()?).ok_or(())?;
         }
 
-        self.write(register::FpuControl::ControlStatus, next()?); // 70
-        self.write(register::FpuControl::ImplementationRevision, next()?); // 71
+        self.write(register::cpu::FpuControl::ControlStatus, next()?); // 70
+        self.write(register::cpu::FpuControl::ImplementationRevision, next()?); // 71
 
         Ok(())
     }
@@ -150,12 +150,12 @@ impl<B: Bus> GdbIntegration for Environment<'_, Cpu, B> {
         &mut self,
         regs: &mut <<Self as gdbstub::target::Target>::Arch as gdbstub::arch::Arch>::Registers,
     ) -> gdbstub::target::TargetResult<(), Self> {
-        copy_reg(register::Special::Pc, &self.registers, regs);
-        copy_reg(register::Special::Hi, &self.registers, regs);
-        copy_reg(register::Special::Lo, &self.registers, regs);
-        copy_reg(register::Cp0::Cause, &self.registers, regs);
-        copy_reg(register::Cp0::Status, &self.registers, regs);
-        copy_reg(register::Cp0::BadVAddr, &self.registers, regs);
+        copy_reg(register::cpu::Special::Pc, &self.registers, regs);
+        copy_reg(register::cpu::Special::Hi, &self.registers, regs);
+        copy_reg(register::cpu::Special::Lo, &self.registers, regs);
+        copy_reg(register::cpu::Cp0::Cause, &self.registers, regs);
+        copy_reg(register::cpu::Cp0::Status, &self.registers, regs);
+        copy_reg(register::cpu::Cp0::BadVAddr, &self.registers, regs);
 
         for (i, r) in self.registers.general_purpose.iter_relaxed().enumerate() {
             regs.general_purpose.write_relaxed(i, r).unwrap();
@@ -173,15 +173,16 @@ impl<B: Bus> GdbIntegration for Environment<'_, Cpu, B> {
         regs: &<<Self as gdbstub::target::Target>::Arch as gdbstub::arch::Arch>::Registers,
     ) -> gdbstub::target::TargetResult<(), Self> {
         assert!(
-            regs.read(register::Special::Pc) == self.registers.read(register::Special::Pc),
+            regs.read(register::cpu::Special::Pc)
+                == self.registers.read(register::cpu::Special::Pc),
             "gdb: attempted to change PC"
         );
 
-        copy_reg(register::Special::Hi, regs, &mut self.registers);
-        copy_reg(register::Special::Lo, regs, &mut self.registers);
-        copy_reg(register::Cp0::Cause, regs, &mut self.registers);
-        copy_reg(register::Cp0::Status, regs, &mut self.registers);
-        copy_reg(register::Cp0::BadVAddr, regs, &mut self.registers);
+        copy_reg(register::cpu::Special::Hi, regs, &mut self.registers);
+        copy_reg(register::cpu::Special::Lo, regs, &mut self.registers);
+        copy_reg(register::cpu::Cp0::Cause, regs, &mut self.registers);
+        copy_reg(register::cpu::Cp0::Status, regs, &mut self.registers);
+        copy_reg(register::cpu::Cp0::BadVAddr, regs, &mut self.registers);
         for (i, r) in regs.general_purpose.iter_relaxed().enumerate() {
             self.registers.general_purpose.write_relaxed(i, r).unwrap();
         }

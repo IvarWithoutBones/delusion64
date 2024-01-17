@@ -123,6 +123,7 @@ impl ControlStatus {
     /// The offset of the condition bit in the register.
     pub const CONDITION_BIT: u64 = 23;
 
+    #[must_use]
     pub const fn new(raw: u32) -> Self {
         Self(raw)
     }

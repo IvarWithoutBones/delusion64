@@ -13,51 +13,51 @@ use std::fmt;
 /// The standard MIPS VR4300 registers.
 #[derive(Default, Clone, PartialEq)]
 pub struct Registers {
-    pub general_purpose: RegisterBank<u64, { register::GeneralPurpose::count() }>,
-    pub cp0: RegisterBank<u64, { register::Cp0::count() }>,
-    pub fpu: RegisterBank<u64, { register::Fpu::count() }>,
-    pub fpu_control: RegisterBank<u64, { register::FpuControl::count() }>,
-    pub special: RegisterBank<u64, { register::Special::count() }>,
+    pub general_purpose: RegisterBank<u64, { register::cpu::GeneralPurpose::count() }>,
+    pub cp0: RegisterBank<u64, { register::cpu::Cp0::count() }>,
+    pub fpu: RegisterBank<u64, { register::cpu::Fpu::count() }>,
+    pub fpu_control: RegisterBank<u64, { register::cpu::FpuControl::count() }>,
+    pub special: RegisterBank<u64, { register::cpu::Special::count() }>,
 }
 
 impl Registers {
     #[allow(clippy::cast_possible_truncation)] // The relevant part is in the lower 32 bits.
-    pub(crate) fn status(&self) -> register::cp0::Status {
-        let value = self.read(register::Cp0::Status) as u32;
-        register::cp0::Status::new(value)
+    pub(crate) fn status(&self) -> register::cpu::cp0::Status {
+        let value = self.read(register::cpu::Cp0::Status) as u32;
+        register::cpu::cp0::Status::new(value)
     }
 
     #[allow(clippy::cast_possible_truncation)] // The relevant part is in the lower 32 bits.
-    pub(crate) fn cause(&self) -> register::cp0::Cause {
-        let value = self.read(register::Cp0::Cause) as u32;
-        register::cp0::Cause::new(value)
+    pub(crate) fn cause(&self) -> register::cpu::cp0::Cause {
+        let value = self.read(register::cpu::Cp0::Cause) as u32;
+        register::cpu::cp0::Cause::new(value)
     }
 
-    pub(crate) fn set_cause(&mut self, cause: register::cp0::Cause) {
+    pub(crate) fn set_cause(&mut self, cause: register::cpu::cp0::Cause) {
         let raw: u32 = cause.into();
-        self.write(register::Cp0::Cause, u64::from(raw));
+        self.write(register::cpu::Cp0::Cause, u64::from(raw));
     }
 
     #[allow(clippy::cast_possible_truncation)] // The relevant part is in the lower 32 bits.
-    pub(crate) fn fpu_control_status(&self) -> register::fpu::ControlStatus {
-        let value = self.read(register::FpuControl::ControlStatus) as u32;
-        register::fpu::ControlStatus::new(value)
+    pub(crate) fn fpu_control_status(&self) -> register::cpu::fpu::ControlStatus {
+        let value = self.read(register::cpu::FpuControl::ControlStatus) as u32;
+        register::cpu::fpu::ControlStatus::new(value)
     }
 
     #[allow(clippy::cast_possible_truncation)] // The relevant part is in the lower 32 bits.
-    pub(crate) fn page_mask(&self) -> register::cp0::PageMask {
-        let value = self.read(register::Cp0::PageMask) as u32;
-        register::cp0::PageMask::new(value)
+    pub(crate) fn page_mask(&self) -> register::cpu::cp0::PageMask {
+        let value = self.read(register::cpu::Cp0::PageMask) as u32;
+        register::cpu::cp0::PageMask::new(value)
     }
 
-    pub(crate) fn context(&self) -> register::cp0::Context {
-        let value = self.read(register::Cp0::Context);
-        register::cp0::Context::new(value)
+    pub(crate) fn context(&self) -> register::cpu::cp0::Context {
+        let value = self.read(register::cpu::Cp0::Context);
+        register::cpu::cp0::Context::new(value)
     }
 
-    pub(crate) fn xcontext(&self) -> register::cp0::XContext {
-        let value = self.read(register::Cp0::XContext);
-        register::cp0::XContext::new(value)
+    pub(crate) fn xcontext(&self) -> register::cpu::cp0::XContext {
+        let value = self.read(register::cpu::Cp0::XContext);
+        register::cpu::cp0::XContext::new(value)
     }
 
     pub(crate) fn trigger_interrupt(&self) -> bool {
@@ -74,7 +74,7 @@ impl Registers {
 
 impl<T> From<T> for Registers
 where
-    T: IntoIterator<Item = (register::Register, u64)>,
+    T: IntoIterator<Item = (register::cpu::Register, u64)>,
 {
     fn from(value: T) -> Self {
         let mut registers = Self::default();
@@ -85,52 +85,35 @@ where
     }
 }
 
-macro_rules! impl_reg_index {
-    ($(($ty:ty, $output:ty, $field:ident)),*) => {
-        $(
-            impl RegIndex<$ty> for Registers {
-                type Output = $output;
-
-                fn read(&self, index: $ty) -> Self::Output {
-                    self.$field.read_relaxed(index.into()).unwrap()
-                }
-
-                fn write(&mut self, index: $ty, value: Self::Output) {
-                    self.$field.write_relaxed(index.into(), value).unwrap()
-                }
-            }
-        )*
-    };
-}
-
 impl_reg_index!(
-    (register::GeneralPurpose, u64, general_purpose),
-    (register::Cp0, u64, cp0),
-    (register::Fpu, u64, fpu),
-    (register::FpuControl, u64, fpu_control),
-    (register::Special, u64, special)
+    Registers,
+    (register::cpu::GeneralPurpose, u64, general_purpose),
+    (register::cpu::Cp0, u64, cp0),
+    (register::cpu::Fpu, u64, fpu),
+    (register::cpu::FpuControl, u64, fpu_control),
+    (register::cpu::Special, u64, special)
 );
 
-impl RegIndex<register::Register> for Registers {
+impl RegIndex<register::cpu::Register> for Registers {
     type Output = u64;
 
-    fn read(&self, index: register::Register) -> Self::Output {
+    fn read(&self, index: register::cpu::Register) -> Self::Output {
         match index {
-            register::Register::GeneralPurpose(r) => self.read(r),
-            register::Register::Fpu(r) => self.read(r),
-            register::Register::FpuControl(r) => self.read(r),
-            register::Register::Special(r) => self.read(r),
-            register::Register::Cp0(r) => self.read(r),
+            register::cpu::Register::GeneralPurpose(r) => self.read(r),
+            register::cpu::Register::Fpu(r) => self.read(r),
+            register::cpu::Register::FpuControl(r) => self.read(r),
+            register::cpu::Register::Special(r) => self.read(r),
+            register::cpu::Register::Cp0(r) => self.read(r),
         }
     }
 
-    fn write(&mut self, index: register::Register, value: Self::Output) {
+    fn write(&mut self, index: register::cpu::Register, value: Self::Output) {
         match index {
-            register::Register::GeneralPurpose(r) => self.write(r, value),
-            register::Register::Fpu(r) => self.write(r, value),
-            register::Register::FpuControl(r) => self.write(r, value),
-            register::Register::Special(r) => self.write(r, value),
-            register::Register::Cp0(r) => self.write(r, value),
+            register::cpu::Register::GeneralPurpose(r) => self.write(r, value),
+            register::cpu::Register::Fpu(r) => self.write(r, value),
+            register::cpu::Register::FpuControl(r) => self.write(r, value),
+            register::cpu::Register::Special(r) => self.write(r, value),
+            register::cpu::Register::Cp0(r) => self.write(r, value),
         }
     }
 }
@@ -144,38 +127,29 @@ impl fmt::Debug for Registers {
         };
 
         writeln!(f, "\ngeneral purpose registers:")?;
-        for (i, reg) in self.general_purpose.iter_relaxed().enumerate() {
-            let name = register::GeneralPurpose::name_from_index(i);
-            write_reg(f, name, reg)?;
+        for reg in register::cpu::GeneralPurpose::iter() {
+            write_reg(f, reg.name(), self.read(reg))?;
         }
 
         writeln!(f, "\ncoprocessor 0 registers:")?;
-        for (i, reg) in self.cp0.iter_relaxed().enumerate() {
-            let register = register::Cp0::from_repr(i as u8).unwrap();
-            if !register.is_reserved() {
-                write_reg(f, register.name(), reg)?;
-            }
+        for reg in register::cpu::Cp0::iter().filter(|r| !r.is_reserved()) {
+            write_reg(f, reg.name(), self.read(reg))?;
         }
         write_reg(f, "Reserved", self.read(RESERVED_CP0_REGISTER_LATCH))?;
 
         writeln!(f, "\nfpu general purpose registers:")?;
-        for (i, reg) in self.fpu.iter_relaxed().enumerate() {
-            let name = register::Fpu::name_from_index(i);
-            write_reg(f, name, reg)?;
+        for reg in register::cpu::Fpu::iter() {
+            write_reg(f, reg.name(), self.read(reg))?;
         }
 
         writeln!(f, "\nfpu control registers:")?;
-        for (i, reg) in self.fpu_control.iter_relaxed().enumerate() {
-            let register = register::FpuControl::from_repr(i as u8).unwrap();
-            if !register.is_reserved() {
-                write_reg(f, register.name(), reg)?;
-            }
+        for reg in register::cpu::FpuControl::iter().filter(|r| !r.is_reserved()) {
+            write_reg(f, reg.name(), self.read(reg))?;
         }
 
         writeln!(f, "\nspecial registers:")?;
-        for (i, reg) in self.special.iter_relaxed().enumerate() {
-            let name = register::Special::name_from_index(i);
-            write_reg(f, name, reg)?;
+        for reg in register::cpu::Special::iter() {
+            write_reg(f, reg.name(), self.read(reg))?;
         }
 
         Ok(())
@@ -186,7 +160,7 @@ impl target::RegisterStorage for Registers {
     type Globals<'ctx> = Globals<'ctx>;
 
     fn read_program_counter(&self) -> u64 {
-        self.read(register::Special::Pc)
+        self.read(register::cpu::Special::Pc)
     }
 
     fn build_globals<'ctx>(
@@ -226,7 +200,7 @@ impl<'ctx> target::Globals<'ctx> for Globals<'ctx> {
     type RegisterID = RegisterID;
 
     const PROGRAM_COUNTER_ID: Self::RegisterID =
-        RegisterID(register::Register::Special(register::Special::Pc));
+        RegisterID(register::cpu::Register::Special(register::cpu::Special::Pc));
 
     fn pointer_value<T: target::Target>(
         &self,
@@ -244,22 +218,22 @@ impl<'ctx> target::Globals<'ctx> for Globals<'ctx> {
             )
         };
         match reg.0 {
-            register::Register::Cp0(_) => gep(self.cp0.pointer_value()),
-            register::Register::Special(_) => gep(self.special.pointer_value()),
-            register::Register::Fpu(_) => gep(self.fpu.pointer_value()),
-            register::Register::FpuControl(_) => gep(self.fpu_control.pointer_value()),
-            register::Register::GeneralPurpose(_) => gep(self.general_purpose.pointer_value()),
+            register::cpu::Register::Cp0(_) => gep(self.cp0.pointer_value()),
+            register::cpu::Register::Special(_) => gep(self.special.pointer_value()),
+            register::cpu::Register::Fpu(_) => gep(self.fpu.pointer_value()),
+            register::cpu::Register::FpuControl(_) => gep(self.fpu_control.pointer_value()),
+            register::cpu::Register::GeneralPurpose(_) => gep(self.general_purpose.pointer_value()),
         }
     }
 
     fn is_atomic(&self, reg: Self::RegisterID) -> bool {
         // TODO: This needs to hold a specific register, should we add a associated Bank type to avoid that?
         match reg.0 {
-            register::Register::Cp0(_) => self.cp0.is_atomic(),
-            register::Register::GeneralPurpose(_) => self.general_purpose.is_atomic(),
-            register::Register::Special(_) => self.special.is_atomic(),
-            register::Register::Fpu(_) => self.fpu.is_atomic(),
-            register::Register::FpuControl(_) => self.fpu_control.is_atomic(),
+            register::cpu::Register::Cp0(_) => self.cp0.is_atomic(),
+            register::cpu::Register::GeneralPurpose(_) => self.general_purpose.is_atomic(),
+            register::cpu::Register::Special(_) => self.special.is_atomic(),
+            register::cpu::Register::Fpu(_) => self.fpu.is_atomic(),
+            register::cpu::Register::FpuControl(_) => self.fpu_control.is_atomic(),
         }
     }
 }
@@ -267,11 +241,11 @@ impl<'ctx> target::Globals<'ctx> for Globals<'ctx> {
 /// A singular MIPS VR4300 register.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
-pub(crate) struct RegisterID(pub register::Register);
+pub(crate) struct RegisterID(pub register::cpu::Register);
 
 impl<T> From<T> for RegisterID
 where
-    T: Into<register::Register>,
+    T: Into<register::cpu::Register>,
 {
     fn from(value: T) -> Self {
         Self(value.into())

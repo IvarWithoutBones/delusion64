@@ -2,7 +2,7 @@ use crate::bus::Bus;
 use clap::Parser;
 use emgui::{context, EmulatorHandle, UiBuilder};
 use input::ControllerEvent;
-use mips_lifter::{gdb, register, JitBuilder};
+use mips_lifter::{gdb, target::cpu::register, JitBuilder};
 use n64_cartridge::{Cartridge, Cic};
 use std::{
     io,

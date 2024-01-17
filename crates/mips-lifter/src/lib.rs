@@ -5,7 +5,6 @@ pub use self::{
     builder::JitBuilder,
     runtime::register_bank::{RegIndex, RegisterBank},
 };
-pub use mips_decomp::register;
 
 pub mod gdb {
     pub use crate::runtime::gdb::{

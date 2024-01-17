@@ -1,145 +1,28 @@
 use crate::{
     codegen::CodeGen,
     runtime::{
-        bus::{Bus, PhysicalAddress},
-        memory::tlb,
-        register_bank::RegisterBankMapping,
-        Environment, GdbIntegration, InterruptHandler, RuntimeFunction, TargetDependantCallbacks,
+        bus::Bus, Environment, GdbIntegration, InterruptHandler, RuntimeFunction,
+        TargetDependantCallbacks,
     },
-    RegisterBank,
+    target, RegIndex,
 };
-use inkwell::{execution_engine::ExecutionEngine, module::Module, values::PointerValue};
 
-#[allow(dead_code)]
-#[derive(Debug)]
-pub(crate) enum RspRegister {
-    GeneralPurpose(mips_decomp::register::GeneralPurpose),
-    Cp0(usize),
-    Vector(usize),
-    ProgramCounter,
-}
+pub use mips_decomp::register::rsp as register;
+pub use registers::Registers;
 
-#[derive(Debug, Default)]
-pub struct Registers {
-    pub general_purpose: RegisterBank<u32, 32>,
-    pub cp0: RegisterBank<u32, 32>,
-    // In reality these are 32 128-bit registers, but Rust does not have an AtomicU128 type.
-    pub vector: RegisterBank<u64, 64>,
-    pub special: RegisterBank<u64, 1>,
-}
-
-impl super::RegisterStorage for Registers {
-    type Globals<'ctx> = RegisterGlobals<'ctx>;
-
-    fn read_program_counter(&self) -> u64 {
-        self.special.read_relaxed(0).unwrap()
-    }
-
-    fn build_globals<'ctx>(
-        &self,
-        module: &Module<'ctx>,
-        exec_engine: &ExecutionEngine<'ctx>,
-    ) -> Self::Globals<'ctx> {
-        RegisterGlobals {
-            general_purpose: self
-                .general_purpose
-                .map_into(module, exec_engine, "general_purpose"),
-            cp0: self.cp0.map_into(module, exec_engine, "cp0"),
-            vector: self.vector.map_into(module, exec_engine, "vector"),
-            special: self.special.map_into(module, exec_engine, "special"),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct RegisterGlobals<'ctx> {
-    general_purpose: RegisterBankMapping<'ctx>,
-    cp0: RegisterBankMapping<'ctx>,
-    vector: RegisterBankMapping<'ctx>,
-    special: RegisterBankMapping<'ctx>,
-}
-
-impl<'ctx> super::Globals<'ctx> for RegisterGlobals<'ctx> {
-    type RegisterID = RspRegister;
-
-    const PROGRAM_COUNTER_ID: Self::RegisterID = RspRegister::ProgramCounter;
-
-    fn pointer_value<T: super::Target>(
-        &self,
-        codegen: &CodeGen<'ctx, T>,
-        index: &Self::RegisterID,
-    ) -> PointerValue<'ctx> {
-        let i32_type = codegen.context.i32_type();
-        let i64_type = codegen.context.i64_type();
-        match index {
-            RspRegister::GeneralPurpose(r) => unsafe {
-                codegen.builder.build_in_bounds_gep(
-                    i32_type,
-                    self.general_purpose.pointer_value(),
-                    &[i32_type.const_int(r.to_repr() as u64, false)],
-                    &format!("{}_", r.name()),
-                )
-            },
-            RspRegister::Cp0(i) => unsafe {
-                codegen.builder.build_in_bounds_gep(
-                    i32_type,
-                    self.cp0.pointer_value(),
-                    &[i32_type.const_int(*i as u64, false)],
-                    &format!("cp0_{i}_"),
-                )
-            },
-            RspRegister::Vector(i) => unsafe {
-                codegen.builder.build_in_bounds_gep(
-                    i64_type,
-                    self.vector.pointer_value(),
-                    &[i64_type.const_int(*i as u64, false)],
-                    &format!("vec_{i}_"),
-                )
-            },
-            RspRegister::ProgramCounter => self.special.pointer_value(),
-        }
-    }
-
-    fn is_atomic(&self, reg: Self::RegisterID) -> bool {
-        match reg {
-            RspRegister::GeneralPurpose(_) => self.general_purpose.is_atomic(),
-            RspRegister::Cp0(_) => self.cp0.is_atomic(),
-            RspRegister::Vector(_) => self.vector.is_atomic(),
-            RspRegister::ProgramCounter => self.special.is_atomic(),
-        }
-    }
-}
+mod registers;
 
 #[derive(Default)]
-pub struct Memory;
+pub(crate) struct Memory;
 
-impl super::Memory for Memory {
+impl target::Memory for Memory {
     type Registers = Registers;
-
-    #[allow(clippy::cast_possible_truncation)]
-    fn virtual_to_physical_address(
-        &self,
-        vaddr: u64,
-        _access_mode: tlb::AccessMode,
-        _registers: &Self::Registers,
-    ) -> Result<PhysicalAddress, tlb::TranslationError> {
-        Ok(vaddr as u32)
-    }
-
-    fn physical_to_virtual_address(
-        &self,
-        paddr: PhysicalAddress,
-        _access_mode: tlb::AccessMode,
-        _registers: &Self::Registers,
-    ) -> Result<u64, tlb::TranslationError> {
-        Ok(u64::from(paddr))
-    }
 }
 
 #[derive(Default, Debug)]
 pub struct Rsp;
 
-impl super::Target for Rsp {
+impl target::Target for Rsp {
     type Registers = Registers;
     type Memory = Memory;
 
@@ -147,6 +30,7 @@ impl super::Target for Rsp {
     type Label = super::cpu::Label;
     type LabelList = super::cpu::LabelList;
 
+    #[allow(clippy::cast_possible_truncation)]
     fn compile_instruction(codegen: &CodeGen<Self>, instr: &Self::Instruction) -> Option<()> {
         let i32_type = codegen.context.i32_type();
 
@@ -161,11 +45,13 @@ impl super::Target for Rsp {
                 let shift = i32_type.const_int(u64::from(instr.sa()), false);
                 let target = codegen.read_register_raw(
                     i32_type,
-                    RspRegister::GeneralPurpose(instr.rt().try_into().unwrap()),
+                    register::GeneralPurpose::from_repr(instr.rt() as u8).unwrap(),
                 );
                 let result = codegen.builder.build_left_shift(target, shift, "sll_shift");
                 codegen.write_register_raw(
-                    RspRegister::GeneralPurpose(instr.rd().try_into().unwrap()),
+                    register::GeneralPurpose::from_repr(instr.rd() as u8)
+                        .unwrap()
+                        .into(),
                     result,
                 );
             }
@@ -175,12 +61,14 @@ impl super::Target for Rsp {
                 let immediate = i32_type.const_int(u64::from(instr.immediate()), false);
                 let source = codegen.read_register_raw(
                     i32_type,
-                    RspRegister::GeneralPurpose(instr.rs().try_into().unwrap()),
+                    register::GeneralPurpose::from_repr(instr.rs() as u8).unwrap(),
                 );
 
                 let result = codegen.builder.build_or(source, immediate, "ori_res");
                 codegen.write_register_raw(
-                    RspRegister::GeneralPurpose(instr.rt().try_into().unwrap()),
+                    register::GeneralPurpose::from_repr(instr.rt() as u8)
+                        .unwrap()
+                        .into(),
                     result,
                 );
             }
@@ -220,19 +108,16 @@ impl<B: Bus> Environment<'_, Rsp, B> {
         debug_assert!(!has_coprocessor);
         debug_assert!(!has_bad_vaddr);
 
-        // set halted/broke
-        let status = self.registers.cp0.read_relaxed(4).unwrap() | 0b11;
-        self.registers.cp0.write_relaxed(4, status).unwrap();
+        self.registers.increment_pc(4);
 
-        // increment pc
-        let pc = self.registers.special.read_relaxed(0).unwrap() + 4;
-        self.registers.special.write_relaxed(0, pc).unwrap();
+        let status = self.registers.status().with_broke(true).with_halted(true);
+        self.registers.set_status(status);
 
-        while (self.registers.cp0.read_relaxed(4).unwrap() & 0b1) != 0 {
+        while self.registers.status().halted() {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
 
-        self.get_function_ptr(self.registers.special.read_relaxed(0).unwrap())
+        self.get_function_ptr(self.registers.read(register::Special::ProgramCounter))
     }
 }
 

@@ -3,7 +3,6 @@
 
 use self::register::Registers;
 use n64_common::{
-    memory::Section,
     utils::{boxed_array, thiserror::Error},
     SideEffects,
 };
@@ -16,6 +15,8 @@ use std::{
 mod cpu;
 mod dma;
 mod register;
+
+pub use mips_lifter::target::rsp::register::control::MemoryBank;
 
 #[derive(Error, Debug)]
 pub enum RspError {
@@ -30,36 +31,14 @@ pub enum RspError {
 
 pub type RspResult<T> = Result<T, RspError>;
 
-/// The bank of memory accessed by a DMA transfer
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum MemoryBank {
-    IMem,
-    DMem,
-}
-
-impl MemoryBank {
-    #[must_use]
-    pub fn as_section(self) -> Section {
-        match self {
-            Self::IMem => Section::RspIMemory,
-            Self::DMem => Section::RspDMemory,
-        }
-    }
-
-    /// Get the size of the memory bank in bytes
-    #[must_use]
-    #[allow(clippy::len_without_is_empty)] // Does not make sense on enums
-    pub const fn len(self) -> usize {
-        0x1000
-    }
-}
+// TODO: remove the Box here, Arc is already heap-allocated
+type MemoryBankHandle = Arc<RwLock<Box<[u8; MemoryBank::LEN]>>>;
 
 pub struct Rsp {
     registers: Registers,
     cpu: cpu::Handle,
-    // TODO: remove the Box here, Arc is already heap-allocated
-    dmem: Arc<RwLock<Box<[u8; MemoryBank::DMem.len()]>>>,
-    imem: Arc<RwLock<Box<[u8; MemoryBank::IMem.len()]>>>,
+    dmem: MemoryBankHandle,
+    imem: MemoryBankHandle,
 }
 
 impl Rsp {
@@ -114,7 +93,8 @@ impl Rsp {
     pub fn write_register(&mut self, offset: usize, value: u32) -> RspResult<SideEffects> {
         if offset == 0x10 {
             // TODO: actual impl
-            let mut sp_status = register::definitions::SpStatus::from(self.cpu.sp_status());
+            let mut sp_status =
+                mips_lifter::target::rsp::register::control::StatusRead::from(self.cpu.sp_status());
             sp_status.write(value);
             self.cpu.set_sp_status(sp_status.into());
             Ok(SideEffects::default())

@@ -47,6 +47,7 @@ impl Index {
     /// A mask that covers all the writable bits of the register.
     pub const WRITE_MASK: u64 = 0b1000_0000_0000_0000_0000_0000_0011_1111;
 
+    #[must_use]
     pub const fn new(raw: u32) -> Self {
         Self(raw)
     }
@@ -54,7 +55,7 @@ impl Index {
 
 impl From<Index> for u64 {
     fn from(value: Index) -> Self {
-        value.0 as u64
+        u64::from(value.0)
     }
 }
 
@@ -76,10 +77,12 @@ bitfield! {
 }
 
 impl EntryHi {
+    #[must_use]
     pub const fn new(raw: u64) -> Self {
         Self(raw)
     }
 
+    #[must_use]
     pub fn virtual_page_number(&self, bits: Bits) -> u32 {
         match bits {
             Bits::Bits32 => self.virtual_page_number_32(),
@@ -106,6 +109,7 @@ bitfield! {
 }
 
 impl EntryLo {
+    #[must_use]
     pub const fn new(raw: u64) -> Self {
         Self(raw)
     }
@@ -122,15 +126,17 @@ bitfield_without_debug! {
 }
 
 impl PageMask {
+    #[must_use]
     pub const fn new(raw: u32) -> Self {
         Self(raw)
     }
 
     /// Page comparison mask, determines the virtual page size of the corresponding entry.
     /// Includes the initial bits which make it start at 4KiB.
+    #[must_use]
     pub fn mask(&self) -> u64 {
         const START: u64 = 0b1111_1111_1111;
-        ((self.raw_mask() as u64) << START.count_ones()) | START
+        (u64::from(self.raw_mask()) << START.count_ones()) | START
     }
 }
 
@@ -178,14 +184,17 @@ bitfield! {
 impl InterruptStatus {
     pub const TIMER_MASK: u64 = 1 << 7;
 
+    #[must_use]
     pub const fn new(raw: u8) -> Self {
         Self(raw)
     }
 
+    #[must_use]
     pub const fn raw(&self) -> u8 {
         self.0
     }
 
+    #[must_use]
     pub const fn check_mask(&self, mask: Self) -> bool {
         (self.0 & mask.0) != 0
     }
@@ -241,11 +250,13 @@ impl Status {
     pub const COPROCESSOR_2_ENABLED_MASK: u64 = 1 << 30;
     pub const COPROCESSOR_3_ENABLED_MASK: u64 = 1 << 31;
 
+    #[must_use]
     pub const fn new(raw: u32) -> Self {
         Self(raw)
     }
 
     /// Checks whether 64-bit addressing and operations are enabled in the current operating mode.
+    #[must_use]
     pub fn is_64_bits(&self) -> bool {
         match self.mode() {
             OperatingMode::Kernel => self.kernel_64_bits(),
@@ -272,10 +283,12 @@ impl Cause {
     pub const INTERRUPT_PENDING_TIMER_MASK: u64 =
         InterruptStatus::TIMER_MASK << Self::INTERRUPT_PENDING_SHIFT;
 
+    #[must_use]
     pub const fn new(raw: u32) -> Self {
         Self(raw)
     }
 
+    #[must_use]
     pub const fn raw(&self) -> u32 {
         self.0
     }
@@ -293,12 +306,13 @@ bitfield! {
 }
 
 impl Context {
-    /// A mask that covers BadVPN2 and prior reserved bits of the register. This should not be writable by software.
+    /// A mask that covers `BadVPN2` and prior reserved bits of the register. This should not be writable by software.
     pub const READ_ONLY_MASK: u64 = 0b111_1111_1111_1111_1111_1111;
 
     /// A mask that covers all the writable bits of the register.
     pub const PAGE_TABLE_ENTRY_BASE_MASK: u64 = !Self::READ_ONLY_MASK;
 
+    #[must_use]
     pub const fn new(raw: u64) -> Self {
         Self(raw)
     }
@@ -318,12 +332,13 @@ bitfield! {
 }
 
 impl XContext {
-    /// A mask that covers BadVPN2 and prior reserved bits of the register. This should not be writable by software.
+    /// A mask that covers `BadVPN2` and prior reserved bits of the register. This should not be writable by software.
     pub const READ_ONLY_MASK: u64 = 0b1_1111_1111_1111_1111_1111_1111_1111_1111;
 
     /// A mask that covers all the writable bits of the register.
     pub const PAGE_TABLE_ENTRY_BASE_MASK: u64 = !Self::READ_ONLY_MASK;
 
+    #[must_use]
     pub const fn new(raw: u64) -> Self {
         Self(raw)
     }
@@ -342,6 +357,7 @@ impl Wired {
     /// A mask that covers all the writable bits of the register.
     pub const WRITE_MASK: u64 = 0b11_1111;
 
+    #[must_use]
     pub const fn new(raw: u32) -> Self {
         Self(raw)
     }
@@ -360,6 +376,7 @@ impl LLAddr {
     /// A mask that covers all the writable bits of the register.
     pub const WRITE_MASK: u64 = u32::MAX as u64;
 
+    #[must_use]
     pub const fn new(raw: u32) -> Self {
         Self(raw)
     }
@@ -386,6 +403,7 @@ impl Config {
     /// A mask that covers all the writable bits of the register.
     pub const WRITE_MASK: u64 = 0b1111_0000_0000_1000_0000_0000_1111;
 
+    #[must_use]
     pub const fn new(raw: u32) -> Self {
         Self(raw)
     }
@@ -403,6 +421,7 @@ bitfield! {
 }
 
 impl PRId {
+    #[must_use]
     pub const fn new(raw: u32) -> Self {
         Self(raw)
     }
@@ -420,6 +439,7 @@ bitfield! {
 impl PErr {
     pub const WRITE_MASK: u64 = 0b1111_1111;
 
+    #[must_use]
     pub const fn new(raw: u32) -> Self {
         Self(raw)
     }
