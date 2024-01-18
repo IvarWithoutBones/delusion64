@@ -47,7 +47,7 @@
       };
 
       libraryPath = lib.optionalString hostPlatform.isLinux
-        (lib.makeLibraryPath [ pkgs.vulkan-loader ]);
+        (lib.makeLibraryPath (with pkgs; [ vulkan-loader libxkbcommon ]));
 
       delusion64 = naerskLib.buildPackage {
         pname = "delusion64";
@@ -126,6 +126,7 @@
           # Optional debugging tools
           gdb
           just
+          cargo-outdated
           cargo-expand
           cargo-flamegraph
           llvmPackages.clang

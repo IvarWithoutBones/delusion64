@@ -7,7 +7,7 @@ edition = "2021"
 gdbstub = "0.7.1"
 strum = { version = "0.25.0", features = ["derive"] }
 tartan-bitfield = "1.2.0"
-thiserror = "1.0.51"
+thiserror = "1.0.56"
 mips-decomp = { path = "../mips-decomp" }
 
 [dependencies.inkwell]

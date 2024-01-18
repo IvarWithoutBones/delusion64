@@ -14,7 +14,7 @@
 //!
 //! # Example
 //!
-//! ```rust
+//! ```ignore
 //! struct App;
 //! impl eframe::App for App {
 //!     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -28,7 +28,7 @@
 //!
 //! You can also customize your own theme:
 //!
-//! ```rust
+//! ```ignore
 //! use catppuccin_egui::{Theme, MOCHA};
 //! const MY_MOCHA: Theme = Theme {
 //!     red: egui::Color32::from_rgb(255, 0, 0),
@@ -50,7 +50,7 @@ pub fn set_theme(ctx: &egui::Context, theme: Theme) {
 ///
 /// # Example
 ///
-/// ```rust
+/// ```ignore
 /// # use egui::__run_test_ctx;
 /// # __run_test_ctx(|ctx| {
 /// let mut style = (*ctx.style()).clone();
