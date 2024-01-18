@@ -10,6 +10,12 @@ theme = []
 
 [dependencies]
 rfd = "0.12.1"
+thiserror = "1.0.51"
+
+[dependencies.ring-channel]
+version = "0.12.0"
+default-features = false
+features = ["std"]
 
 [dependencies.eframe]
 version = "0.24.0"

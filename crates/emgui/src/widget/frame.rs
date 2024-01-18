@@ -15,7 +15,7 @@ impl Frame {
     }
 
     pub fn update(&mut self, ctx: &egui::Context) -> bool {
-        if let Some(fb) = &self.buffer_receiver.receive() {
+        if let Some(fb) = &self.buffer_receiver.receive().expect("channel closed") {
             self.frame = Some(ctx.load_texture(
                 "frame",
                 egui::ColorImage::from_rgba_unmultiplied([fb.width, fb.height], &fb.pixels),
@@ -39,7 +39,8 @@ impl Frame {
     }
 
     pub fn clear(&mut self) {
-        while self.buffer_receiver.receive().is_some() {}
+        // Consume the last frame, if any.
+        self.buffer_receiver.receive().expect("channel closed");
         self.frame = None;
     }
 }

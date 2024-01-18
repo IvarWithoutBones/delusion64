@@ -29,7 +29,7 @@ impl ErrorDialogue {
     }
 
     pub fn update(&mut self) {
-        if let Some(error) = self.receiver.receive() {
+        if let Some(error) = self.receiver.receive().expect("channel closed") {
             self.error = Some(error);
         }
     }

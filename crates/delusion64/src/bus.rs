@@ -123,7 +123,7 @@ impl Bus {
     }
 
     fn update_controller(&mut self) -> Result<(), BusError> {
-        if let Some(controller_state) = self.context.receive() {
+        if let Some(controller_state) = self.context.receive().expect("channel closed") {
             self.si.pif.channels.update_controller(
                 Channel::Controller1,
                 Controller::new(controller_state).input(),
@@ -137,7 +137,7 @@ impl Bus {
             .gui_poll_counter
             .checked_sub(cycles)
             .unwrap_or_else(|| {
-                if let Some(stop) = self.context.receive() {
+                if let Some(stop) = self.context.receive().expect("channel closed") {
                     // TODO: allow placing generics on receive()
                     let _: emgui::context::Stop = stop;
                     v.request_exit = true;
@@ -350,11 +350,13 @@ impl BusInterface for Bus {
 
         if self.vi.vblank {
             if let Ok(fb) = self.vi.framebuffer(self.rdram.as_slice()) {
-                self.context.send(context::Framebuffer {
-                    width: VideoInterface::SCREEN_WIDTH,
-                    height: VideoInterface::SCREEN_HEIGHT,
-                    pixels: fb.pixels,
-                });
+                self.context
+                    .send(context::Framebuffer {
+                        width: VideoInterface::SCREEN_WIDTH,
+                        height: VideoInterface::SCREEN_HEIGHT,
+                        pixels: fb.pixels,
+                    })
+                    .expect("channel closed");
             }
 
             // TODO: only call this on PIF DMA, it will not be read until then.
@@ -379,7 +381,9 @@ impl BusInterface for Bus {
     fn on_panic(&mut self, error: mips_lifter::runtime::bus::BusError<Self::Error>) -> PanicAction {
         if self.gui_connected {
             let msg = format!("{error:?}");
-            self.context.send(context::error::Error::new(msg));
+            self.context
+                .send(context::error::Error::new(msg))
+                .expect("channel closed");
             PanicAction::Idle
         } else {
             // Let the JIT runtime kill the process (unless GDB is attached)
