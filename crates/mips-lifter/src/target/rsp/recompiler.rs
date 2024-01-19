@@ -1,18 +1,192 @@
-use super::Rsp;
+use super::{register, Rsp};
 use crate::codegen::CodeGen;
+use inkwell::{values::IntValue, IntPredicate};
 use mips_decomp::{
     instruction::{Mnenomic, ParsedInstruction},
-    Exception,
+    register::rsp::control::MemoryBank,
+    Exception, INSTRUCTION_SIZE,
 };
 
+/// A helper to calculate the target for jump instructions (JAL, J).
+/// The 26-bit target is shifted left two bits and combined with the high-order four bits of the address of the delay slot.
+fn jump_address(delay_slot_pc: u64, target: u32) -> u64 {
+    let masked_delay_slot = delay_slot_pc & 0xFFFF_FFFF_F000_0000;
+    let shifted_target = u64::from(target) << 2;
+    shifted_target | masked_delay_slot
+}
+
+enum JumpTarget<'ctx> {
+    Constant(u64),
+    Dynamic(IntValue<'ctx>),
+}
+
 pub(crate) fn compile_instruction_with_delay_slot(
-    _codegen: &CodeGen<Rsp>,
-    _pc: u64,
-    _instr: &ParsedInstruction,
-    _delay_slot_instr: &ParsedInstruction,
-    _on_instruction: impl Fn(u64),
+    codegen: &CodeGen<Rsp>,
+    pc: u64,
+    instr: &ParsedInstruction,
+    delay_slot_instr: &ParsedInstruction,
+    on_instruction: impl Fn(u64),
 ) {
-    todo!("RSP compile_instruction_with_delay_slot")
+    debug_assert!(instr.mnemonic().is_branch() || instr.mnemonic().is_jump());
+    let delay_slot_pc = (pc + INSTRUCTION_SIZE as u64) % MemoryBank::LEN as u64;
+    let pc = pc % MemoryBank::LEN as u64;
+
+    let compile_delay_slot_instr = || {
+        // Update runtime metadata about delay slots so we can properly handle traps and exceptions
+        codegen.set_inside_delay_slot(true);
+        on_instruction(delay_slot_pc);
+        compile_instruction(codegen, delay_slot_instr);
+        codegen.set_inside_delay_slot(false);
+    };
+
+    if instr.mnemonic().is_branch() {
+        // Evaluate the branch condition prior to running the delay slot instruction,
+        // as the delay slot instruction can influence the branch condition.
+        let name = &format!("{}_cmp", instr.mnemonic().name());
+        let comparison = {
+            let (pred, lhs, rhs) = evaluate_branch(codegen, instr, delay_slot_pc);
+            codegen.builder.build_int_compare(pred, lhs, rhs, name)
+        };
+
+        // The delay slot instruction gets executed regardless of the branch condition.
+        compile_delay_slot_instr();
+
+        on_instruction(pc);
+        codegen.build_if(name, comparison, || {
+            let target_pc = instr
+                .try_resolve_constant_jump(pc)
+                .expect("target address for branch instruction could not be resolved");
+            codegen.build_constant_jump(target_pc);
+        });
+    } else {
+        // Evaluate the jump target, and set the link register if needed, prior to executing the delay slot instruction.
+        let target = evaluate_jump(codegen, instr, delay_slot_pc);
+
+        // Compile the delay slot, writes to the jump target register will be ignored.
+        compile_delay_slot_instr();
+
+        // Execute the jump.
+        on_instruction(pc);
+        match target {
+            JumpTarget::Constant(vaddr) => codegen.build_constant_jump(vaddr),
+            JumpTarget::Dynamic(vaddr) => codegen.build_dynamic_jump(vaddr),
+        }
+    }
+}
+
+fn evaluate_jump<'ctx>(
+    codegen: &CodeGen<'ctx, Rsp>,
+    instr: &ParsedInstruction,
+    delay_slot_pc: u64,
+) -> JumpTarget<'ctx> {
+    const MASK: u64 = (MemoryBank::LEN as u64 - 1) & !0b11;
+    let i32_type = codegen.context.i32_type();
+    let return_address = {
+        let value = (delay_slot_pc + INSTRUCTION_SIZE as u64) & MASK;
+        i32_type.const_int(value, false)
+    };
+
+    match instr.mnemonic() {
+        Mnenomic::J => {
+            // Jump to target address
+            JumpTarget::Constant(jump_address(delay_slot_pc, instr.immediate()))
+        }
+
+        Mnenomic::Jal => {
+            // Jump to target address, stores return address in r31 (ra)
+            codegen.write_general_register(register::GeneralPurpose::Ra, return_address);
+            JumpTarget::Constant(jump_address(delay_slot_pc, instr.immediate()))
+        }
+
+        Mnenomic::Jr => {
+            // Jump to address stored in rs.
+            let source = codegen.read_general_register(i32_type, instr.rs());
+            let jump_target = codegen.build_mask(source, MASK, "jr_mask");
+            JumpTarget::Dynamic(jump_target)
+        }
+
+        Mnenomic::Jalr => {
+            // Jump to address stored in rs, stores return address in rd
+            // NOTE: Register read/write is swapped compared to the CPU
+            let source = codegen.read_general_register(i32_type, instr.rs());
+            let jump_target = codegen.build_mask(source, MASK, "jalr_mask");
+            codegen.write_general_register(instr.rd(), return_address);
+            JumpTarget::Dynamic(jump_target)
+        }
+
+        _ => unreachable!("RSP evaluate_jump: {}", instr.mnemonic().name()),
+    }
+}
+
+fn evaluate_branch<'ctx>(
+    codegen: &CodeGen<'ctx, Rsp>,
+    instr: &ParsedInstruction,
+    delay_slot_pc: u64,
+) -> (IntPredicate, IntValue<'ctx>, IntValue<'ctx>) {
+    assert!(
+        !instr.mnemonic().is_likely_branch(),
+        "RSP does not support likely branches"
+    );
+
+    let i32_type = codegen.context.i32_type();
+    match instr.mnemonic() {
+        Mnenomic::Beq => {
+            // If rs equals rt, branch to address.
+            let source = codegen.read_general_register(i32_type, instr.rs());
+            let target = codegen.read_general_register(i32_type, instr.rt());
+            (IntPredicate::EQ, source, target)
+        }
+
+        Mnenomic::Bne => {
+            // If rs is not equal to rt, branch to address.
+            let source = codegen.read_general_register(i32_type, instr.rs());
+            let target = codegen.read_general_register(i32_type, instr.rt());
+            (IntPredicate::NE, source, target)
+        }
+
+        Mnenomic::Blez => {
+            // If rs is less than or equal to zero, branch to address.
+            let source = codegen.read_general_register(i32_type, instr.rs());
+            let zero = i32_type.const_zero();
+            (IntPredicate::SLE, source, zero)
+        }
+
+        Mnenomic::Bgez => {
+            // If rs is greater than or equal to zero, branch to address.
+            let source = codegen.read_general_register(i32_type, instr.rs());
+            (IntPredicate::SGE, source, i32_type.const_zero())
+        }
+
+        Mnenomic::Bltz => {
+            // If rs is less than zero, branch to address.
+            let source = codegen.read_general_register(i32_type, instr.rs());
+            (IntPredicate::SLT, source, i32_type.const_zero())
+        }
+
+        Mnenomic::Bltzal => {
+            // If rs is less than zero, branch to address. Unconditionally stores return address to r31 (ra).
+            let source = codegen.read_general_register(i32_type, instr.rs());
+            let return_address = i32_type.const_int(delay_slot_pc + INSTRUCTION_SIZE as u64, false);
+            codegen.write_general_register(register::GeneralPurpose::Ra, return_address);
+            (IntPredicate::SLT, source, i32_type.const_zero())
+        }
+
+        Mnenomic::Bgezal => {
+            // If rs is greater than or equal to zero, branch to address. Unconditionally stores return address to r31 (ra).
+            let source = codegen.read_general_register(i32_type, instr.rs());
+            let return_address = i32_type.const_int(delay_slot_pc + INSTRUCTION_SIZE as u64, false);
+            codegen.write_general_register(register::GeneralPurpose::Ra, return_address);
+            (IntPredicate::SGE, source, i32_type.const_zero())
+        }
+
+        Mnenomic::Bgtz => {
+            // If rs is greater than zero, branch to address.
+            let source = codegen.read_general_register(i32_type, instr.rs());
+            (IntPredicate::SGT, source, i32_type.const_zero())
+        }
+
+        _ => todo!("RSP evaluate_branch: {}", instr.mnemonic().name()),
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -75,6 +249,68 @@ pub(crate) fn compile_instruction(codegen: &CodeGen<Rsp>, instr: &ParsedInstruct
             let shift = i32_type.const_int(u64::from(instr.sa()), false);
             let target = codegen.read_general_register(i32_type, instr.rt());
             let result = codegen.builder.build_left_shift(target, shift, "sll_shift");
+            codegen.write_general_register(instr.rd(), result);
+        }
+
+        Mnenomic::Sllv => {
+            // shift rt left by the low-order five bits of rs, store result in rd
+            let target = codegen.read_general_register(i32_type, instr.rt());
+            let source = {
+                let source = codegen.read_general_register(i32_type, instr.rs());
+                codegen.build_mask(source, 0b1_1111, "sllv_rs_mask")
+            };
+
+            let result = codegen
+                .builder
+                .build_left_shift(target, source, "sllv_shift");
+            codegen.write_general_register(instr.rd(), result);
+        }
+
+        Mnenomic::Srl => {
+            // Shift rt right by sa bits, store result in rd
+            let target = codegen.read_general_register(i32_type, instr.rt());
+            let shift = i32_type.const_int(u64::from(instr.sa()), false);
+            let result = codegen
+                .builder
+                .build_right_shift(target, shift, false, "srl_shift");
+            codegen.write_general_register(instr.rd(), result);
+        }
+
+        Mnenomic::Srlv => {
+            // Shift rt right by the low-order five bits of rs, store result in rd
+            let target = codegen.read_general_register(i32_type, instr.rt());
+            let source = {
+                let source = codegen.read_general_register(i32_type, instr.rs());
+                codegen.build_mask(source, 0b1_1111, "srlv_rs_mask")
+            };
+
+            let result = codegen
+                .builder
+                .build_right_shift(target, source, false, "srlv_shift");
+            codegen.write_general_register(instr.rd(), result);
+        }
+
+        Mnenomic::Sra => {
+            // Shift rt right by sa bits, store result in rd
+            let target = codegen.read_general_register(i32_type, instr.rt());
+            let shift = i32_type.const_int(u64::from(instr.sa()), false);
+            let result = codegen
+                .builder
+                .build_right_shift(target, shift, true, "sra_shift");
+            codegen.write_general_register(instr.rd(), result);
+        }
+
+        Mnenomic::Srav => {
+            // Shift rt right by the low-order five bits of rs, store result in rd
+            let target = codegen.read_general_register(i32_type, instr.rt());
+            let source = {
+                let source = codegen.read_general_register(i32_type, instr.rs());
+                codegen.build_mask(source, 0b1_1111, "srav_rs_mask")
+            };
+
+            let result = codegen
+                .builder
+                .build_right_shift(target, source, true, "srav_shift");
             codegen.write_general_register(instr.rd(), result);
         }
 

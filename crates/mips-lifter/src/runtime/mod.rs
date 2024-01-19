@@ -277,7 +277,7 @@ where
         .take(0x1000);
 
         let mut res = T::LabelList::from_iter(iter).unwrap_or_else(|| {
-            let msg = &format!("failed to generate label list at {paddr:#x}");
+            let msg = &format!("failed to generate label list at {paddr:#x} ({vaddr:#x})");
             self.panic_update_debugger(msg)
         });
         res.set_start(vaddr);
