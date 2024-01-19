@@ -3,6 +3,7 @@
 use crate::{MemoryBankHandle, RspError};
 use mips_lifter::{
     runtime::bus::{Bus as BusInterface, BusResult, Int, PhysicalAddress},
+    target::rsp::register::control::MemoryBank,
     JitBuilder, RegisterBank,
 };
 use std::{
@@ -106,19 +107,47 @@ impl Bus {
             .with_rsp_registers(regs)
             .run()
     }
+
+    fn read<const SIZE: usize>(&mut self, bank: MemoryBank, address: u32) -> [u8; SIZE] {
+        let mem = match bank {
+            MemoryBank::IMem => &self.imem,
+            MemoryBank::DMem => &self.dmem,
+        }
+        .read()
+        .expect("failed to acquire read lock");
+
+        std::array::from_fn(|i| mem[((address as usize) + i) % MemoryBank::LEN])
+    }
+
+    fn write<const SIZE: usize>(&mut self, bank: MemoryBank, address: u32, slice: &[u8; SIZE]) {
+        let mut mem = match bank {
+            MemoryBank::IMem => &self.imem,
+            MemoryBank::DMem => &self.dmem,
+        }
+        .write()
+        .expect("failed to acquire write lock");
+
+        for (i, value) in slice.iter().enumerate() {
+            mem[((address as usize) + i) % MemoryBank::LEN] = *value;
+        }
+    }
 }
 
 impl BusInterface for Bus {
     type Error = RspError;
 
+    fn read_instruction_memory<const SIZE: usize>(
+        &mut self,
+        address: PhysicalAddress,
+    ) -> BusResult<Int<SIZE>, Self::Error> {
+        Ok(Int::from_array(self.read(MemoryBank::IMem, address)).into())
+    }
+
     fn read_memory<const SIZE: usize>(
         &mut self,
         address: PhysicalAddress,
     ) -> BusResult<Int<SIZE>, Self::Error> {
-        // TODO: should not assume banks
-        let imem = self.imem.read().unwrap();
-        let slice = &imem[(address as usize) % 0x1000..][..SIZE];
-        Ok(Int::from_slice(slice).unwrap().into())
+        Ok(Int::from_array(self.read(MemoryBank::DMem, address)).into())
     }
 
     fn write_memory<const SIZE: usize>(
@@ -126,10 +155,7 @@ impl BusInterface for Bus {
         address: PhysicalAddress,
         value: Int<SIZE>,
     ) -> BusResult<(), Self::Error> {
-        // TODO: should not assume banks
-        let mut dmem = self.dmem.write().unwrap();
-        let slice = &mut dmem[(address as usize) % 0x1000..][..SIZE];
-        slice.copy_from_slice(value.as_slice());
+        self.write(MemoryBank::DMem, address, value.as_slice());
         Ok(().into())
     }
 

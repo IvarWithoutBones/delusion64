@@ -15,7 +15,7 @@ use crate::{
     JitBuilder,
 };
 use inkwell::{context::Context, execution_engine::ExecutionEngine, module::Module};
-use std::{cell::UnsafeCell, collections::HashMap, pin::Pin};
+use std::{cell::UnsafeCell, collections::HashMap, mem::size_of, pin::Pin};
 use strum::IntoEnumIterator;
 
 pub(crate) use self::function::RuntimeFunction;
@@ -256,6 +256,34 @@ where
         unsafe { self.jit_flags.get().read() }
     }
 
+    fn read_raw_instruction(&mut self, paddr: PhysicalAddress) -> u32 {
+        self.bus
+            .read_instruction_memory(paddr)
+            .unwrap_or_else(|err| {
+                let msg = &format!("failed to read instruction memory at {paddr:#x}: {err:#?}");
+                self.panic_update_debugger(msg)
+            })
+            .handle(self)
+            .into()
+    }
+
+    fn read_label_list(&mut self, mut paddr: PhysicalAddress, vaddr: u64) -> T::LabelList {
+        let iter = std::iter::from_fn(|| {
+            let value = self.read_raw_instruction(paddr);
+            paddr += size_of::<u32>() as PhysicalAddress;
+            Some(value)
+        })
+        // Arbitrary limit on the maximum number of instructions in a block, to avoid infinitely fetching when there is no terminator.
+        .take(0x1000);
+
+        let mut res = T::LabelList::from_iter(iter).unwrap_or_else(|| {
+            let msg = &format!("failed to generate label list at {paddr:#x}");
+            self.panic_update_debugger(msg)
+        });
+        res.set_start(vaddr);
+        res
+    }
+
     /*
         Runtime functions. These are not meant to be called directly, but rather by JIT'ed code.
     */
@@ -296,23 +324,11 @@ where
         };
 
         if self.trace {
-            println!("generating block at {vaddr:#x}",);
+            println!("generating block at {vaddr:#x}");
         }
 
         let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
-        let label_list = {
-            // Arbitrary limit on the maximum number of instructions in a block to avoid infinite loops.
-            let mut list = {
-                let mut iter = bus::u32_iter(&mut self.bus, paddr).take(0x1000);
-                <T::LabelList as LabelList>::from_iter(&mut iter)
-            }
-            .unwrap_or_else(|| {
-                let msg = format!("failed to parse instructions for {vaddr:#x}");
-                self.panic_update_debugger(&msg)
-            });
-            list.set_start(vaddr);
-            list
-        };
+        let label_list = self.read_label_list(paddr, vaddr);
 
         let module = self.codegen.context.create_module("tmp");
         let globals = self.map_into(&module, &self.codegen.execution_engine);
@@ -364,9 +380,10 @@ where
         let pc_vaddr = self.registers.read_program_counter();
 
         if self.trace {
-            let instr_raw: u32 = self.read_or_panic(pc_vaddr).into();
+            let paddr = self.virtual_to_physical_address(pc_vaddr, AccessMode::Read);
+            let instr_raw = self.read_raw_instruction(paddr);
             let instr: T::Instruction = instr_raw.try_into().unwrap_or_else(|_err| {
-                let msg = format!("failed to parse instruction at {pc_vaddr:#06x}");
+                let msg = format!("failed to parse instruction at {pc_vaddr:#x}");
                 self.panic_update_debugger(&msg)
             });
             println!("{pc_vaddr:06x}: {instr}");

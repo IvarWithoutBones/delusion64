@@ -142,6 +142,11 @@ impl<const SIZE: usize> Int<SIZE> {
     }
 
     #[inline]
+    pub fn from_array(slice: [u8; SIZE]) -> Self {
+        Self(slice)
+    }
+
+    #[inline]
     pub fn from_slice(slice: &[u8]) -> Result<Self, IntError> {
         let slice = slice.get(..SIZE).ok_or(IntError::UnexpectedSize {
             expected: SIZE,
@@ -257,18 +262,26 @@ pub trait Bus {
     /// The error type that can be returned by the bus.
     type Error: std::error::Error;
 
-    /// Reads a value from memory.
+    /// Read a value from data memory.
     fn read_memory<const SIZE: usize>(
         &mut self,
         address: PhysicalAddress,
     ) -> BusResult<Int<SIZE>, Self::Error>;
 
-    /// Writes a value to memory.
+    /// Write a value to data memory.
     fn write_memory<const SIZE: usize>(
         &mut self,
         address: PhysicalAddress,
         value: Int<SIZE>,
     ) -> BusResult<(), Self::Error>;
+
+    /// Read a value from instruction memory. By default [`Bus::read_memory`] will be used for both data/instruction reads, in case there is no destinction.
+    fn read_instruction_memory<const SIZE: usize>(
+        &mut self,
+        address: PhysicalAddress,
+    ) -> BusResult<Int<SIZE>, Self::Error> {
+        self.read_memory(address)
+    }
 
     /// Performs a single tick, used to emulate clock cycles.
     fn tick(&mut self, cycles: usize) -> BusResult<(), Self::Error>;
@@ -279,12 +292,4 @@ pub trait Bus {
     fn on_panic(&mut self, _error: BusError<Self::Error>) -> PanicAction {
         PanicAction::Kill
     }
-}
-
-pub(crate) fn u32_iter<T: Bus>(bus: &mut T, mut paddr: u32) -> impl Iterator<Item = u32> + '_ {
-    std::iter::from_fn(move || {
-        let value = bus.read_memory(paddr).unwrap().inner.into();
-        paddr += 4;
-        Some(value)
-    })
 }
