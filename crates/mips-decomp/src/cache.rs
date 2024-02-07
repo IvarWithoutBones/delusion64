@@ -1,11 +1,11 @@
 //! Parsing for the `cache` instructions's operands. See the `cache` instruction in the ISA manual for more information.
 
 use std::fmt;
-use strum::{EnumVariantNames, FromRepr, IntoStaticStr, VariantNames};
+use strum::{FromRepr, IntoStaticStr, VariantNames};
 
 /// The type of cache the instruction refers to. Meant to be parsed using `Operand::CacheSubject`.
 /// Can be combined with the `CacheOpcode` to create a `CacheOperation`.
-#[derive(FromRepr, EnumVariantNames, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(FromRepr, VariantNames, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CacheSubject {
     Instruction = 0,
     Data = 1,
@@ -29,7 +29,7 @@ impl fmt::Display for CacheSubject {
 
 /// The unique opcode identifying the cache operation. Meant to be parsed using `Operand::CacheOpcode`.
 /// Can be combined with the `CacheSubject` to create a `CacheOperation`.
-#[derive(FromRepr, EnumVariantNames, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(FromRepr, VariantNames, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CacheOpcode {
     IndexInvalidate = 0,
     LoadTag = 1,
@@ -116,7 +116,7 @@ impl CacheOperation {
     }
 
     pub fn name(&self) -> &'static str {
-        // Because this enum contains variants with associated data, we have to use `IntoStaticStr` instead of `FromRepr` + `EnumVariantNames`.
+        // Because this enum contains variants with associated data, we have to use `IntoStaticStr` instead of `FromRepr` + `VariantNames`.
         // That sadly means this function cannot be a const fn, as the `From` trait cannot be used from a const context.
         self.into()
     }

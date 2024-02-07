@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 gdbstub = "0.7.1"
-strum = { version = "0.25.0", features = ["derive"] }
+strum = { version = "0.26.1", features = ["derive"] }
 tartan-bitfield = "1.2.0"
 thiserror = "1.0.56"
 mips-decomp = { path = "../mips-decomp" }

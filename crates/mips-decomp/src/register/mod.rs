@@ -2,7 +2,7 @@
 
 #![warn(clippy::all, clippy::pedantic)]
 
-use strum::{EnumCount, EnumIter, EnumVariantNames, FromRepr};
+use strum::{EnumCount, EnumIter, FromRepr, VariantNames};
 
 // Note that these macros must be defined before the modules that use them:
 // https://doc.rust-lang.org/reference/macros-by-example.html#textual-scope
@@ -75,7 +75,7 @@ pub mod cpu;
 pub mod rsp;
 
 /// A general purpose MIPS 3 register, also known as an `gpr`. This definition applies to both the RSP and CPU.
-#[derive(EnumCount, EnumIter, EnumVariantNames, FromRepr, Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(EnumCount, EnumIter, VariantNames, FromRepr, Debug, PartialEq, Eq, Clone, Copy)]
 #[strum(serialize_all = "snake_case")]
 #[repr(u8)]
 pub enum GeneralPurpose {

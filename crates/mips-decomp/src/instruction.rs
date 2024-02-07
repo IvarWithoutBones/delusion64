@@ -4,9 +4,9 @@ use crate::{
     register, INSTRUCTION_SIZE,
 };
 use std::fmt;
-use strum::{EnumVariantNames, FromRepr, VariantNames};
+use strum::{FromRepr, VariantNames};
 
-#[derive(EnumVariantNames, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(VariantNames, Debug, Clone, Copy, PartialEq, Eq)]
 #[strum(serialize_all = "lowercase")]
 pub enum Mnenomic {
     Add,

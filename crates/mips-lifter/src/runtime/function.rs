@@ -4,9 +4,9 @@ use inkwell::{
     context::ContextRef, execution_engine::ExecutionEngine, module::Module, types::FunctionType,
     values::FunctionValue,
 };
-use strum::{EnumIter, EnumVariantNames, VariantNames};
+use strum::{EnumIter, VariantNames};
 
-#[derive(EnumVariantNames, EnumIter, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(VariantNames, EnumIter, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[strum(serialize_all = "snake_case")]
 pub enum RuntimeFunction {
     Panic,

@@ -6,4 +6,4 @@ edition = "2021"
 
 [dependencies]
 n64-common = { path = "../n64-common" }
-strum = { version = "0.25.0", features = ["derive"] }
+strum = { version = "0.26.1", features = ["derive"] }

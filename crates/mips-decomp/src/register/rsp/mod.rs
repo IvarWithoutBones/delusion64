@@ -1,7 +1,7 @@
 //! Register definitions for the N64's RSP.
 
 use std::mem::size_of;
-use strum::{EnumCount, EnumIter, EnumVariantNames, FromRepr};
+use strum::{EnumCount, EnumIter, FromRepr, VariantNames};
 
 pub mod control;
 pub mod special;
@@ -10,7 +10,7 @@ pub mod special;
 pub use super::GeneralPurpose;
 
 /// The RSP's control registers, mapped to coprocessor 0 as well as the CPU's address space via MMIO.
-#[derive(EnumCount, EnumIter, EnumVariantNames, FromRepr, Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(EnumCount, EnumIter, VariantNames, FromRepr, Debug, PartialEq, Eq, Clone, Copy)]
 #[repr(u8)]
 pub enum Control {
     /// Address in `IMEM`/`DMEM` for a DMA transfer.
@@ -42,7 +42,7 @@ impl Control {
 }
 
 /// The RSP's 128-bit vector registers used for fixed-point SIMD instructions, mapped to coprocessor 2. These are also referred to as `VPR`s.
-#[derive(EnumCount, EnumIter, EnumVariantNames, FromRepr, Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(EnumCount, EnumIter, VariantNames, FromRepr, Debug, PartialEq, Eq, Clone, Copy)]
 #[repr(u8)]
 pub enum Vector {
     Vpr0,
@@ -82,7 +82,7 @@ pub enum Vector {
 impl_reg!(Vector);
 
 /// An miscellaneous register that doesn't fit into any other category.
-#[derive(EnumCount, EnumIter, EnumVariantNames, FromRepr, Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(EnumCount, EnumIter, VariantNames, FromRepr, Debug, PartialEq, Eq, Clone, Copy)]
 #[repr(u8)]
 pub enum Special {
     /// The 12-bit program counter.

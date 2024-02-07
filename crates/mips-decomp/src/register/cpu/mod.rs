@@ -1,6 +1,6 @@
 //! Register definitions for the N64's CPU.
 
-use strum::{EnumCount, EnumIter, EnumVariantNames, FromRepr};
+use strum::{EnumCount, EnumIter, VariantNames, FromRepr};
 
 pub mod cp0;
 pub mod fpu;
@@ -8,7 +8,7 @@ pub mod fpu;
 pub use super::GeneralPurpose;
 
 /// A MIPS 3 coprocessor 0 register.
-#[derive(EnumCount, EnumIter, EnumVariantNames, FromRepr, Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(EnumCount, EnumIter, VariantNames, FromRepr, Debug, PartialEq, Eq, Clone, Copy)]
 #[repr(u8)]
 pub enum Cp0 {
     /// Programmable pointer into TLB array
@@ -103,7 +103,7 @@ impl Cp0 {
 }
 
 /// A general purpose MIPS 3 FPU (coprocessor 1, or CP1) register.
-#[derive(EnumCount, EnumIter, EnumVariantNames, FromRepr, Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(EnumCount, EnumIter, VariantNames, FromRepr, Debug, PartialEq, Eq, Clone, Copy)]
 #[strum(serialize_all = "snake_case")]
 #[repr(u8)]
 pub enum Fpu {
@@ -144,7 +144,7 @@ pub enum Fpu {
 impl_reg!(Fpu);
 
 /// A MIPS 3 FPU (coprocessor 1, or CP1) control register, or `FCR`.
-#[derive(EnumCount, EnumIter, EnumVariantNames, FromRepr, Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(EnumCount, EnumIter, VariantNames, FromRepr, Debug, PartialEq, Eq, Clone, Copy)]
 #[repr(u8)]
 pub enum FpuControl {
     /// FPU Implementation/Revision Register `FCR0`.
@@ -253,7 +253,7 @@ impl FpuControl {
 }
 
 /// A miscellaneous MIPS 3 register, which does not nicely fit into any other category.
-#[derive(EnumCount, EnumIter, EnumVariantNames, FromRepr, Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(EnumCount, EnumIter, VariantNames, FromRepr, Debug, PartialEq, Eq, Clone, Copy)]
 #[strum(serialize_all = "snake_case")]
 #[repr(u8)]
 pub enum Special {
