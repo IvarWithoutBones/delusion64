@@ -210,12 +210,15 @@ impl<'ctx> target::Globals<'ctx> for RegisterGlobals<'ctx> {
         };
 
         unsafe {
-            codegen.builder.build_in_bounds_gep(
-                ty,
-                ptr,
-                &[ty.const_int(reg.0.to_repr() as u64, false)],
-                reg.0.name(),
-            )
+            codegen
+                .builder
+                .build_in_bounds_gep(
+                    ty,
+                    ptr,
+                    &[ty.const_int(reg.0.to_repr() as u64, false)],
+                    reg.0.name(),
+                )
+                .expect("failed to build GEP")
         }
     }
 

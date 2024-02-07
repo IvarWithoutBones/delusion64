@@ -1,5 +1,5 @@
 use crate::{
-    codegen::{function_attributes, CodeGen, FUNCTION_PREFIX},
+    codegen::{function_attributes, CodeGen, CompilationResult, FUNCTION_PREFIX},
     runtime::RuntimeFunction,
     target::{Instruction, Label, LabelList, Target},
     LLVM_CALLING_CONVENTION_TAILCC,
@@ -63,39 +63,46 @@ impl<'ctx, T: Target> LabelWithContext<'ctx, T> {
         }
     }
 
-    fn on_block_entered(&self, codegen: &CodeGen<'ctx, T>) {
+    fn on_block_entered(&self, codegen: &CodeGen<'ctx, T>) -> CompilationResult<()> {
         // Write out the PC corresponding to this blocks starting address.
-        codegen.write_program_counter(self.label.start());
+        codegen.write_program_counter(self.label.start())?;
 
         // Trap into the runtime environment to poll interrupts, etc.
         let i64_type = codegen.context.i64_type();
         let instrs_len = i64_type.const_int(self.label.len() as u64, false);
-        let maybe_exception_vec = env_call!(codegen, RuntimeFunction::OnBlockEntered, [instrs_len])
-            .try_as_basic_value()
-            .left()
-            .unwrap()
-            .into_int_value();
+        let maybe_exception_vec =
+            env_call!(codegen, RuntimeFunction::OnBlockEntered, [instrs_len])?
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_int_value();
 
         // If an exception was raised, jump to the vector returned by the runtime environment. This is indicated by a non-null pointer.
         // TODO: only do this for the CPU, Target-dependant
-        let exception_occured = cmp!(codegen, maybe_exception_vec != 0);
+        let exception_occured = cmp!(codegen, maybe_exception_vec != 0)?;
         codegen.build_if("exception_occured", exception_occured, || {
-            codegen.build_jump_to_jit_func_ptr(maybe_exception_vec, "exception_vector_jmp");
-        });
+            codegen.build_jump_to_jit_func_ptr(maybe_exception_vec, "exception_vector_jmp")?;
+            Ok(())
+        })?;
+        Ok(())
     }
 
-    pub fn compile(&self, codegen: &CodeGen<'ctx, T>, instr_callback: bool) {
+    pub fn compile(
+        &self,
+        codegen: &CodeGen<'ctx, T>,
+        instr_callback: bool,
+    ) -> CompilationResult<()> {
         let name = format!("block_{:06x}", self.index_to_virtual_address(0));
         let basic_block = codegen.context.append_basic_block(self.function, &name);
         codegen.builder.position_at_end(basic_block);
-        self.on_block_entered(codegen);
+        self.on_block_entered(codegen)?;
 
         let len = self.label.len();
         for (i, instr) in self.label.instructions().enumerate() {
             if !instr.has_delay_slot() {
                 if self
                     .compile_instruction(i, instr_callback, &instr, codegen)
-                    .is_none()
+                    .is_err()
                 {
                     // Stubbed instruction encountered in the middle of the basic block, stop now so our runtime panic can take care of it.
                     // Note that we do not panic here because the runtime environment has the ability to update the debugger connection post panic.
@@ -131,20 +138,21 @@ impl<'ctx, T: Target> LabelWithContext<'ctx, T> {
                 let addr = self.index_to_virtual_address(i);
                 T::compile_instruction_with_delay_slot(codegen, addr, &instr, &next_instr, |pc| {
                     self.on_instruction(pc, instr_callback, codegen)
-                });
+                })?;
                 break;
             }
         }
 
         if codegen.get_insert_block().get_terminator().is_none() {
             if let Some(fallthrough_fn) = self.fallthrough_fn {
-                codegen.call_function(fallthrough_fn);
+                codegen.call_function(fallthrough_fn)?;
             } else {
                 let addr = self.index_to_virtual_address(0);
                 let str = format!("ERROR: label {addr:#x} attempted to execute fallthrough block without one existing!\n");
-                codegen.build_panic(&str, "error_no_fallthrough");
+                codegen.build_panic(&str, "error_no_fallthrough")?;
             }
         }
+        Ok(())
     }
 
     fn compile_instruction(
@@ -153,23 +161,28 @@ impl<'ctx, T: Target> LabelWithContext<'ctx, T> {
         instr_callback: bool,
         instr: &T::Instruction,
         codegen: &CodeGen<'ctx, T>,
-    ) -> Option<()> {
+    ) -> CompilationResult<()> {
         self.on_instruction(
             self.index_to_virtual_address(index),
             instr_callback,
             codegen,
-        );
+        )?;
         T::compile_instruction(codegen, instr)
     }
 
-    fn on_instruction(&self, addr: u64, instr_callback: bool, codegen: &CodeGen<'ctx, T>) {
+    fn on_instruction(
+        &self,
+        addr: u64,
+        instr_callback: bool,
+        codegen: &CodeGen<'ctx, T>,
+    ) -> CompilationResult<()> {
         // TODO: only write this when we actually need to, for example when checking for exceptions, or the debugger is attached.
-        codegen.write_program_counter(addr);
-
+        codegen.write_program_counter(addr)?;
         // Call the `on_instruction` callback from the environment, used for the debugger/tracing.
         if instr_callback {
-            env_call!(codegen, RuntimeFunction::OnInstruction, []);
+            env_call!(codegen, RuntimeFunction::OnInstruction, [])?;
         }
+        Ok(())
     }
 
     fn index_to_virtual_address(&self, index: usize) -> u64 {

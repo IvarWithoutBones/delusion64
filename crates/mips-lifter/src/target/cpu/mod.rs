@@ -1,5 +1,5 @@
 use crate::{
-    codegen::CodeGen,
+    codegen::{CodeGen, CompilationResult},
     runtime::{
         bus::PhysicalAddress,
         memory::tlb::{AccessMode, TranslationError, TranslationLookasideBuffer},
@@ -146,7 +146,10 @@ impl target::Target for Cpu {
     type Label = Label;
     type LabelList = LabelList;
 
-    fn compile_instruction(codegen: &CodeGen<Self>, instr: &Self::Instruction) -> Option<()> {
+    fn compile_instruction(
+        codegen: &CodeGen<Self>,
+        instr: &Self::Instruction,
+    ) -> CompilationResult<()> {
         recompiler::compile_instruction(codegen, &instr.0)
     }
 
@@ -155,14 +158,14 @@ impl target::Target for Cpu {
         pc: u64,
         instr: &Self::Instruction,
         delay_slot_instr: &Self::Instruction,
-        on_instruction: impl Fn(u64),
-    ) {
+        on_instruction: impl Fn(u64) -> CompilationResult<()>,
+    ) -> CompilationResult<()> {
         recompiler::compile_instruction_with_delay_slot(
             codegen,
             pc,
             &instr.0,
             &delay_slot_instr.0,
             on_instruction,
-        );
+        )
     }
 }

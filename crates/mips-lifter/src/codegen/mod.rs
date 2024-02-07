@@ -8,7 +8,7 @@ use crate::{
 use inkwell::{
     attributes::{Attribute, AttributeLoc},
     basic_block::BasicBlock,
-    builder::Builder,
+    builder::{Builder, BuilderError},
     context::Context,
     execution_engine::ExecutionEngine,
     module::Module,
@@ -41,6 +41,18 @@ macro_rules! env_call {
         codegen.builder.build_call(func, args, concat!("env_call_", stringify!($func)))
     }};
 }
+
+#[derive(Debug, thiserror::Error)]
+pub enum CompilationError {
+    #[error("unimplemented instruction: {0}")]
+    UnimplementedInstruction(String),
+    #[error("Error while building recompiled block: {0}")]
+    BuilderError(#[from] BuilderError),
+    #[error("Failed to verify generated code: {0}")]
+    VerificationFailed(String),
+}
+
+pub type CompilationResult<T> = Result<T, CompilationError>;
 
 pub const FUNCTION_PREFIX: &str = "delusion64_jit_";
 
@@ -132,57 +144,81 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         self.globals.as_ref().expect("globals are not initialised")
     }
 
-    fn build_jump(&self, address: IntValue<'ctx>) {
+    fn build_jump(&self, address: IntValue<'ctx>) -> CompilationResult<()> {
         self.set_call_attrs(self.builder.build_call(
             self.helpers.jump(),
             &[address.into()],
             "build_jump",
-        ));
-        self.builder.build_return(None);
+        )?);
+        self.builder.build_return(None)?;
+        Ok(())
     }
 
-    pub(crate) fn build_jump_to_jit_func_ptr(&self, host_ptr: IntValue<'ctx>, name: &str) {
+    pub(crate) fn build_jump_to_jit_func_ptr(
+        &self,
+        host_ptr: IntValue<'ctx>,
+        name: &str,
+    ) -> CompilationResult<()> {
         let func_type = self.context.void_type().fn_type(&[], false);
         let ptr_type = func_type.ptr_type(Default::default());
-        let ptr = self.builder.build_int_to_ptr(host_ptr, ptr_type, name);
-
-        self.set_call_attrs(self.builder.build_indirect_call(func_type, ptr, &[], name));
-        self.builder.build_return(None);
+        let ptr = self.builder.build_int_to_ptr(host_ptr, ptr_type, name)?;
+        self.set_call_attrs(
+            self.builder
+                .build_indirect_call(func_type, ptr, &[], name)?,
+        );
+        self.builder.build_return(None)?;
+        Ok(())
     }
 
     /// Generate a dynamic jump to the given dynamic virtual address, ending the current basic block.
-    pub fn build_dynamic_jump(&self, address: IntValue<'ctx>) {
-        self.build_jump(self.zero_extend_to(self.context.i64_type(), address));
+    pub fn build_dynamic_jump(&self, address: IntValue<'ctx>) -> CompilationResult<()> {
+        self.build_jump(self.zero_extend_to(self.context.i64_type(), address)?)
     }
 
     /// Generate a jump to the given constant virtual address, ending the current basic block.
-    pub fn build_constant_jump(&self, address: u64) {
+    pub fn build_constant_jump(&self, address: u64) -> CompilationResult<()> {
         if let Ok(lab) = self.labels.get(address) {
             // If we have previously compiled this function we can insert a direct jump.
-            self.set_call_attrs(self.builder.build_call(lab.function, &[], "constant_jump"));
-            self.builder.build_return(None);
+            self.set_call_attrs(
+                self.builder
+                    .build_call(lab.function, &[], "constant_jump")?,
+            );
+            self.builder.build_return(None)?;
         } else {
             // Let the runtime environment JIT it, then jump to it.
-            self.build_dynamic_jump(self.context.i64_type().const_int(address, false));
+            self.build_dynamic_jump(self.context.i64_type().const_int(address, false))?;
         };
+        Ok(())
     }
 
     /// Sign-extends the given value to the given type.
-    pub fn sign_extend_to(&self, ty: IntType<'ctx>, value: IntValue<'ctx>) -> IntValue<'ctx> {
+    pub fn sign_extend_to(
+        &self,
+        ty: IntType<'ctx>,
+        value: IntValue<'ctx>,
+    ) -> CompilationResult<IntValue<'ctx>> {
         let name = format!("sign_ext_to_i{}", ty.get_bit_width());
-        self.builder.build_int_s_extend(value, ty, &name)
+        Ok(self.builder.build_int_s_extend(value, ty, &name)?)
     }
 
     /// Zero-extends the given value to the given type.
-    pub fn zero_extend_to(&self, ty: IntType<'ctx>, value: IntValue<'ctx>) -> IntValue<'ctx> {
+    pub fn zero_extend_to(
+        &self,
+        ty: IntType<'ctx>,
+        value: IntValue<'ctx>,
+    ) -> CompilationResult<IntValue<'ctx>> {
         let name = format!("zero_ext_to_i{}", ty.get_bit_width());
-        self.builder.build_int_z_extend(value, ty, &name)
+        Ok(self.builder.build_int_z_extend(value, ty, &name)?)
     }
 
     /// Truncates the given value to the given type.
-    pub fn truncate_to(&self, ty: IntType<'ctx>, value: IntValue<'ctx>) -> IntValue<'ctx> {
+    pub fn truncate_to(
+        &self,
+        ty: IntType<'ctx>,
+        value: IntValue<'ctx>,
+    ) -> CompilationResult<IntValue<'ctx>> {
         let name = format!("trunc_to_i{}", ty.get_bit_width());
-        self.builder.build_int_truncate(value, ty, &name)
+        Ok(self.builder.build_int_truncate(value, ty, &name)?)
     }
 
     pub fn fallthrough_function(&self, amount: FallthroughAmount) -> FunctionValue<'ctx> {
@@ -205,9 +241,10 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         self.context.append_basic_block(current_func, name)
     }
 
-    pub fn call_function(&self, func: FunctionValue<'ctx>) {
-        self.set_call_attrs(self.builder.build_call(func, &[], "call_fn"));
-        self.builder.build_return(None);
+    pub fn call_function(&self, func: FunctionValue<'ctx>) -> CompilationResult<()> {
+        self.set_call_attrs(self.builder.build_call(func, &[], "call_fn")?);
+        self.builder.build_return(None)?;
+        Ok(())
     }
 
     pub fn link_in_module(
@@ -264,14 +301,16 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         Ok(lab)
     }
 
-    pub fn build_panic(&self, string: &str, storage_name: &str) {
+    pub fn build_panic(&self, string: &str, storage_name: &str) -> CompilationResult<()> {
         let ptr = self
             .builder
             .build_global_string_ptr(string, storage_name)
+            .expect("global string ptr is valid")
             .as_pointer_value();
         let len = self.context.i64_type().const_int(string.len() as _, false);
-        env_call!(self, RuntimeFunction::Panic, [ptr, len]);
-        self.builder.build_unreachable();
+        env_call!(self, RuntimeFunction::Panic, [ptr, len])?;
+        self.builder.build_unreachable()?;
+        Ok(())
     }
 
     /// If the comparison is true, execute the function generated within the given closure, otherwise skip it.
@@ -281,23 +320,23 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         &self,
         name: &str,
         cmp: IntValue<'ctx>,
-        then: impl FnOnce(),
-    ) -> BasicBlock<'ctx> {
+        then: impl FnOnce() -> CompilationResult<()>,
+    ) -> CompilationResult<BasicBlock<'ctx>> {
         let (then_block, else_block) = (
             self.append_basic_block(&format!("{name}_then")),
             self.append_basic_block(&format!("{name}_else")),
         );
         self.builder
-            .build_conditional_branch(cmp, then_block, else_block);
+            .build_conditional_branch(cmp, then_block, else_block)?;
 
         self.builder.position_at_end(then_block);
-        then();
+        then()?;
         if !self.current_block_terminated() {
-            self.builder.build_unconditional_branch(else_block);
+            self.builder.build_unconditional_branch(else_block)?;
         }
 
         self.builder.position_at_end(else_block);
-        then_block
+        Ok(then_block)
     }
 
     /// If the comparison is true, execute the first function generated within the given closure,
@@ -307,31 +346,35 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         &self,
         name: &str,
         cmp: IntValue<'ctx>,
-        then: impl FnOnce(),
-        otherwise: impl FnOnce(),
-    ) -> (BasicBlock<'ctx>, BasicBlock<'ctx>) {
+        then: impl FnOnce() -> CompilationResult<()>,
+        otherwise: impl FnOnce() -> CompilationResult<()>,
+    ) -> CompilationResult<(BasicBlock<'ctx>, BasicBlock<'ctx>)> {
         let merge_block = self.append_basic_block(&format!("{name}_merge"));
         let then_block = self.build_if(name, cmp, || {
-            then();
+            then()?;
             if !self.current_block_terminated() {
-                self.builder.build_unconditional_branch(merge_block);
+                self.builder.build_unconditional_branch(merge_block)?;
             }
-        });
+            Ok(())
+        })?;
 
         // `build_if` leaves us positioned at the false block, so we can just call `otherwise`.
         let else_block = self.builder.get_insert_block().unwrap();
-        otherwise();
+        otherwise()?;
         if !self.current_block_terminated() {
-            self.builder.build_unconditional_branch(merge_block);
+            self.builder.build_unconditional_branch(merge_block)?;
         }
 
         self.builder.position_at_end(merge_block);
-        (then_block, else_block)
+        Ok((then_block, else_block))
     }
 
     /// Splits the given integer in two, returning the high and low order bits in that order.
     /// The resulting integers will be half the size of the original.
-    pub fn split(&self, value: IntValue<'ctx>) -> (IntValue<'ctx>, IntValue<'ctx>) {
+    pub fn split(
+        &self,
+        value: IntValue<'ctx>,
+    ) -> CompilationResult<(IntValue<'ctx>, IntValue<'ctx>)> {
         let ty = value.get_type();
         let half_ty = match ty.get_bit_width() {
             16 => self.context.i8_type(),
@@ -345,27 +388,33 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
             let shift = ty.const_int(half_ty.get_bit_width() as u64, false);
             let shifted = self
                 .builder
-                .build_right_shift(value, shift, false, "split_hi");
-            self.truncate_to(half_ty, shifted)
+                .build_right_shift(value, shift, false, "split_hi")?;
+            self.truncate_to(half_ty, shifted)?
         };
-        let lo = self.truncate_to(half_ty, value);
-        (hi, lo)
+        let lo = self.truncate_to(half_ty, value)?;
+        Ok((hi, lo))
     }
 
-    pub fn build_mask(&self, to_mask: IntValue<'ctx>, mask: u64, name: &str) -> IntValue<'ctx> {
+    pub fn build_mask(
+        &self,
+        to_mask: IntValue<'ctx>,
+        mask: u64,
+        name: &str,
+    ) -> CompilationResult<IntValue<'ctx>> {
         let mask = to_mask.get_type().const_int(mask, false);
-        self.builder.build_and(to_mask, mask, name)
+        Ok(self.builder.build_and(to_mask, mask, name)?)
     }
 
-    pub fn build_stub(&self, name: &str) {
+    pub fn build_stub(&self, name: &str) -> CompilationResult<()> {
         let output = format!("{name} instruction not implemented");
         let storage_name = format!("{name}_stub");
-        self.build_panic(&output, &storage_name);
+        self.build_panic(&output, &storage_name)?;
+        Ok(())
     }
 
     /// Get a host pointer to a function which simply returns.
     /// Calling this inside of a JIT'ed block will return to the callee of [`JitBuilder::run`].
-    pub(crate) fn return_from_jit_ptr(&self) -> JitFunctionPointer {
+    pub(crate) fn return_from_jit_ptr(&self) -> CompilationResult<JitFunctionPointer> {
         const NAME: &str = "return_from_jit_helper";
         let module = self.context.create_module("return_from_jit_helper_module");
         let func = self.set_func_attrs(module.add_function(
@@ -378,14 +427,18 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         self.builder.position_at_end(block);
         {
             // Since every function we call uses tail calls, this should immediately return to the caller.
-            self.builder.build_return(None);
+            self.builder.build_return(None)?;
         }
 
         self.execution_engine.add_module(&module).unwrap();
-        self.execution_engine.get_function_address(NAME).unwrap() as JitFunctionPointer
+        Ok(self.execution_engine.get_function_address(NAME).unwrap() as JitFunctionPointer)
     }
 
-    pub fn read_memory(&self, ty: IntType<'ctx>, address: IntValue<'ctx>) -> IntValue<'ctx> {
+    pub fn read_memory(
+        &self,
+        ty: IntType<'ctx>,
+        address: IntValue<'ctx>,
+    ) -> CompilationResult<IntValue<'ctx>> {
         let func = match ty.get_bit_width() {
             8 => RuntimeFunction::ReadI8,
             16 => RuntimeFunction::ReadI16,
@@ -394,14 +447,18 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
             _ => panic!("unimplemented read_memory type: {ty}"),
         };
 
-        env_call!(self, func, [address])
+        Ok(env_call!(self, func, [address])?
             .try_as_basic_value()
             .left()
             .unwrap()
-            .into_int_value()
+            .into_int_value())
     }
 
-    pub fn write_memory(&self, address: IntValue<'ctx>, value: IntValue<'ctx>) {
+    pub fn write_memory(
+        &self,
+        address: IntValue<'ctx>,
+        value: IntValue<'ctx>,
+    ) -> CompilationResult<()> {
         let ty = value.get_type();
         let func = match ty.get_bit_width() {
             8 => RuntimeFunction::WriteI8,
@@ -411,14 +468,15 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
             _ => panic!("unimplemented write_memory type: {ty}"),
         };
 
-        env_call!(self, func, [address, value]);
+        env_call!(self, func, [address, value])?;
+        Ok(())
     }
 
     pub fn read_physical_memory(
         &self,
         ty: IntType<'ctx>,
         address: IntValue<'ctx>,
-    ) -> IntValue<'ctx> {
+    ) -> CompilationResult<IntValue<'ctx>> {
         let func = match ty.get_bit_width() {
             8 => RuntimeFunction::ReadPhysicalI8,
             16 => RuntimeFunction::ReadPhysicalI16,
@@ -427,14 +485,18 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
             _ => panic!("unimplemented read_physical_memory type: {ty}"),
         };
 
-        env_call!(self, func, [address])
+        Ok(env_call!(self, func, [address])?
             .try_as_basic_value()
             .left()
             .unwrap()
-            .into_int_value()
+            .into_int_value())
     }
 
-    pub fn write_physical_memory(&self, address: IntValue<'ctx>, value: IntValue<'ctx>) {
+    pub fn write_physical_memory(
+        &self,
+        address: IntValue<'ctx>,
+        value: IntValue<'ctx>,
+    ) -> CompilationResult<()> {
         let ty = value.get_type();
         let func = match ty.get_bit_width() {
             8 => RuntimeFunction::WritePhysicalI8,
@@ -444,38 +506,42 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
             _ => panic!("unimplemented write_physical_memory type: {ty}"),
         };
 
-        env_call!(self, func, [address, value]);
+        env_call!(self, func, [address, value])?;
+        Ok(())
     }
 
-    pub fn get_physical_address(&self, vaddr: IntValue<'ctx>) -> IntValue<'ctx> {
-        env_call!(self, RuntimeFunction::GetPhysicalAddress, [vaddr])
-            .try_as_basic_value()
-            .left()
-            .unwrap()
-            .into_int_value()
+    pub fn get_physical_address(&self, vaddr: IntValue<'ctx>) -> CompilationResult<IntValue<'ctx>> {
+        Ok(
+            env_call!(self, RuntimeFunction::GetPhysicalAddress, [vaddr])?
+                .try_as_basic_value()
+                .left()
+                .expect("GetPhysicalAddress has a return value")
+                .into_int_value(),
+        )
     }
 
-    pub fn set_inside_delay_slot(&self, inside: bool) {
+    pub fn set_inside_delay_slot(&self, inside: bool) -> CompilationResult<()> {
         let i64_type = self.context.i64_type();
         let flags_ptr = self.globals().flags_ptr.as_pointer_value();
         let prev = {
             let flags = self
                 .builder
-                .build_load(i64_type, flags_ptr, "flags_prev")
+                .build_load(i64_type, flags_ptr, "flags_prev")?
                 .into_int_value();
             // Zero the least significant bit as to overwrite it with the new value.
             self.builder.build_and(
                 flags,
                 i64_type.const_int(!1, false),
                 "flags_prev_delay_zeroed",
-            )
+            )?
         };
         let new = {
             // Set the least significant bit to the new value.
             let inside = i64_type.const_int(inside as u64, false);
-            self.builder.build_or(prev, inside, "flags_new_delay")
+            self.builder.build_or(prev, inside, "flags_new_delay")?
         };
-        self.builder.build_store(flags_ptr, new);
+        self.builder.build_store(flags_ptr, new)?;
+        Ok(())
     }
 
     pub fn throw_exception(
@@ -483,7 +549,7 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         exception: Exception,
         coprocessor: Option<u8>,
         bad_vaddr: Option<IntValue<'ctx>>,
-    ) {
+    ) -> CompilationResult<()> {
         let i64_type = self.context.i64_type();
         let i8_type = self.context.i8_type();
         let exception = i64_type.const_int(exception as u64, false);
@@ -516,12 +582,13 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
                 has_bad_vaddr,
                 bad_vaddr
             ]
-        )
+        )?
         .try_as_basic_value()
         .left()
         .unwrap()
         .into_int_value();
-        self.build_jump_to_jit_func_ptr(exception_vec_ptr, "exception_vector");
+        self.build_jump_to_jit_func_ptr(exception_vec_ptr, "exception_vector")?;
+        Ok(())
     }
 
     /*
@@ -533,14 +600,15 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         ty: IntType<'ctx>,
         instr: &ParsedInstruction,
         add_name: &str,
-    ) -> IntValue<'ctx>
+    ) -> CompilationResult<IntValue<'ctx>>
     where
         <T::Registers as RegisterStorage>::RegisterID: From<register::GeneralPurpose>,
     {
         let i16_type = self.context.i16_type();
-        let base = self.read_general_register(ty, instr.base());
-        let offset = self.sign_extend_to(ty, i16_type.const_int(u64::from(instr.offset()), true));
-        self.builder.build_int_add(base, offset, add_name)
+        let base = self.read_general_register(ty, instr.base())?;
+        let offset =
+            self.sign_extend_to(ty, i16_type.const_int(u64::from(instr.offset()), true))?;
+        Ok(self.builder.build_int_add(base, offset, add_name)?)
     }
 
     /// If the alignment of atomic load/store instructions is not set LLVM will segfault.
@@ -558,9 +626,9 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         ptr: PointerValue<'ctx>,
         ty: impl BasicType<'ctx> + Clone,
         reg: <T::Registers as RegisterStorage>::RegisterID,
-    ) -> BasicValueEnum<'ctx> {
+    ) -> CompilationResult<BasicValueEnum<'ctx>> {
         let name = &format!("{}_", reg.name());
-        let value = self.builder.build_load(ty.clone(), ptr, name);
+        let value = self.builder.build_load(ty.clone(), ptr, name)?;
         if self.globals().registers.is_atomic(reg) {
             let i = value
                 .as_instruction_value()
@@ -569,7 +637,7 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
                 .expect("load instructions can be atomic");
             self.set_abi_alignment(i, &ty);
         }
-        value
+        Ok(value)
     }
 
     pub(crate) fn write_register_pointer(
@@ -577,40 +645,45 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         value: BasicValueEnum<'ctx>,
         ptr: PointerValue<'ctx>,
         reg: <T::Registers as RegisterStorage>::RegisterID,
-    ) {
-        let i = self.builder.build_store(ptr, value);
+    ) -> CompilationResult<()> {
+        let i = self.builder.build_store(ptr, value)?;
         if self.globals().registers.is_atomic(reg) {
             i.set_atomic_ordering(AtomicOrdering::Monotonic)
                 .expect("store instructions can be atomic");
             self.set_abi_alignment(i, &value.get_type());
         }
+        Ok(())
     }
 
     pub(crate) fn read_register_raw(
         &self,
         ty: IntType<'ctx>,
         reg: impl Into<<T::Registers as RegisterStorage>::RegisterID>,
-    ) -> IntValue<'ctx> {
+    ) -> CompilationResult<IntValue<'ctx>> {
         let reg = reg.into();
         let registers = &self.globals().registers;
         let ptr = registers.pointer_value(self, &reg);
-        self.read_register_pointer(ptr, ty, reg).into_int_value()
+        Ok(self.read_register_pointer(ptr, ty, reg)?.into_int_value())
     }
 
     pub(crate) fn write_register_raw(
         &self,
         reg: impl Into<<T::Registers as RegisterStorage>::RegisterID>,
         value: IntValue<'ctx>,
-    ) {
+    ) -> CompilationResult<()> {
         let reg = reg.into();
         let registers = &self.globals().registers;
         let ptr = registers.pointer_value(self, &reg);
-        self.write_register_pointer(value.as_basic_value_enum(), ptr, reg);
+        self.write_register_pointer(value.as_basic_value_enum(), ptr, reg)
     }
 
     /// Read the general-purpose register (GPR) at the given index.
     /// If the `ty` is less than the register width the value will be truncated, and the lower bits returned.
-    pub fn read_general_register(&self, ty: IntType<'ctx>, index: impl Into<u64>) -> IntValue<'ctx>
+    pub fn read_general_register(
+        &self,
+        ty: IntType<'ctx>,
+        index: impl Into<u64>,
+    ) -> CompilationResult<IntValue<'ctx>>
     where
         <T::Registers as RegisterStorage>::RegisterID: From<register::GeneralPurpose>,
     {
@@ -618,14 +691,18 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         let reg = register::GeneralPurpose::from_repr(index).unwrap();
         if reg == register::GeneralPurpose::Zero {
             // Register zero is hardwired to zero.
-            ty.const_zero()
+            Ok(ty.const_zero())
         } else {
             self.read_register_raw(ty, reg)
         }
     }
 
     /// Writes the given value to the general-purpose register (GPR) at the given index.
-    pub fn write_general_register(&self, index: impl Into<u64>, value: IntValue<'ctx>)
+    pub fn write_general_register(
+        &self,
+        index: impl Into<u64>,
+        value: IntValue<'ctx>,
+    ) -> CompilationResult<()>
     where
         <T::Registers as RegisterStorage>::RegisterID: From<register::GeneralPurpose>,
     {
@@ -633,19 +710,20 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         let reg = register::cpu::GeneralPurpose::from_repr(index).unwrap();
         if reg != register::cpu::GeneralPurpose::Zero {
             // Register zero is hardwired to zero.
-            self.write_register_raw(reg, value);
+            self.write_register_raw(reg, value)?;
         }
+        Ok(())
     }
 
-    pub fn read_program_counter(&self) -> IntValue<'ctx> {
+    pub fn read_program_counter(&self) -> CompilationResult<IntValue<'ctx>> {
         let pc_id = <<T::Registers as target::RegisterStorage>::RegisterID as target::RegisterID>::PROGRAM_COUNTER;
         self.read_register_raw(self.context.i64_type(), pc_id)
     }
 
-    pub fn write_program_counter(&self, value: u64) {
+    pub fn write_program_counter(&self, value: u64) -> CompilationResult<()> {
         let pc_id = <<T::Registers as target::RegisterStorage>::RegisterID as target::RegisterID>::PROGRAM_COUNTER;
         let value = self.context.i64_type().const_int(value, false);
-        self.write_register_raw(pc_id, value);
+        self.write_register_raw(pc_id, value)
     }
 }
 

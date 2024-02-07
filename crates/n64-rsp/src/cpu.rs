@@ -103,7 +103,7 @@ impl Bus {
         };
 
         JitBuilder::new_rsp(res)
-            .with_trace(false)
+            .with_trace(true)
             .with_rsp_registers(regs)
             .run()
     }

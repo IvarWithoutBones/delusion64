@@ -19,6 +19,7 @@ perf.data*
 .gdb_history
 
 # Emulator
+/error.ll
 /roms
 *.z64
 *.n64

@@ -2,7 +2,7 @@
 #![warn(clippy::all, clippy::pedantic)]
 
 use crate::{
-    codegen::CodeGen,
+    codegen::{CodeGen, CompilationResult},
     runtime::{
         bus::PhysicalAddress,
         memory::tlb::{AccessMode, TranslationError},
@@ -130,13 +130,16 @@ pub(crate) trait Target: Sized + Default + fmt::Debug {
     type Label: Label<Instruction = Self::Instruction>;
     type LabelList: LabelList<Label = Self::Label>;
 
-    fn compile_instruction(codegen: &CodeGen<Self>, instr: &Self::Instruction) -> Option<()>;
+    fn compile_instruction(
+        codegen: &CodeGen<Self>,
+        instr: &Self::Instruction,
+    ) -> CompilationResult<()>;
 
     fn compile_instruction_with_delay_slot(
         codegen: &CodeGen<Self>,
         pc: u64,
         instr: &Self::Instruction,
         delay_slot_instr: &Self::Instruction,
-        on_instruction: impl Fn(u64),
-    );
+        on_instruction: impl Fn(u64) -> CompilationResult<()>,
+    ) -> CompilationResult<()>;
 }

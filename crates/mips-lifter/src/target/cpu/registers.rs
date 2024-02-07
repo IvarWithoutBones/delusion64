@@ -231,12 +231,15 @@ impl<'ctx> target::Globals<'ctx> for Globals<'ctx> {
         let gep = |ptr| unsafe {
             let i64_type = codegen.context.i64_type();
             let name = &format!("{}_", reg.0.name());
-            codegen.builder.build_in_bounds_gep(
-                i64_type,
-                ptr,
-                &[i64_type.const_int(reg.0.to_repr() as u64, false)],
-                name,
-            )
+            codegen
+                .builder
+                .build_in_bounds_gep(
+                    i64_type,
+                    ptr,
+                    &[i64_type.const_int(reg.0.to_repr() as u64, false)],
+                    name,
+                )
+                .expect("failed to build GEP")
         };
         match reg.0 {
             register::cpu::Register::Cp0(_) => gep(self.cp0.pointer_value()),

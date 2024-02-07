@@ -1,6 +1,6 @@
 //! Register definitions for the N64's CPU.
 
-use strum::{EnumCount, EnumIter, VariantNames, FromRepr};
+use strum::{EnumCount, EnumIter, FromRepr, VariantNames};
 
 pub mod cp0;
 pub mod fpu;

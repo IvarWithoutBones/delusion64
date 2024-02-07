@@ -136,7 +136,9 @@ where
         }
 
         let globals = env.map_into(&env.codegen.module, &env.codegen.execution_engine);
-        env.codegen.initialise(globals);
+        env.codegen
+            .initialise(globals)
+            .expect("failed to initialise codegen");
         env.into()
     }
 
@@ -300,7 +302,9 @@ where
 
         if self.exit_requested {
             // Redirect execution to a function that simply returns, eventually giving back control to the callee.
-            self.codegen.return_from_jit_ptr()
+            self.codegen
+                .return_from_jit_ptr()
+                .expect("failed to fetch return_from_jit function")
         } else {
             <Self as TargetDependantCallbacks>::on_block_entered(self, instructions)
         }
@@ -363,7 +367,8 @@ where
                     lab.fallthrough_fn = Some(codegen.fallthrough_function(amount));
                 }
 
-                lab.compile(codegen, self.trace || self.debugger.is_some());
+                lab.compile(codegen, self.trace || self.debugger.is_some())
+                    .map_err(|e| e.to_string())?;
                 Ok(lab)
             })
             .unwrap_or_else(|err| {

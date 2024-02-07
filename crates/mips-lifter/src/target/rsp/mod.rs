@@ -1,4 +1,7 @@
-use crate::{codegen::CodeGen, target};
+use crate::{
+    codegen::{CodeGen, CompilationResult},
+    target,
+};
 pub use mips_decomp::register::rsp as register;
 pub use registers::Registers;
 
@@ -26,7 +29,10 @@ impl target::Target for Rsp {
     type Label = super::cpu::Label;
     type LabelList = super::cpu::LabelList;
 
-    fn compile_instruction(codegen: &CodeGen<Self>, instr: &Self::Instruction) -> Option<()> {
+    fn compile_instruction(
+        codegen: &CodeGen<Self>,
+        instr: &Self::Instruction,
+    ) -> CompilationResult<()> {
         recompiler::compile_instruction(codegen, &instr.0)
     }
 
@@ -35,14 +41,14 @@ impl target::Target for Rsp {
         pc: u64,
         instr: &Self::Instruction,
         delay_slot_instr: &Self::Instruction,
-        on_instruction: impl Fn(u64),
-    ) {
+        on_instruction: impl Fn(u64) -> CompilationResult<()>,
+    ) -> CompilationResult<()> {
         recompiler::compile_instruction_with_delay_slot(
             codegen,
             pc,
             &instr.0,
             &delay_slot_instr.0,
             on_instruction,
-        );
+        )
     }
 }

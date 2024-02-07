@@ -11,7 +11,7 @@ thiserror = "1.0.56"
 mips-decomp = { path = "../mips-decomp" }
 
 [dependencies.inkwell]
-version = "0.2.0"
+version = "0.4.0"
 default-features = false
 # TODO: Enable dynamic linking on debug builds to speed up compile times (though release builds should still be static).
 # The feature flag for this is not yet available in a release, though the code for it has already been merged.
