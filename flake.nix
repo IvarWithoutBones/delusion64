@@ -31,7 +31,7 @@
 
       hostPlatform = pkgs.stdenvNoCC.hostPlatform;
       rustToolchain = pkgs.rust-bin.stable.latest.default.override {
-        extensions = [ "rust-src" "clippy" "rustfmt" ];
+        extensions = [ "rust-src" "clippy" "rustfmt" "rust-analyzer" ];
       };
 
       naerskLib = pkgs.callPackage naersk {
@@ -121,7 +121,6 @@
 
         packages = with pkgs; [
           rustToolchain
-          rustToolchain.availableComponents.rust-analyzer
 
           # Optional debugging tools
           gdb
