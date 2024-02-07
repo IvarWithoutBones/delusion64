@@ -13,6 +13,6 @@ mips-decomp = { path = "../mips-decomp" }
 [dependencies.inkwell]
 version = "0.4.0"
 default-features = false
-# TODO: Enable dynamic linking on debug builds to speed up compile times (though release builds should still be static).
-# The feature flag for this is not yet available in a release, though the code for it has already been merged.
-features = ["llvm16-0", "target-x86"]
+# Dynamic linking is used because it significantly reduces build times, LLVM is quite large.
+# TODO: Link statically for release builds.
+features = ["llvm17-0-force-dynamic", "target-x86"]

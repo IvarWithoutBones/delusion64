@@ -40,7 +40,7 @@
       };
 
       # Must be kept in sync with what inkwell expects.
-      llvmPackages = pkgs.llvmPackages_16;
+      llvmPackages = pkgs.llvmPackages_17;
 
       mkShell = pkgs.mkShell.override {
         stdenv = llvmPackages.stdenv;
@@ -73,7 +73,7 @@
 
         buildInputs = with pkgs; [
           # LLVM and its dependencies, used by the JIT
-          llvmPackages.llvm.dev
+          llvmPackages.llvm
           libffi
           libxml2
         ] ++ lib.optionals hostPlatform.isLinux [
