@@ -2,7 +2,7 @@
 
 use std::ops::RangeInclusive;
 
-const MAX_COMPONENTS: usize = 16;
+const MAX_COMPONENTS: usize = 32;
 
 /// Counts the amount of bits in a range, and returns a mask which covers those bits.
 const fn bits_in_range(range: &RangeInclusive<u32>) -> u32 {
@@ -77,6 +77,14 @@ pub enum Operand {
     FloatSource,
     FloatTarget,
     FloatControlRegister,
+    VectorTarget,
+    VectorSource,
+    VectorDestination,
+    VectorBase,
+    VectorElement,
+    VectorTargetElement,
+    VectorSourceElement,
+    VectorDestinationElement,
 }
 
 impl Operand {
@@ -98,8 +106,23 @@ impl Operand {
             'D' => Self::FloatDestination,
             'T' => Self::FloatTarget,
             'C' => Self::FloatControlRegister,
+            'v' => Self::VectorTarget,
+            'u' => Self::VectorSource,
+            'z' => Self::VectorDestination,
+            'B' => Self::VectorBase,
+            'e' => Self::VectorElement,
+            'V' => Self::VectorTargetElement,
+            'U' => Self::VectorSourceElement,
+            'Z' => Self::VectorDestinationElement,
             _ => panic!("Invalid operand"),
         }
+    }
+
+    pub const fn is_vector_register(&self) -> bool {
+        matches!(
+            self,
+            Self::VectorTarget | Self::VectorSource | Self::VectorDestination | Self::VectorBase
+        )
     }
 
     pub const fn is_general_purpose_register(&self) -> bool {

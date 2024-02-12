@@ -209,6 +209,72 @@ pub enum Mnenomic {
     TruncLFmt,
     #[strum(serialize = "trunc.w")]
     TruncWFmt,
+
+    // RSP vector unit
+    Sbv,
+    Ssv,
+    Slv,
+    Sdv,
+    Sqv,
+    Srv,
+    Spv,
+    Suv,
+    Shv,
+    Sfv,
+    Stv,
+    Swv,
+    Lbv,
+    Lsv,
+    Llv,
+    Ldv,
+    Lqv,
+    Lrv,
+    Lpv,
+    Luv,
+    Lhv,
+    Lfv,
+    Ltv,
+    Lwv,
+    Vmulf,
+    Vmulu,
+    Vmudl,
+    Vmudm,
+    Vmudn,
+    Vmudh,
+    Vmacf,
+    Vmacu,
+    Vmadl,
+    Vmadm,
+    Vmadn,
+    Vmadh,
+    Vadd,
+    Vsub,
+    Vabs,
+    Vaddc,
+    Vsar,
+    Vand,
+    Vnand,
+    Vor,
+    Vnor,
+    Vxor,
+    Vnxor,
+    Vlt,
+    Veq,
+    Vne,
+    Vge,
+    Vcl,
+    Vch,
+    Vcr,
+    Vmrg,
+    Vmov,
+    Vrcp,
+    Vrsq,
+    Vrcph,
+    Vrsqh,
+    Vrcpl,
+    Vrsql,
+    Vnop,
+    Vnull,
 }
 
 impl Mnenomic {
@@ -244,6 +310,76 @@ impl Mnenomic {
                 | Mnenomic::SubFmt
                 | Mnenomic::TruncLFmt
                 | Mnenomic::TruncWFmt
+        )
+    }
+
+    pub const fn is_vector_instruction(&self) -> bool {
+        matches!(
+            self,
+            Self::Sbv
+                | Self::Ssv
+                | Self::Slv
+                | Self::Sdv
+                | Self::Sqv
+                | Self::Srv
+                | Self::Spv
+                | Self::Suv
+                | Self::Shv
+                | Self::Sfv
+                | Self::Stv
+                | Self::Swv
+                | Self::Lbv
+                | Self::Lsv
+                | Self::Llv
+                | Self::Ldv
+                | Self::Lqv
+                | Self::Lrv
+                | Self::Lpv
+                | Self::Luv
+                | Self::Lhv
+                | Self::Lfv
+                | Self::Ltv
+                | Self::Lwv
+                | Self::Vmulf
+                | Self::Vmulu
+                | Self::Vmudl
+                | Self::Vmudm
+                | Self::Vmudn
+                | Self::Vmudh
+                | Self::Vmacf
+                | Self::Vmacu
+                | Self::Vmadl
+                | Self::Vmadm
+                | Self::Vmadn
+                | Self::Vmadh
+                | Self::Vadd
+                | Self::Vsub
+                | Self::Vabs
+                | Self::Vaddc
+                | Self::Vsar
+                | Self::Vand
+                | Self::Vnand
+                | Self::Vor
+                | Self::Vnor
+                | Self::Vxor
+                | Self::Vnxor
+                | Self::Vlt
+                | Self::Veq
+                | Self::Vne
+                | Self::Vge
+                | Self::Vcl
+                | Self::Vch
+                | Self::Vcr
+                | Self::Vmrg
+                | Self::Vmov
+                | Self::Vrcp
+                | Self::Vrsq
+                | Self::Vrcph
+                | Self::Vrsqh
+                | Self::Vrcpl
+                | Self::Vrsql
+                | Self::Vnop
+                | Self::Vnull
         )
     }
 
@@ -526,6 +662,7 @@ impl Instruction {
         };
 
         for (i, (op, sign)) in self.operands.iter().enumerate() {
+            let mut skip_comma = false;
             let num = self
                 .pattern
                 .get(*op, raw)
@@ -572,12 +709,24 @@ impl Instruction {
                     result.push_str(register::cpu::FpuControl::name_from_index(num as usize))
                 }
 
+                Operand::VectorElement => {
+                    if num == 0 {
+                        skip_comma = true;
+                    } else {
+                        result.push_str(&format!("e({num})"));
+                    }
+                }
+
                 Operand::Destination if self.mnenomic.uses_cp0_destination() => {
                     result.push_str(register::cpu::Cp0::name_from_index(num as _));
                 }
 
                 _ if op.is_general_purpose_register() => {
-                    result.push_str(register::cpu::GeneralPurpose::name_from_index(num as _));
+                    result.push_str(register::GeneralPurpose::name_from_index(num as _));
+                }
+
+                _ if op.is_vector_register() => {
+                    result.push_str(register::rsp::Vector::name_from_index(num as _));
                 }
 
                 _ if op.is_fpu_register() => {
@@ -587,7 +736,7 @@ impl Instruction {
                 _ => result.push_str(&sign.format(num)),
             }
 
-            if i < self.operands.len() - 1 {
+            if !skip_comma && (i < (self.operands.len() - 1)) {
                 result.push_str(", ");
             }
         }
@@ -609,6 +758,10 @@ impl ParsedInstruction {
         } else {
             None
         }
+    }
+
+    pub const fn raw(&self) -> u32 {
+        self.raw
     }
 
     pub const fn try_resolve_constant_jump(&self, pc: u64) -> Option<u64> {
@@ -684,13 +837,7 @@ impl ParsedInstruction {
     }
 
     pub fn float_format(&self) -> FloatFormat {
-        FloatFormat::from_repr(self.get(Operand::Format).unwrap() as u8).unwrap_or_else(|| {
-            panic!(
-                "failed to parse float format from {:32b} for {:?}",
-                self.raw,
-                self.mnemonic()
-            )
-        })
+        FloatFormat::from_repr(self.get(Operand::Format).unwrap() as u8).unwrap()
     }
 
     pub fn float_condition(&self) -> FloatCondition {
@@ -699,6 +846,34 @@ impl ParsedInstruction {
 
     pub fn cache_operation(&self) -> CacheOperation {
         self.instr.get_cache_operation(self.raw).unwrap()
+    }
+
+    pub fn vt(&self) -> u32 {
+        self.get(Operand::VectorTarget).unwrap()
+    }
+
+    pub fn vt_elem(&self) -> u32 {
+        self.get(Operand::VectorTargetElement).unwrap()
+    }
+
+    pub fn vs(&self) -> u32 {
+        self.get(Operand::VectorSource).unwrap()
+    }
+
+    pub fn vs_elem(&self) -> u32 {
+        self.get(Operand::VectorSourceElement).unwrap()
+    }
+
+    pub fn vd(&self) -> u32 {
+        self.get(Operand::VectorDestination).unwrap()
+    }
+
+    pub fn vd_elem(&self) -> u32 {
+        self.get(Operand::VectorDestinationElement).unwrap()
+    }
+
+    pub fn element(&self) -> u32 {
+        self.get(Operand::VectorElement).unwrap()
     }
 }
 
@@ -793,7 +968,6 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Cache,   "1011 11bb bbby yyjj ffff ffff ffff ffff", (CacheOpcode)(CacheSubject)(Offset, Signed16)(Base)),
     instr!(Cfc1,    "0100 0100 010t tttt CCCC C000 0000 0000", (Target)(FloatControlRegister)),
     instr!(Cfc2,    "0100 1000 010t tttt dddd d000 0000 0000", (Target)(Destination)),
-    instr!(Cop2,    "0100 101k kkkk kkkk kkkk kkkk kkkk kkkk", (Immediate)),
     instr!(Ctc1,    "0100 0100 110t tttt CCCC C000 0000 0000", (Target)(FloatControlRegister)),
     instr!(Ctc2,    "0100 1000 110t tttt dddd d000 0000 0000", (Target)(Destination)),
     instr!(Dadd,    "0000 00ss ssst tttt dddd d000 0010 1100", (Destination)(Source)(Target)),
@@ -844,8 +1018,6 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Lld,     "1101 00bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Lui,     "0011 1100 000t tttt kkkk kkkk kkkk kkkk", (Target)(Immediate, Signed16)),
     instr!(Lw,      "1000 11bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
-    instr!(Lwc1,    "1100 01bb bbbT TTTT ffff ffff ffff ffff", (FloatTarget)(Offset, Signed16)(Base)),
-    instr!(Lwc2,    "1100 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Lwl,     "1000 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Lwr,     "1001 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Lwu,     "1001 11bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
@@ -887,8 +1059,6 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Sub,     "0000 00ss ssst tttt dddd d000 0010 0010", (Destination)(Source)(Target)),
     instr!(Subu,    "0000 00ss ssst tttt dddd d000 0010 0011", (Destination)(Source)(Target)),
     instr!(Sw,      "1010 11bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
-    instr!(Swc1,    "1110 01bb bbbT TTTT ffff ffff ffff ffff", (FloatTarget)(Offset, Signed16)(Base)),
-    instr!(Swc2,    "1110 10bb bbbT TTTT ffff ffff ffff ffff", (FloatTarget)(Offset, Signed16)(Base)),
     instr!(Swl,     "1010 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Swr,     "1011 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Sync,    "0000 0000 0000 0000 0000 0000 0000 1111"),
@@ -935,4 +1105,76 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(SubFmt,     "0100 01aa aaaT TTTT SSSS SDDD DD00 0001", (Format)(FloatDestination)(FloatSource)(FloatTarget)),
     instr!(TruncLFmt,  "0100 01aa aaa0 0000 SSSS SDDD DD00 1001", (Format)(FloatDestination)(FloatSource)),
     instr!(TruncWFmt,  "0100 01aa aaa0 0000 SSSS SDDD DD00 1101", (Format)(FloatDestination)(FloatSource)),
+
+    // Vector
+    instr!(Sbv,   "1110 10bb bbbv vvvv 0000 0eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
+    instr!(Ssv,   "1110 10bb bbbv vvvv 0000 1eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
+    instr!(Slv,   "1110 10bb bbbv vvvv 0001 0eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
+    instr!(Sdv,   "1110 10bb bbbv vvvv 0001 1eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
+    instr!(Sqv,   "1110 10bb bbbv vvvv 0010 0eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
+    instr!(Srv,   "1110 10bb bbbv vvvv 0010 1eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
+    instr!(Spv,   "1110 10bb bbbv vvvv 0011 0eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
+    instr!(Suv,   "1110 10bb bbbv vvvv 0011 1eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
+    instr!(Shv,   "1110 10bb bbbv vvvv 0100 0eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
+    instr!(Sfv,   "1110 10bb bbbv vvvv 0100 1eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
+    instr!(Stv,   "1110 10bb bbbv vvvv 0101 1eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
+    instr!(Swv,   "1110 10bb bbbv vvvv 0101 0eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
+    instr!(Lbv,   "1100 10bb bbbv vvvv 0000 0eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
+    instr!(Lsv,   "1100 10bb bbbv vvvv 0000 1eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
+    instr!(Llv,   "1100 10bb bbbv vvvv 0001 0eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
+    instr!(Ldv,   "1100 10bb bbbv vvvv 0001 1eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
+    instr!(Lqv,   "1100 10bb bbbv vvvv 0010 0eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
+    instr!(Lrv,   "1100 10bb bbbv vvvv 0010 1eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
+    instr!(Lpv,   "1100 10bb bbbv vvvv 0011 0eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
+    instr!(Luv,   "1100 10bb bbbv vvvv 0011 1eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
+    instr!(Lhv,   "1100 10bb bbbv vvvv 0100 0eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
+    instr!(Lfv,   "1100 10bb bbbv vvvv 0100 1eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
+    instr!(Ltv,   "1100 10bb bbbv vvvv 0101 1eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
+    instr!(Lwv,   "1100 10bb bbbv vvvv 0101 0eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
+    instr!(Vmulf, "0100 101e eeev vvvv uuuu uzzz zz00 0000", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vmulu, "0100 101e eeev vvvv uuuu uzzz zz00 0001", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vmudl, "0100 101e eeev vvvv uuuu uzzz zz00 0100", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vmudm, "0100 101e eeev vvvv uuuu uzzz zz00 0101", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vmudn, "0100 101e eeev vvvv uuuu uzzz zz00 0110", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vmudh, "0100 101e eeev vvvv uuuu uzzz zz00 0111", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vmacf, "0100 101e eeev vvvv uuuu uzzz zz00 1000", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vmacu, "0100 101e eeev vvvv uuuu uzzz zz00 1001", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vmadl, "0100 101e eeev vvvv uuuu uzzz zz00 1100", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vmadm, "0100 101e eeev vvvv uuuu uzzz zz00 1101", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vmadn, "0100 101e eeev vvvv uuuu uzzz zz00 1110", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vmadh, "0100 101e eeev vvvv uuuu uzzz zz00 1111", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vadd,  "0100 101e eeev vvvv uuuu uzzz zz01 0000", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vabs,  "0100 101e eeev vvvv uuuu uzzz zz01 0011", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vaddc, "0100 101e eeev vvvv uuuu uzzz zz01 0100", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vsar,  "0100 101e eeev vvvv uuuu uzzz zz01 1101", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vand,  "0100 101e eeev vvvv uuuu uzzz zz10 1000", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vnand, "0100 101e eeev vvvv uuuu uzzz zz10 1001", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vor,   "0100 101e eeev vvvv uuuu uzzz zz10 1010", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vnor,  "0100 101e eeev vvvv uuuu uzzz zz10 1011", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vxor,  "0100 101e eeev vvvv uuuu uzzz zz10 1100", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vnxor, "0100 101e eeev vvvv uuuu uzzz zz10 1101", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vlt,   "0100 101e eeev vvvv uuuu uzzz zz10 0000", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Veq,   "0100 101e eeev vvvv uuuu uzzz zz10 0001", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vne,   "0100 101e eeev vvvv uuuu uzzz zz10 0010", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vge,   "0100 101e eeev vvvv uuuu uzzz zz10 0011", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vcl,   "0100 101e eeev vvvv uuuu uzzz zz10 0100", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vch,   "0100 101e eeev vvvv uuuu uzzz zz10 0101", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vcr,   "0100 101e eeev vvvv uuuu uzzz zz10 0110", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vmrg,  "0100 101e eeev vvvv uuuu uzzz zz10 0111", (VectorDestination)(VectorSource)(VectorTarget)(VectorElement)),
+    instr!(Vmov,  "0100 101V VVVv vvvv ZZZZ Zzzz zz11 0011", (VectorDestination)(VectorDestinationElement)(VectorTarget)(VectorTargetElement)),
+    instr!(Vrcp,  "0100 101V VVVv vvvv ZZZZ Zzzz zz11 0000", (VectorDestination)(VectorDestinationElement)(VectorTarget)(VectorTargetElement)),
+    instr!(Vrsq,  "0100 101V VVVv vvvv ZZZZ Zzzz zz11 0100", (VectorDestination)(VectorDestinationElement)(VectorTarget)(VectorTargetElement)),
+    instr!(Vrcph, "0100 101V VVVv vvvv ZZZZ Zzzz zz11 0010", (VectorDestination)(VectorDestinationElement)(VectorTarget)(VectorTargetElement)),
+    instr!(Vrsqh, "0100 101V VVVv vvvv ZZZZ Zzzz zz11 0110", (VectorDestination)(VectorDestinationElement)(VectorTarget)(VectorTargetElement)),
+    instr!(Vrcpl, "0100 101V VVVv vvvv ZZZZ Zzzz zz11 0001", (VectorDestination)(VectorDestinationElement)(VectorTarget)(VectorTargetElement)),
+    instr!(Vrsql, "0100 101V VVVv vvvv ZZZZ Zzzz zz11 0011", (VectorDestination)(VectorDestinationElement)(VectorTarget)(VectorTargetElement)),
+    instr!(Vnop,  "0100 101V VVVv vvvv ZZZZ Zzzz zz11 0111", (VectorDestination)(VectorDestinationElement)(VectorTarget)(VectorTargetElement)),
+    instr!(Vnull, "0100 101V VVVv vvvv ZZZZ Zzzz zz11 1111", (VectorDestination)(VectorDestinationElement)(VectorTarget)(VectorTargetElement)),
+
+    // Fallbacks (vector/fpu instructions take priority)
+    instr!(Lwc1, "1100 01bb bbbT TTTT ffff ffff ffff ffff", (FloatTarget)(Offset, Signed16)(Base)),
+    instr!(Lwc2, "1100 10bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
+    instr!(Swc1, "1110 01bb bbbT TTTT ffff ffff ffff ffff", (FloatTarget)(Offset, Signed16)(Base)),
+    instr!(Swc2, "1110 10bb bbbT TTTT ffff ffff ffff ffff", (FloatTarget)(Offset, Signed16)(Base)),
+    instr!(Cop2, "0100 101k kkkk kkkk kkkk kkkk kkkk kkkk", (Immediate)),
 ];

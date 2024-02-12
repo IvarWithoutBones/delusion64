@@ -241,17 +241,17 @@ mod tests {
         const DUMMY: u128 = 0x1234_5678_90ab_cdef_1234_5678_90ab_cdef;
 
         let mut registers = Registers::default();
-        registers.write(register::Vector::Vpr0, DUMMY);
-        assert_eq!(registers.read(register::Vector::Vpr0), DUMMY);
-        assert_eq!(registers.read(register::Vector::Vpr1), 0);
+        registers.write(register::Vector::V00, DUMMY);
+        assert_eq!(registers.read(register::Vector::V00), DUMMY);
+        assert_eq!(registers.read(register::Vector::V01), 0);
 
-        registers.write(register::Vector::Vpr15, DUMMY);
-        assert_eq!(registers.read(register::Vector::Vpr14), 0);
-        assert_eq!(registers.read(register::Vector::Vpr15), DUMMY);
-        assert_eq!(registers.read(register::Vector::Vpr16), 0);
+        registers.write(register::Vector::V15, DUMMY);
+        assert_eq!(registers.read(register::Vector::V14), 0);
+        assert_eq!(registers.read(register::Vector::V15), DUMMY);
+        assert_eq!(registers.read(register::Vector::V16), 0);
 
-        registers.write(register::Vector::Vpr31, DUMMY);
-        assert_eq!(registers.read(register::Vector::Vpr30), 0);
-        assert_eq!(registers.read(register::Vector::Vpr31), DUMMY);
+        registers.write(register::Vector::V31, DUMMY);
+        assert_eq!(registers.read(register::Vector::V30), 0);
+        assert_eq!(registers.read(register::Vector::V31), DUMMY);
     }
 }

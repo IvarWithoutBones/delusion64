@@ -2,4 +2,4 @@
 # vim: ft=toml
 
 [codespell]
-ignore-words-list = crate, fpr, tne, olt
+ignore-words-list = crate, fpr, tne, olt, vor
