@@ -1,11 +1,16 @@
 use super::{register, Rsp};
-use crate::codegen::{CodeGen, CompilationError, CompilationResult};
+use crate::{
+    codegen::{CodeGen, CompilationError, CompilationResult},
+    macros::{cmps, cmpu},
+};
 use inkwell::{values::IntValue, IntPredicate};
 use mips_decomp::{
     instruction::{Mnenomic, ParsedInstruction},
     register::rsp::control::MemoryBank,
     Exception, INSTRUCTION_SIZE,
 };
+
+mod vector;
 
 /// A helper to calculate the target for jump instructions (JAL, J).
 /// The 26-bit target is shifted left two bits and combined with the high-order four bits of the address of the delay slot.
@@ -464,6 +469,10 @@ pub(crate) fn compile_instruction(
             let address = codegen.base_plus_offset(i32_type, instr, "sw_addr")?;
             let target = codegen.read_general_register(i32_type, instr.rt())?;
             codegen.write_memory(address, target)?;
+        }
+
+        _ if instr.mnemonic().is_vector_instruction() => {
+            vector::compile_instruction(codegen, instr)?;
         }
 
         _ => {

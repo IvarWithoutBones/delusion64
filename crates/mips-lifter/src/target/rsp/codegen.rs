@@ -2,9 +2,30 @@
 
 use super::{register, Rsp};
 use crate::codegen::{CodeGen, CompilationResult};
-use inkwell::{types::IntType, values::IntValue};
+use inkwell::{
+    types::IntType,
+    values::{IntValue, VectorValue},
+};
 
 impl<'ctx> CodeGen<'ctx, Rsp> {
+    /// Extracts the element at the given index from the given vector, returning it as an integer.
+    pub fn build_extract_element(
+        &self,
+        vec: VectorValue<'ctx>,
+        elem: u64,
+        name: &str,
+    ) -> CompilationResult<IntValue<'ctx>> {
+        let elem = {
+            // The element field is limited to 15, and wraps around.
+            let value = elem & 0b1111;
+            self.context.i32_type().const_int(value, false)
+        };
+        Ok(self
+            .builder
+            .build_extract_element(vec, elem, name)?
+            .into_int_value())
+    }
+
     /// Read the control (CP0) register at the given index.
     pub fn read_control_register(
         &self,
@@ -13,18 +34,18 @@ impl<'ctx> CodeGen<'ctx, Rsp> {
     ) -> CompilationResult<IntValue<'ctx>> {
         #[allow(clippy::cast_possible_truncation)]
         let reg = register::Control::from_repr(index.into() as u8).unwrap();
-        self.read_register_raw(ty, reg)
+        Ok(self.read_register_raw(ty, reg)?.into_int_value())
     }
 
     /// Read the vector (CP2) register at the given index.
     pub fn read_vector_register(
         &self,
-        ty: IntType<'ctx>,
         index: impl Into<u64>,
-    ) -> CompilationResult<IntValue<'ctx>> {
+    ) -> CompilationResult<VectorValue<'ctx>> {
         #[allow(clippy::cast_possible_truncation)]
         let reg = register::Vector::from_repr(index.into() as u8).unwrap();
-        self.read_register_raw(ty, reg)
+        let ty = self.context.i8_type().vec_type(16);
+        Ok(self.read_register_raw(ty, reg)?.into_vector_value())
     }
 
     /// Read the miscellaneous register at the given index.
@@ -35,7 +56,7 @@ impl<'ctx> CodeGen<'ctx, Rsp> {
     ) -> CompilationResult<IntValue<'ctx>> {
         #[allow(clippy::cast_possible_truncation)]
         let reg = register::Special::from_repr(index.into() as u8).unwrap();
-        self.read_register_raw(ty, reg)
+        Ok(self.read_register_raw(ty, reg)?.into_int_value())
     }
 
     /// Read the given register
@@ -47,7 +68,8 @@ impl<'ctx> CodeGen<'ctx, Rsp> {
         match reg {
             register::Register::GeneralPurpose(r) => self.read_general_register(ty, r),
             register::Register::Control(r) => self.read_control_register(ty, r),
-            register::Register::Vector(r) => self.read_vector_register(ty, r),
+            register::Register::Vector(_r) => todo!("read_vector_register"),
+            // register::Register::Vector(r) => todo!("read_vector_register"),
             register::Register::Special(r) => self.read_special_register(ty, r),
         }
     }
@@ -66,7 +88,7 @@ impl<'ctx> CodeGen<'ctx, Rsp> {
     pub fn write_vector_register(
         &self,
         index: impl Into<u64>,
-        value: IntValue<'ctx>,
+        value: VectorValue<'ctx>,
     ) -> CompilationResult<()> {
         #[allow(clippy::cast_possible_truncation)]
         let reg = register::Vector::from_repr(index.into() as u8).unwrap();
@@ -93,7 +115,7 @@ impl<'ctx> CodeGen<'ctx, Rsp> {
         match reg {
             register::Register::GeneralPurpose(r) => self.write_general_register(r, value),
             register::Register::Control(r) => self.write_control_register(r, value),
-            register::Register::Vector(r) => self.write_vector_register(r, value),
+            register::Register::Vector(_r) => todo!("write_vector_register"),
             register::Register::Special(r) => self.write_special_register(r, value),
         }
     }

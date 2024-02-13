@@ -1,6 +1,7 @@
 use self::{address_map::VirtualAddressMap, init::Helpers};
 use crate::{
     label::{JitFunctionPointer, LabelWithContext},
+    macros::env_call,
     runtime::RuntimeFunction,
     target::{self, Globals as _, RegisterID, RegisterStorage, Target},
     LLVM_CALLING_CONVENTION_TAILCC,
@@ -11,8 +12,9 @@ use inkwell::{
     builder::{Builder, BuilderError},
     context::Context,
     execution_engine::ExecutionEngine,
+    intrinsics::Intrinsic,
     module::Module,
-    types::{AnyType, BasicType, FloatType, IntType},
+    types::{AnyType, BasicType, BasicTypeEnum, FloatType, IntType},
     values::{
         BasicValue, BasicValueEnum, CallSiteValue, FloatValue, FunctionValue, GlobalValue,
         InstructionValue, IntValue, PointerValue,
@@ -23,24 +25,8 @@ use mips_decomp::{instruction::ParsedInstruction, register, Exception};
 use std::collections::HashMap;
 use tartan_bitfield::bitfield;
 
-#[macro_use]
-mod comparison;
 pub(crate) mod address_map;
 mod init;
-
-#[macro_export]
-macro_rules! env_call {
-    ($codegen:expr, $func:expr, [$($args:expr),*]) => {{
-        // Type-check the arguments.
-        let codegen: &$crate::codegen::CodeGen<_> = $codegen;
-        let func: &$crate::runtime::RuntimeFunction = &$func;
-
-        let globals = codegen.globals();
-        let args = &[globals.env_ptr.as_pointer_value().into(), $($args.into()),*];
-        let func = *globals.functions.get(func).expect("runtime functions not initialised");
-        codegen.builder.build_call(func, args, concat!("env_call_", stringify!($func)))
-    }};
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum CompilationError {
@@ -48,6 +34,10 @@ pub enum CompilationError {
     UnimplementedInstruction(String),
     #[error("Error while building recompiled block: {0}")]
     BuilderError(#[from] BuilderError),
+    #[error("Could not find an intrinsic named '{0}'")]
+    IntrinsicNotFound(&'static str),
+    #[error("Callsite does not have a return value")]
+    NoReturnValue,
     #[error("Failed to verify generated code: {0}")]
     VerificationFailed(String),
 }
@@ -301,6 +291,34 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         Ok(lab)
     }
 
+    fn intrinsic_declaration(
+        &self,
+        name: &'static str,
+        param_types: &[BasicTypeEnum],
+    ) -> CompilationResult<FunctionValue<'ctx>> {
+        let curr_mod = self.modules.last().unwrap_or(&self.module);
+        Intrinsic::find(name)
+            .ok_or(CompilationError::IntrinsicNotFound(name))?
+            .get_declaration(curr_mod, param_types)
+            .ok_or(CompilationError::IntrinsicNotFound(name))
+    }
+
+    pub fn build_umin(
+        &self,
+        lhs: IntValue<'ctx>,
+        rhs: IntValue<'ctx>,
+        name: &str,
+    ) -> CompilationResult<IntValue<'ctx>> {
+        let func = self.intrinsic_declaration("llvm.umin", &[lhs.get_type().into()])?;
+        Ok(self
+            .builder
+            .build_call(func, &[lhs.into(), rhs.into()], name)?
+            .try_as_basic_value()
+            .left()
+            .ok_or(CompilationError::NoReturnValue)?
+            .into_int_value())
+    }
+
     pub fn build_panic(&self, string: &str, storage_name: &str) -> CompilationResult<()> {
         let ptr = self
             .builder
@@ -313,15 +331,69 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         Ok(())
     }
 
+    pub fn increment(
+        &self,
+        value: IntValue<'ctx>,
+        num: u64,
+        name: &str,
+    ) -> CompilationResult<IntValue<'ctx>> {
+        let one = value.get_type().const_int(num, false);
+        Ok(self.builder.build_int_add(value, one, name)?)
+    }
+
+    /// Builds a loop using the following arguments, in order:
+    /// * `name`       - The name of the loop in the IR.
+    /// * `index_init` - The initial index, prior to starting the loop.
+    /// * `compare`    - A function that returns true if the loop should continue.
+    /// * `next_index` - A function that modifies the index, returning the new value.
+    /// * `body`       - A function that builds the loop body. The return value is propagated.
+    pub fn build_for_loop<R>(
+        &self,
+        name: &str,
+        index_init: IntValue<'ctx>,
+        mut compare: impl FnMut(IntValue<'ctx>) -> CompilationResult<IntValue<'ctx>>,
+        mut next_index: impl FnMut(IntValue<'ctx>) -> CompilationResult<IntValue<'ctx>>,
+        mut body: impl FnMut(IntValue<'ctx>) -> CompilationResult<R>,
+    ) -> CompilationResult<R> {
+        let header_block = self.get_insert_block();
+        let (loop_block, done_block) = (
+            self.append_basic_block(&format!("{name}_body")),
+            self.append_basic_block(&format!("{name}_done")),
+        );
+
+        self.builder
+            .build_conditional_branch(compare(index_init)?, loop_block, done_block)?;
+
+        self.builder.position_at_end(loop_block);
+        let data = {
+            let index_phi = self
+                .builder
+                .build_phi(index_init.get_type(), &format!("{name}_phi"))?;
+            let index = index_phi.as_basic_value().into_int_value();
+
+            let data = body(index)?;
+            let next_index = next_index(index)?;
+            self.builder
+                .build_conditional_branch(compare(next_index)?, loop_block, done_block)?;
+
+            index_phi.add_incoming(&[(&index_init, header_block), (&next_index, loop_block)]);
+            data
+        };
+
+        self.builder.position_at_end(done_block);
+        Ok(data)
+    }
+
     /// If the comparison is true, execute the function generated within the given closure, otherwise skip it.
     /// When the true block does not already have a terminator, a jump to the false block is generated.
-    /// This positions the builder at the false case. The true case is returned.
-    pub fn build_if(
+    /// This positions the builder at the false case. You may return data from the closure,
+    /// which will be returned from this function.
+    pub fn build_if<R>(
         &self,
         name: &str,
         cmp: IntValue<'ctx>,
-        then: impl FnOnce() -> CompilationResult<()>,
-    ) -> CompilationResult<BasicBlock<'ctx>> {
+        then: impl FnOnce() -> CompilationResult<R>,
+    ) -> CompilationResult<R> {
         let (then_block, else_block) = (
             self.append_basic_block(&format!("{name}_then")),
             self.append_basic_block(&format!("{name}_else")),
@@ -330,43 +402,43 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
             .build_conditional_branch(cmp, then_block, else_block)?;
 
         self.builder.position_at_end(then_block);
-        then()?;
+        let extra_data = then()?;
         if !self.current_block_terminated() {
             self.builder.build_unconditional_branch(else_block)?;
         }
 
         self.builder.position_at_end(else_block);
-        Ok(then_block)
+        Ok(extra_data)
     }
 
     /// If the comparison is true, execute the first function generated within the given closure,
     /// otherwise the second. If either block does not already have a terminator, a jump to a merge block is generated.
-    /// This positions the builder at the merge block. The true and false cases are returned, in order.
-    pub fn build_if_else(
+    /// This positions the builder at the merge block. Both closures may return data,
+    /// which will be returned from this function as a tuple in the the order of true, false.
+    pub fn build_if_else<R1, R2>(
         &self,
         name: &str,
         cmp: IntValue<'ctx>,
-        then: impl FnOnce() -> CompilationResult<()>,
-        otherwise: impl FnOnce() -> CompilationResult<()>,
-    ) -> CompilationResult<(BasicBlock<'ctx>, BasicBlock<'ctx>)> {
+        then: impl FnOnce() -> CompilationResult<R1>,
+        otherwise: impl FnOnce() -> CompilationResult<R2>,
+    ) -> CompilationResult<(R1, R2)> {
         let merge_block = self.append_basic_block(&format!("{name}_merge"));
-        let then_block = self.build_if(name, cmp, || {
-            then()?;
+        let then_data = self.build_if(name, cmp, || {
+            let then_data = then()?;
             if !self.current_block_terminated() {
                 self.builder.build_unconditional_branch(merge_block)?;
             }
-            Ok(())
+            Ok(then_data)
         })?;
 
         // `build_if` leaves us positioned at the false block, so we can just call `otherwise`.
-        let else_block = self.builder.get_insert_block().unwrap();
-        otherwise()?;
+        let else_data = otherwise()?;
         if !self.current_block_terminated() {
             self.builder.build_unconditional_branch(merge_block)?;
         }
 
         self.builder.position_at_end(merge_block);
-        Ok((then_block, else_block))
+        Ok((then_data, else_data))
     }
 
     /// Splits the given integer in two, returning the high and low order bits in that order.
@@ -657,24 +729,22 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
 
     pub(crate) fn read_register_raw(
         &self,
-        ty: IntType<'ctx>,
+        ty: impl BasicType<'ctx> + Clone,
         reg: impl Into<<T::Registers as RegisterStorage>::RegisterID>,
-    ) -> CompilationResult<IntValue<'ctx>> {
+    ) -> CompilationResult<BasicValueEnum<'ctx>> {
         let reg = reg.into();
-        let registers = &self.globals().registers;
-        let ptr = registers.pointer_value(self, &reg);
-        Ok(self.read_register_pointer(ptr, ty, reg)?.into_int_value())
+        let ptr = self.globals().registers.pointer_value(self, &reg);
+        self.read_register_pointer(ptr, ty, reg)
     }
 
     pub(crate) fn write_register_raw(
         &self,
         reg: impl Into<<T::Registers as RegisterStorage>::RegisterID>,
-        value: IntValue<'ctx>,
+        value: impl Into<BasicValueEnum<'ctx>>,
     ) -> CompilationResult<()> {
         let reg = reg.into();
-        let registers = &self.globals().registers;
-        let ptr = registers.pointer_value(self, &reg);
-        self.write_register_pointer(value.as_basic_value_enum(), ptr, reg)
+        let ptr = self.globals().registers.pointer_value(self, &reg);
+        self.write_register_pointer(value.into(), ptr, reg)
     }
 
     /// Read the general-purpose register (GPR) at the given index.
@@ -693,7 +763,7 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
             // Register zero is hardwired to zero.
             Ok(ty.const_zero())
         } else {
-            self.read_register_raw(ty, reg)
+            Ok(self.read_register_raw(ty, reg)?.into_int_value())
         }
     }
 
@@ -716,8 +786,9 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
     }
 
     pub fn read_program_counter(&self) -> CompilationResult<IntValue<'ctx>> {
-        let pc_id = <<T::Registers as target::RegisterStorage>::RegisterID as target::RegisterID>::PROGRAM_COUNTER;
-        self.read_register_raw(self.context.i64_type(), pc_id)
+        let ty = self.context.i64_type();
+        let reg = <<T::Registers as target::RegisterStorage>::RegisterID as target::RegisterID>::PROGRAM_COUNTER;
+        Ok(self.read_register_raw(ty, reg)?.into_int_value())
     }
 
     pub fn write_program_counter(&self, value: u64) -> CompilationResult<()> {
@@ -763,7 +834,7 @@ impl BitWidth for usize {
 pub(crate) trait NumericValue<'ctx>:
     BasicValue<'ctx> + TryFrom<BasicValueEnum<'ctx>> + Copy
 {
-    type Tag: BasicType<'ctx>;
+    type Tag: BasicType<'ctx> + Clone;
 
     fn tag(context: &'ctx Context, bit_width: &impl BitWidth) -> Self::Tag;
 }

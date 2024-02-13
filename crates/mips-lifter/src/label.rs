@@ -1,5 +1,6 @@
 use crate::{
     codegen::{function_attributes, CodeGen, CompilationResult, FUNCTION_PREFIX},
+    macros::{cmp, env_call},
     runtime::RuntimeFunction,
     target::{Instruction, Label, LabelList, Target},
     LLVM_CALLING_CONVENTION_TAILCC,

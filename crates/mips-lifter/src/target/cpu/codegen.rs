@@ -1,7 +1,10 @@
 //! Code generation helpers
 
 use super::Cpu;
-use crate::codegen::{BitWidth, CodeGen, CompilationResult, NumericValue};
+use crate::{
+    codegen::{BitWidth, CodeGen, CompilationResult, NumericValue},
+    macros::cmp,
+};
 use inkwell::{
     types::{BasicType, IntType, PointerType},
     values::{IntValue, PointerValue},
@@ -59,47 +62,44 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
             cmp!(self, fr_bit != 0)?
         };
 
-        let mut then_ptr = None;
-        let mut else_ptr = None;
-        let (then_bb, else_bb) = self.build_if_else(
+        let ((then_bb, then_ptr), (else_bb, else_ptr)) = self.build_if_else(
             "fr_in_status",
             fr_set,
+            || Ok((self.get_insert_block(), pointer_at_index(index)?)),
             || {
-                then_ptr = Some(pointer_at_index(index)?);
-                Ok(())
-            },
-            || {
-                else_ptr = Some(match bit_width.bit_width() {
-                    32 => {
-                        let alignment = index & 1;
-                        let base_register = index & !alignment;
-                        let name = name(base_register);
-                        let ptr = self.builder.build_pointer_cast(
-                            pointer_at_index(base_register)?,
-                            i32_type.ptr_type(AddressSpace::default()),
-                            &format!("{name}_lo_ptr_"),
-                        )?;
+                Ok((
+                    self.get_insert_block(),
+                    match bit_width.bit_width() {
+                        32 => {
+                            let alignment = index & 1;
+                            let base_register = index & !alignment;
+                            let name = name(base_register);
+                            let ptr = self.builder.build_pointer_cast(
+                                pointer_at_index(base_register)?,
+                                i32_type.ptr_type(AddressSpace::default()),
+                                &format!("{name}_lo_ptr_"),
+                            )?;
 
-                        // If the index is odd, we need to add 1 to the pointer to get the high-order 32 bits.
-                        unsafe {
-                            self.builder.build_in_bounds_gep(
-                                i32_type,
-                                ptr,
-                                &[i32_type.const_int(u64::from(alignment), false)],
-                                &name,
-                            )?
+                            // If the index is odd, we need to add 1 to the pointer to get the high-order 32 bits.
+                            unsafe {
+                                self.builder.build_in_bounds_gep(
+                                    i32_type,
+                                    ptr,
+                                    &[i32_type.const_int(u64::from(alignment), false)],
+                                    &name,
+                                )?
+                            }
                         }
-                    }
 
-                    64 => pointer_at_index(index & !1)?, // Round down to the nearest even register.
-                    bit_width => todo!("write_fpu_register: bit_width={bit_width}"),
-                });
-                Ok(())
+                        64 => pointer_at_index(index & !1)?, // Round down to the nearest even register.
+                        bit_width => todo!("write_fpu_register: bit_width={bit_width}"),
+                    },
+                ))
             },
         )?;
 
         let result = self.builder.build_phi(ptr_ty, "fpr_ptr")?;
-        result.add_incoming(&[(&then_ptr.unwrap(), then_bb), (&else_ptr.unwrap(), else_bb)]);
+        result.add_incoming(&[(&then_ptr, then_bb), (&else_ptr, else_bb)]);
         Ok(result.as_basic_value().into_pointer_value())
     }
 
@@ -117,7 +117,7 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
             reg = RESERVED_CP0_REGISTER_LATCH;
         }
 
-        self.read_register_raw(ty, reg)
+        Ok(self.read_register_raw(ty, reg)?.into_int_value())
     }
 
     /// Read the floating-point unit (FPU) register at the given index.
@@ -129,7 +129,6 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
     ) -> CompilationResult<T>
     where
         T: NumericValue<'ctx>,
-        T::Tag: Clone,
     {
         let index = u8::try_from(index.into()).expect("index must be less than 32");
         let reg = register::cpu::Fpu::from_repr(index).unwrap();
@@ -152,7 +151,7 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
     ) -> CompilationResult<IntValue<'ctx>> {
         let index = u8::try_from(index.into()).expect("index must be less than 32");
         let reg = register::cpu::FpuControl::from_repr(index).unwrap();
-        self.read_register_raw(ty, reg)
+        Ok(self.read_register_raw(ty, reg)?.into_int_value())
     }
 
     /// Read the specified miscellaneous "special" register.
@@ -162,13 +161,15 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
         ty: IntType<'ctx>,
         reg: register::cpu::Special,
     ) -> CompilationResult<IntValue<'ctx>> {
-        self.read_register_raw(ty, reg)
+        Ok(self.read_register_raw(ty, reg)?.into_int_value())
     }
 
     /// Read the coprocessor 2 (CP2) register latch.
     /// If the `ty` is less than 64 bits the value will be truncated, and the lower bits returned.
     pub fn read_cp2_register(&self, ty: IntType<'ctx>) -> CompilationResult<IntValue<'ctx>> {
-        self.read_register_raw(ty, CP2_REGISTER_LATCH)
+        Ok(self
+            .read_register_raw(ty, CP2_REGISTER_LATCH)?
+            .into_int_value())
     }
 
     /// Read the specified register.

@@ -1,5 +1,6 @@
 use crate::{
     codegen::{CodeGen, CompilationError, CompilationResult},
+    macros::{cmp, cmps, cmpu, env_call},
     runtime::RuntimeFunction,
     target::{cpu::codegen::Overflow, cpu::Cpu},
 };

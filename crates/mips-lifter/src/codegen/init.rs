@@ -1,5 +1,7 @@
 use super::{CodeGen, CompilationResult, Globals};
-use crate::{codegen::CompilationError, env_call, runtime::RuntimeFunction, target::Target};
+use crate::{
+    codegen::CompilationError, macros::env_call, runtime::RuntimeFunction, target::Target,
+};
 use inkwell::{execution_engine::JitFunction, values::FunctionValue};
 use mips_decomp::INSTRUCTION_SIZE;
 

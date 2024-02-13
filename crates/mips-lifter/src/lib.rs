@@ -18,10 +18,10 @@ pub mod gdb {
     }
 }
 
-#[macro_use]
-mod codegen;
 mod builder;
+mod codegen;
 mod label;
+mod macros;
 pub mod runtime;
 pub mod target;
 
