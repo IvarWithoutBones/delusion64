@@ -20,7 +20,6 @@ pub(super) fn compile_instruction(
 ) -> CompilationResult<()> {
     let i8_type = codegen.context.i8_type();
     let i32_type = codegen.context.i32_type();
-    let vec_type = i8_type.vec_type(16);
 
     let base_plus_offset = |access_size: u32, name: &str| -> CompilationResult<IntValue> {
         let base = codegen.read_general_register(i32_type, instr.base())?;
@@ -44,32 +43,19 @@ pub(super) fn compile_instruction(
                 codegen.build_umin(align, max, "lqv_len")?
             };
 
-            let initial_target = codegen.read_vector_register(instr.vt())?;
-            let header_block = codegen.get_insert_block();
-            let target = codegen.build_for_loop(
+            // TODO: consider moving to the `llvm.masked.load`/`llvm.masked.gather` intrinsics
+            codegen.build_for_loop(
                 "lqv_loop",
                 i32_type.const_zero(),
-                |i| cmpu!(codegen, i <= len),
+                |i| cmpu!(codegen, i < len),
                 |i| codegen.increment(i, 1, "lqv_next_index"),
                 |i| {
-                    let target_phi = codegen.builder.build_phi(vec_type, "lqv_target")?;
                     let elem = codegen.builder.build_int_add(elem, i, "lqv_elem")?;
                     let addr = codegen.builder.build_int_add(addr, i, "lqv_addr")?;
                     let value = codegen.read_memory(i8_type, addr)?;
-
-                    let target = target_phi.as_basic_value().into_vector_value();
-                    let new_target = codegen
-                        .builder
-                        .build_insert_element(target, value, elem, "lqv_res")?;
-                    target_phi.add_incoming(&[
-                        (&initial_target, header_block),
-                        (&new_target, codegen.get_insert_block()),
-                    ]);
-                    Ok(target)
+                    codegen.write_vector_register_byte_offset(instr.vt(), value, elem)
                 },
             )?;
-
-            codegen.write_vector_register(instr.vt(), target)?;
         }
 
         Mnenomic::Sqv => {
@@ -303,7 +289,7 @@ pub(super) fn compile_instruction(
 
         Mnenomic::Sbv | Mnenomic::Ssv | Mnenomic::Slv | Mnenomic::Sdv => {
             // Store a certain amount of bytes from a VPR, into memory at (base + (offset * bytes))
-            compile_vector_store(codegen, instr)?;
+            compile_store(codegen, instr)?;
         }
 
         _ => {
@@ -387,10 +373,7 @@ fn compile_packed_store(
     Ok(())
 }
 
-fn compile_vector_store(
-    codegen: &CodeGen<Rsp>,
-    instr: &ParsedInstruction,
-) -> CompilationResult<()> {
+fn compile_store(codegen: &CodeGen<Rsp>, instr: &ParsedInstruction) -> CompilationResult<()> {
     let name = instr.mnemonic().name();
     let bytes = match instr.mnemonic() {
         Mnenomic::Sbv => 1,

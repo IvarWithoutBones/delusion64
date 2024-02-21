@@ -142,8 +142,8 @@ impl<const SIZE: usize> Int<SIZE> {
     }
 
     #[inline]
-    pub fn from_array(slice: [u8; SIZE]) -> Self {
-        Self(slice)
+    pub fn from_array(array: [u8; SIZE]) -> Self {
+        Self(array)
     }
 
     #[inline]
@@ -185,7 +185,7 @@ impl<const SIZE: usize> From<[u8; SIZE]> for Int<SIZE> {
 }
 
 macro_rules! impl_int_conversion {
-    ($($ty:ty),+) => {
+    ($($ty: ty),+) => {
         $(
             impl IntoInt<{ size_of::<$ty>() }> for $ty {
                 #[inline]
@@ -211,32 +211,29 @@ macro_rules! impl_int_conversion {
     };
 }
 
-// u128/i128 are omitted because the guest does not support them.
-impl_int_conversion!(u8, u16, u32, u64, i8, i16, i32, i64);
+impl_int_conversion!(u8, u16, u32, u64, i8, i16, i32, i64, u128, i128);
 
 macro_rules! format_int {
-    ($(($trait:path, $fmt:expr)),+) => {
+    ($(($trait: path, $fmt_str: expr)),+) => {
         $(
             impl<const SIZE: usize> $trait for Int<SIZE> {
                 fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                    if SIZE == size_of::<u8>() {
-                        let value: u8 = self.resize().unwrap().into();
-                        write!(f, concat!("{:", $fmt, "}_u8"), value)
-                    } else if SIZE == size_of::<u16>() {
-                        let value: u16 = self.resize().unwrap().into();
-                        write!(f, concat!("{:", $fmt, "}_u16"), value)
-                    } else if SIZE == size_of::<u32>() {
-                        let value: u32 = self.resize().unwrap().into();
-                        write!(f, concat!("{:", $fmt, "}_u32"), value)
-                    } else if SIZE == size_of::<u64>() {
-                        let value: u64 = self.resize().unwrap().into();
-                        write!(f, concat!("{:", $fmt, "}_u64"), value)
-                    } else {
-                        write!(f, concat!("{:", $fmt, "?}"), self.0)
-                    }
+                    format_int!(@impl self, f, $fmt_str, $trait, u8, u16, u32, u64, u128)
                 }
             }
         )+
+    };
+
+    (@impl $self: ident, $fmt: expr, $fmt_str: expr, $trait: path, $($ty: ty),+) => {
+        $(
+            if SIZE == size_of::<$ty>() {
+                // This can never fail, we just checked the size is equal.
+                let value: $ty = $self.resize().unwrap().into();
+                write!($fmt, concat!("{:", $fmt_str, "}_", stringify!($ty)), value)
+            } else
+        )+ {
+            $fmt.debug_list().entries($self.0.iter()).finish()
+        }
     };
 }
 
@@ -244,7 +241,8 @@ format_int!(
     (fmt::Display, ""),
     (fmt::Debug, "#x"),
     (fmt::LowerHex, "x"),
-    (fmt::UpperHex, "X")
+    (fmt::UpperHex, "X"),
+    (fmt::Binary, "b")
 );
 
 /// Decides whom will kill the thread when an unrecoverable error occurs.

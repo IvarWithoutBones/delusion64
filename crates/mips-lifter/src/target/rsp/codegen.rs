@@ -1,7 +1,10 @@
 #![allow(dead_code)]
 
 use super::{register, Rsp};
-use crate::codegen::{CodeGen, CompilationResult};
+use crate::{
+    codegen::{CodeGen, CompilationResult},
+    target::Globals,
+};
 use inkwell::{
     types::IntType,
     values::{IntValue, VectorValue},
@@ -93,6 +96,33 @@ impl<'ctx> CodeGen<'ctx, Rsp> {
         #[allow(clippy::cast_possible_truncation)]
         let reg = register::Vector::from_repr(index.into() as u8).unwrap();
         self.write_register_raw(reg, value)
+    }
+
+    /// Write the given 8-bit `value`, into vector register `index` at `offset`.
+    pub fn write_vector_register_byte_offset(
+        &self,
+        index: impl Into<u64>,
+        value: IntValue<'ctx>,
+        offset: IntValue<'ctx>,
+    ) -> CompilationResult<()> {
+        let i8_type = self.context.i8_type();
+        debug_assert_eq!(value.get_type(), i8_type);
+        #[allow(clippy::cast_possible_truncation)]
+        let reg = register::Vector::from_repr(index.into() as u8)
+            .unwrap()
+            .into();
+
+        // TODO: Validate the offset, this will read out of bounds when given an offset bigger than 15.
+        let ptr = unsafe {
+            self.builder.build_in_bounds_gep(
+                i8_type,
+                self.globals().registers.pointer_value(self, &reg),
+                &[offset],
+                "vector_register_byte_offset",
+            )?
+        };
+
+        self.write_register_pointer(value.into(), ptr, reg)
     }
 
     /// Write the miscellaneous register at the given index.

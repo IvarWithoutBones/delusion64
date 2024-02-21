@@ -417,27 +417,23 @@ impl<'ctx> CodeGen<'ctx, Cpu> {
         // Compare the twos complement sign bits of the operands and the result.
         let overflow = {
             let lhs = {
-                let xor = self
-                    .builder
-                    .build_xor(lhs, rhs, "signed_overflow_lhs_xor")?;
+                let xor = self.builder.build_xor(lhs, rhs, "overflow_lhs_xor")?;
                 match ty {
-                    Overflow::Add => self.builder.build_not(xor, "signed_overflow_lhs")?,
+                    Overflow::Add => self.builder.build_not(xor, "overflow_lhs")?,
                     Overflow::Subtract => xor,
                 }
             };
 
-            let rhs = self
-                .builder
-                .build_xor(rhs, result, "signed_overflow_rhs_xor")?;
+            let rhs = self.builder.build_xor(rhs, result, "overflow_rhs_xor")?;
+            let combined = self.builder.build_and(lhs, rhs, "overflow_and")?;
 
-            let combined = self.builder.build_and(lhs, rhs, "signed_overflow_and")?;
             let ty = combined.get_type();
-            let shift = ty.const_int((ty.bit_width() as u64 * 8) - 1, false);
+            let shift_amount = ty.const_int((ty.bit_width() as u64 * 8) - 1, false);
             self.builder
-                .build_right_shift(combined, shift, false, "signed_overflow_shift")?
+                .build_right_shift(combined, shift_amount, false, "overflow_shift")?
         };
 
-        self.build_if("signed_overflow", overflow, || {
+        self.build_if("overflow", cmp!(self, overflow != 0)?, || {
             self.throw_exception(Exception::ArithmeticOverflow, Some(0), None)
         })?;
         Ok(())

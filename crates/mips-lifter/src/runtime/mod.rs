@@ -5,7 +5,7 @@ use self::{
     gdb::command::MonitorCommand,
 };
 use crate::{
-    codegen::{self, CodeGen, FallthroughAmount},
+    codegen::{self, CodeGen, CompilationError, FallthroughAmount},
     label::{generate_label_functions, JitFunctionPointer, LabelWithContext},
     runtime::{
         bus::{BusError, PanicAction},
@@ -135,7 +135,7 @@ where
             env.debugger = Some(gdb::Debugger::new(&mut env, gdb));
         }
 
-        let globals = env.map_into(&env.codegen.module, &env.codegen.execution_engine);
+        let globals = env.map_into(env.codegen.module(), &env.codegen.execution_engine);
         env.codegen
             .initialise(globals)
             .expect("failed to initialise codegen");
@@ -217,7 +217,7 @@ where
             }
         } else {
             match action {
-                PanicAction::Kill => panic!("unrecoverable CPU error"),
+                PanicAction::Kill => panic!("unrecoverable {:?} error", self.target),
                 PanicAction::Idle => loop {
                     // The thread will be killed externally.
                     std::thread::park()
@@ -341,9 +341,9 @@ where
             .add_dynamic_function(module, globals, |codegen, module| {
                 let mut lab: LabelWithContext<'_, T> = {
                     let mut labels = generate_label_functions(label_list, codegen.context, module);
-                    labels.pop().ok_or_else(|| {
-                        format!("failed to generate label functions for {vaddr:#x}")
-                    })?
+                    labels
+                        .pop()
+                        .ok_or(CompilationError::LabelFunctionGeneration { vaddr })?
                 };
 
                 if let Ok(fallthrough) = codegen.labels.get(lab.label.end() as u64) {
@@ -367,13 +367,10 @@ where
                     lab.fallthrough_fn = Some(codegen.fallthrough_function(amount));
                 }
 
-                lab.compile(codegen, self.trace || self.debugger.is_some())
-                    .map_err(|e| e.to_string())?;
+                lab.compile(codegen, self.trace || self.debugger.is_some())?;
                 Ok(lab)
             })
-            .unwrap_or_else(|err| {
-                self.panic_update_debugger(&format!("failed to generate function: {err:#?}"))
-            });
+            .unwrap_or_else(|err| self.panic_update_debugger(err.to_string().as_str()));
 
         let ptr = lab.pointer.unwrap();
         self.codegen.labels.insert(insert_index, lab);

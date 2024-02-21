@@ -1,7 +1,5 @@
 use super::{CodeGen, CompilationResult, Globals};
-use crate::{
-    codegen::CompilationError, macros::env_call, runtime::RuntimeFunction, target::Target,
-};
+use crate::{macros::env_call, runtime::RuntimeFunction, target::Target};
 use inkwell::{execution_engine::JitFunction, values::FunctionValue};
 use mips_decomp::INSTRUCTION_SIZE;
 
@@ -64,7 +62,7 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         self.build_jump_helper()?;
         self.build_fallthrough_helpers()?;
         self.build_main()?;
-        self.verify().map_err(CompilationError::VerificationFailed)
+        self.verify()
     }
 
     fn build_main(&mut self) -> CompilationResult<()> {
@@ -103,7 +101,7 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
                 .left()
                 .unwrap()
                 .into_int_value();
-            self.build_jump_to_jit_func_ptr(ptr, "jump_fn_call")?
+            self.build_jump_to_host_ptr(ptr, "jump_fn_call")?
         }
 
         self.helpers.jump = Some(func);

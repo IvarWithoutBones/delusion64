@@ -42,7 +42,7 @@ impl<'ctx, T: Target> LabelWithContext<'ctx, T> {
         context: &'ctx Context,
     ) -> Self {
         let name = {
-            let start = label.start() as usize * INSTRUCTION_SIZE;
+            let start = label.start() as usize;
             let id = ID.fetch_add(1, Ordering::Relaxed);
             format!("{FUNCTION_PREFIX}{start:06x}_{id}")
         };
@@ -82,7 +82,7 @@ impl<'ctx, T: Target> LabelWithContext<'ctx, T> {
         // TODO: only do this for the CPU, Target-dependant
         let exception_occured = cmp!(codegen, maybe_exception_vec != 0)?;
         codegen.build_if("exception_occured", exception_occured, || {
-            codegen.build_jump_to_jit_func_ptr(maybe_exception_vec, "exception_vector_jmp")?;
+            codegen.build_jump_to_host_ptr(maybe_exception_vec, "exception_vector_jmp")?;
             Ok(())
         })?;
         Ok(())

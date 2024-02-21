@@ -60,26 +60,14 @@ where
 }
 
 /// An error that can occur when handling a monitor command.
+#[derive(Debug, thiserror::Error)]
 pub enum MonitorCommandHandlerError {
+    #[error("invalid argument '{0}'")]
     InvalidArgument(String),
+    #[error("error while formatting output: {0}")]
+    FormatError(#[from] std::fmt::Error),
+    #[error("{0}")]
     Other(String),
-}
-
-impl std::fmt::Debug for MonitorCommandHandlerError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            MonitorCommandHandlerError::InvalidArgument(arg) => {
-                write!(f, "invalid argument {arg:?}")
-            }
-            MonitorCommandHandlerError::Other(msg) => write!(f, "{msg}"),
-        }
-    }
-}
-
-impl<'a> From<&'a str> for MonitorCommandHandlerError {
-    fn from(value: &'a str) -> Self {
-        Self::Other(value.to_owned())
-    }
 }
 
 impl From<String> for MonitorCommandHandlerError {
@@ -88,15 +76,9 @@ impl From<String> for MonitorCommandHandlerError {
     }
 }
 
-impl From<std::fmt::Error> for MonitorCommandHandlerError {
-    fn from(_: std::fmt::Error) -> Self {
-        Self::Other("failed to write to output".to_owned())
-    }
-}
-
-impl From<()> for MonitorCommandHandlerError {
-    fn from(_: ()) -> Self {
-        Self::Other("failed to handle command".to_owned())
+impl<'a> From<&'a str> for MonitorCommandHandlerError {
+    fn from(value: &'a str) -> Self {
+        Self::Other(value.to_owned())
     }
 }
 
@@ -190,6 +172,21 @@ where
                     Ok(())
                 }),
             },
+            MonitorCommand {
+                name: "llvm-ir",
+                description: "dump the LLVM IR for the previously compiled module. If an argument is given, it is used as the output file path.",
+                handler: Box::new(|env, out, args| {
+                    let module = env.codegen.module();
+                    if let Some(path) = args.next() {
+                        module.print_to_file(path).map_err(|err| err.to_string())?;
+                        outputln!(out, "wrote LLVM IR to {path}");
+                    } else {
+                        let contents = module.print_to_string().to_string();
+                        outputln!(out, "{contents}");
+                    }
+                    Ok(())
+                }),
+            }
         ];
         result.extend(GdbIntegration::extra_monitor_commands());
         result

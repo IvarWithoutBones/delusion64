@@ -18,6 +18,7 @@ pub mod gdb {
     }
 }
 
+mod address_map;
 mod builder;
 mod codegen;
 mod label;

@@ -1,5 +1,6 @@
-use self::{address_map::VirtualAddressMap, init::Helpers};
+use self::init::Helpers;
 use crate::{
+    address_map::VirtualAddressMap,
     label::{JitFunctionPointer, LabelWithContext},
     macros::env_call,
     runtime::RuntimeFunction,
@@ -11,22 +12,25 @@ use inkwell::{
     basic_block::BasicBlock,
     builder::{Builder, BuilderError},
     context::Context,
-    execution_engine::ExecutionEngine,
+    execution_engine::{ExecutionEngine, FunctionLookupError},
     intrinsics::Intrinsic,
     module::Module,
-    types::{AnyType, BasicType, BasicTypeEnum, FloatType, IntType},
+    types::{AnyType, BasicType, BasicTypeEnum, IntType},
     values::{
-        BasicValue, BasicValueEnum, CallSiteValue, FloatValue, FunctionValue, GlobalValue,
-        InstructionValue, IntValue, PointerValue,
+        BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, GlobalValue, InstructionValue,
+        IntValue, PointerValue,
     },
     AtomicOrdering,
 };
 use mips_decomp::{instruction::ParsedInstruction, register, Exception};
-use std::collections::HashMap;
+use std::{collections::HashMap, str::Utf8Error};
 use tartan_bitfield::bitfield;
 
-pub(crate) mod address_map;
+mod arithmetic;
+mod control_flow;
 mod init;
+
+pub(crate) use arithmetic::{BitWidth, NumericValue};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CompilationError {
@@ -36,10 +40,18 @@ pub enum CompilationError {
     BuilderError(#[from] BuilderError),
     #[error("Could not find an intrinsic named '{0}'")]
     IntrinsicNotFound(&'static str),
+    #[error("Failed to generate label functions for vaddr {vaddr:#x}")]
+    LabelFunctionGeneration { vaddr: u64 },
     #[error("Callsite does not have a return value")]
     NoReturnValue,
     #[error("Failed to verify generated code: {0}")]
     VerificationFailed(String),
+    #[error("Failed to add module to execution engine")]
+    AddModuleFailed,
+    #[error("LLVM C-string contains invalid UTF-8: {0}")]
+    InvalidUtf8(#[from] Utf8Error),
+    #[error("Failed to look up function: '{0}'")]
+    FunctionLookup(#[from] FunctionLookupError),
 }
 
 pub type CompilationResult<T> = Result<T, CompilationError>;
@@ -77,7 +89,7 @@ pub struct Globals<'ctx, T: Target> {
 #[derive(Debug)]
 pub struct CodeGen<'ctx, T: Target> {
     pub context: &'ctx Context,
-    pub module: Module<'ctx>,
+    module: Module<'ctx>,
     pub builder: Builder<'ctx>,
     pub execution_engine: ExecutionEngine<'ctx>,
     pub labels: VirtualAddressMap<'ctx, T>,
@@ -106,10 +118,10 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
     }
 
     /// Verify our module is valid.
-    pub fn verify(&self) -> Result<(), String> {
-        self.module.verify().map_err(|e| {
-            self.module.print_to_file("./error.ll").unwrap();
-            e.to_string()
+    pub fn verify(&self) -> CompilationResult<()> {
+        self.module().verify().map_err(|e| {
+            self.module().print_to_file("./error.ll").unwrap();
+            CompilationError::VerificationFailed(e.to_string())
         })
     }
 
@@ -134,81 +146,9 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         self.globals.as_ref().expect("globals are not initialised")
     }
 
-    fn build_jump(&self, address: IntValue<'ctx>) -> CompilationResult<()> {
-        self.set_call_attrs(self.builder.build_call(
-            self.helpers.jump(),
-            &[address.into()],
-            "build_jump",
-        )?);
-        self.builder.build_return(None)?;
-        Ok(())
-    }
-
-    pub(crate) fn build_jump_to_jit_func_ptr(
-        &self,
-        host_ptr: IntValue<'ctx>,
-        name: &str,
-    ) -> CompilationResult<()> {
-        let func_type = self.context.void_type().fn_type(&[], false);
-        let ptr_type = func_type.ptr_type(Default::default());
-        let ptr = self.builder.build_int_to_ptr(host_ptr, ptr_type, name)?;
-        self.set_call_attrs(
-            self.builder
-                .build_indirect_call(func_type, ptr, &[], name)?,
-        );
-        self.builder.build_return(None)?;
-        Ok(())
-    }
-
-    /// Generate a dynamic jump to the given dynamic virtual address, ending the current basic block.
-    pub fn build_dynamic_jump(&self, address: IntValue<'ctx>) -> CompilationResult<()> {
-        self.build_jump(self.zero_extend_to(self.context.i64_type(), address)?)
-    }
-
-    /// Generate a jump to the given constant virtual address, ending the current basic block.
-    pub fn build_constant_jump(&self, address: u64) -> CompilationResult<()> {
-        if let Ok(lab) = self.labels.get(address) {
-            // If we have previously compiled this function we can insert a direct jump.
-            self.set_call_attrs(
-                self.builder
-                    .build_call(lab.function, &[], "constant_jump")?,
-            );
-            self.builder.build_return(None)?;
-        } else {
-            // Let the runtime environment JIT it, then jump to it.
-            self.build_dynamic_jump(self.context.i64_type().const_int(address, false))?;
-        };
-        Ok(())
-    }
-
-    /// Sign-extends the given value to the given type.
-    pub fn sign_extend_to(
-        &self,
-        ty: IntType<'ctx>,
-        value: IntValue<'ctx>,
-    ) -> CompilationResult<IntValue<'ctx>> {
-        let name = format!("sign_ext_to_i{}", ty.get_bit_width());
-        Ok(self.builder.build_int_s_extend(value, ty, &name)?)
-    }
-
-    /// Zero-extends the given value to the given type.
-    pub fn zero_extend_to(
-        &self,
-        ty: IntType<'ctx>,
-        value: IntValue<'ctx>,
-    ) -> CompilationResult<IntValue<'ctx>> {
-        let name = format!("zero_ext_to_i{}", ty.get_bit_width());
-        Ok(self.builder.build_int_z_extend(value, ty, &name)?)
-    }
-
-    /// Truncates the given value to the given type.
-    pub fn truncate_to(
-        &self,
-        ty: IntType<'ctx>,
-        value: IntValue<'ctx>,
-    ) -> CompilationResult<IntValue<'ctx>> {
-        let name = format!("trunc_to_i{}", ty.get_bit_width());
-        Ok(self.builder.build_int_truncate(value, ty, &name)?)
+    /// The currently active module.
+    pub fn module(&self) -> &Module<'ctx> {
+        self.modules.last().unwrap_or(&self.module)
     }
 
     pub fn fallthrough_function(&self, amount: FallthroughAmount) -> FunctionValue<'ctx> {
@@ -231,19 +171,32 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         self.context.append_basic_block(current_func, name)
     }
 
+    /// Registers a function in the currently active module, returning the definition for the current module.
+    fn register_function(
+        &self,
+        module: &Module<'ctx>,
+        func: FunctionValue<'ctx>,
+    ) -> CompilationResult<(FunctionValue<'ctx>, JitFunctionPointer)> {
+        let name = func.get_name().to_str()?;
+        let func_def = module.add_function(name, func.get_type(), None);
+        let ptr = self.execution_engine.get_function_address(name)?;
+        self.execution_engine.add_global_mapping(&func_def, ptr);
+        Ok((func_def, ptr))
+    }
+
     pub fn call_function(&self, func: FunctionValue<'ctx>) -> CompilationResult<()> {
+        let (func, _ptr) = self.register_function(self.module(), func)?;
         self.set_call_attrs(self.builder.build_call(func, &[], "call_fn")?);
         self.builder.build_return(None)?;
         Ok(())
     }
 
-    pub fn link_in_module(
-        &mut self,
-        module: Module<'ctx>,
-        lab: &mut LabelWithContext<T>,
-    ) -> Result<(), String> {
+    pub fn link_in_module(&self, lab: &mut LabelWithContext<T>) -> CompilationResult<()> {
         // Map all functions from the new module into our execution engine, and add them to our main module.
-        self.execution_engine.add_module(&module).unwrap();
+        let module = self.module();
+        self.execution_engine
+            .add_module(module)
+            .map_err(|_| CompilationError::AddModuleFailed)?;
 
         for (i, func) in module
             .get_functions()
@@ -251,24 +204,16 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
             .filter(|func| func.count_basic_blocks() > 0)
             .enumerate()
         {
-            // Create a function declaration, without a body.
-            let name = func.get_name().to_str().unwrap();
-            let func_decl = self.module.add_function(name, func.get_type(), None);
-            self.set_func_attrs(func_decl);
-
             // Map the function pointer to the declaration.
-            let ptr = self.execution_engine.get_function_address(name).unwrap();
+            let (_func, ptr) = self.register_function(module, func)?;
             if i == 0 {
                 // We cache a pointer to the function in the label, but only the first.
                 lab.pointer = Some(ptr as JitFunctionPointer);
             } else {
                 panic!("multiple function bodies found in label");
             };
-
-            self.execution_engine.add_global_mapping(&func_decl, ptr);
         }
 
-        self.modules.push(module);
         Ok(())
     }
 
@@ -277,16 +222,18 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         module: Module<'ctx>,
         globals: Globals<'ctx, T>,
         f: F,
-    ) -> Result<LabelWithContext<'ctx, T>, String>
+    ) -> CompilationResult<LabelWithContext<'ctx, T>>
     where
-        F: FnOnce(&CodeGen<'ctx, T>, &Module<'ctx>) -> Result<LabelWithContext<'ctx, T>, String>,
+        F: FnOnce(&CodeGen<'ctx, T>, &Module<'ctx>) -> CompilationResult<LabelWithContext<'ctx, T>>,
     {
         self.globals = Some(globals);
         self.helpers.map_into(&module);
-        let mut lab = f(self, &module)?;
-        self.link_in_module(module, &mut lab)?;
-        if let Err(e) = self.verify() {
-            panic!("failed to verify generated code: {e}");
+        self.modules.push(module);
+
+        let mut lab = f(self, self.module())?;
+        self.link_in_module(&mut lab)?;
+        if cfg!(debug_assertions) {
+            self.verify()?;
         }
         Ok(lab)
     }
@@ -296,27 +243,10 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         name: &'static str,
         param_types: &[BasicTypeEnum],
     ) -> CompilationResult<FunctionValue<'ctx>> {
-        let curr_mod = self.modules.last().unwrap_or(&self.module);
         Intrinsic::find(name)
             .ok_or(CompilationError::IntrinsicNotFound(name))?
-            .get_declaration(curr_mod, param_types)
+            .get_declaration(self.module(), param_types)
             .ok_or(CompilationError::IntrinsicNotFound(name))
-    }
-
-    pub fn build_umin(
-        &self,
-        lhs: IntValue<'ctx>,
-        rhs: IntValue<'ctx>,
-        name: &str,
-    ) -> CompilationResult<IntValue<'ctx>> {
-        let func = self.intrinsic_declaration("llvm.umin", &[lhs.get_type().into()])?;
-        Ok(self
-            .builder
-            .build_call(func, &[lhs.into(), rhs.into()], name)?
-            .try_as_basic_value()
-            .left()
-            .ok_or(CompilationError::NoReturnValue)?
-            .into_int_value())
     }
 
     pub fn build_panic(&self, string: &str, storage_name: &str) -> CompilationResult<()> {
@@ -331,179 +261,11 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         Ok(())
     }
 
-    pub fn increment(
-        &self,
-        value: IntValue<'ctx>,
-        num: u64,
-        name: &str,
-    ) -> CompilationResult<IntValue<'ctx>> {
-        let one = value.get_type().const_int(num, false);
-        Ok(self.builder.build_int_add(value, one, name)?)
-    }
-
-    /// Builds a loop using the following arguments, in order:
-    /// * `name`       - The name of the loop in the IR.
-    /// * `index_init` - The initial index, prior to starting the loop.
-    /// * `compare`    - A function that returns true if the loop should continue.
-    /// * `next_index` - A function that modifies the index, returning the new value.
-    /// * `body`       - A function that builds the loop body. The return value is propagated.
-    pub fn build_for_loop<R>(
-        &self,
-        name: &str,
-        index_init: IntValue<'ctx>,
-        mut compare: impl FnMut(IntValue<'ctx>) -> CompilationResult<IntValue<'ctx>>,
-        mut next_index: impl FnMut(IntValue<'ctx>) -> CompilationResult<IntValue<'ctx>>,
-        mut body: impl FnMut(IntValue<'ctx>) -> CompilationResult<R>,
-    ) -> CompilationResult<R> {
-        let header_block = self.get_insert_block();
-        let (loop_block, done_block) = (
-            self.append_basic_block(&format!("{name}_body")),
-            self.append_basic_block(&format!("{name}_done")),
-        );
-
-        self.builder
-            .build_conditional_branch(compare(index_init)?, loop_block, done_block)?;
-
-        self.builder.position_at_end(loop_block);
-        let data = {
-            let index_phi = self
-                .builder
-                .build_phi(index_init.get_type(), &format!("{name}_phi"))?;
-            let index = index_phi.as_basic_value().into_int_value();
-
-            let data = body(index)?;
-            let next_index = next_index(index)?;
-            self.builder
-                .build_conditional_branch(compare(next_index)?, loop_block, done_block)?;
-
-            index_phi.add_incoming(&[(&index_init, header_block), (&next_index, loop_block)]);
-            data
-        };
-
-        self.builder.position_at_end(done_block);
-        Ok(data)
-    }
-
-    /// If the comparison is true, execute the function generated within the given closure, otherwise skip it.
-    /// When the true block does not already have a terminator, a jump to the false block is generated.
-    /// This positions the builder at the false case. You may return data from the closure,
-    /// which will be returned from this function.
-    pub fn build_if<R>(
-        &self,
-        name: &str,
-        cmp: IntValue<'ctx>,
-        then: impl FnOnce() -> CompilationResult<R>,
-    ) -> CompilationResult<R> {
-        let (then_block, else_block) = (
-            self.append_basic_block(&format!("{name}_then")),
-            self.append_basic_block(&format!("{name}_else")),
-        );
-        self.builder
-            .build_conditional_branch(cmp, then_block, else_block)?;
-
-        self.builder.position_at_end(then_block);
-        let extra_data = then()?;
-        if !self.current_block_terminated() {
-            self.builder.build_unconditional_branch(else_block)?;
-        }
-
-        self.builder.position_at_end(else_block);
-        Ok(extra_data)
-    }
-
-    /// If the comparison is true, execute the first function generated within the given closure,
-    /// otherwise the second. If either block does not already have a terminator, a jump to a merge block is generated.
-    /// This positions the builder at the merge block. Both closures may return data,
-    /// which will be returned from this function as a tuple in the the order of true, false.
-    pub fn build_if_else<R1, R2>(
-        &self,
-        name: &str,
-        cmp: IntValue<'ctx>,
-        then: impl FnOnce() -> CompilationResult<R1>,
-        otherwise: impl FnOnce() -> CompilationResult<R2>,
-    ) -> CompilationResult<(R1, R2)> {
-        let merge_block = self.append_basic_block(&format!("{name}_merge"));
-        let then_data = self.build_if(name, cmp, || {
-            let then_data = then()?;
-            if !self.current_block_terminated() {
-                self.builder.build_unconditional_branch(merge_block)?;
-            }
-            Ok(then_data)
-        })?;
-
-        // `build_if` leaves us positioned at the false block, so we can just call `otherwise`.
-        let else_data = otherwise()?;
-        if !self.current_block_terminated() {
-            self.builder.build_unconditional_branch(merge_block)?;
-        }
-
-        self.builder.position_at_end(merge_block);
-        Ok((then_data, else_data))
-    }
-
-    /// Splits the given integer in two, returning the high and low order bits in that order.
-    /// The resulting integers will be half the size of the original.
-    pub fn split(
-        &self,
-        value: IntValue<'ctx>,
-    ) -> CompilationResult<(IntValue<'ctx>, IntValue<'ctx>)> {
-        let ty = value.get_type();
-        let half_ty = match ty.get_bit_width() {
-            16 => self.context.i8_type(),
-            32 => self.context.i16_type(),
-            64 => self.context.i32_type(),
-            128 => self.context.i64_type(),
-            _ => unimplemented!("split type {ty}"),
-        };
-
-        let hi = {
-            let shift = ty.const_int(half_ty.get_bit_width() as u64, false);
-            let shifted = self
-                .builder
-                .build_right_shift(value, shift, false, "split_hi")?;
-            self.truncate_to(half_ty, shifted)?
-        };
-        let lo = self.truncate_to(half_ty, value)?;
-        Ok((hi, lo))
-    }
-
-    pub fn build_mask(
-        &self,
-        to_mask: IntValue<'ctx>,
-        mask: u64,
-        name: &str,
-    ) -> CompilationResult<IntValue<'ctx>> {
-        let mask = to_mask.get_type().const_int(mask, false);
-        Ok(self.builder.build_and(to_mask, mask, name)?)
-    }
-
     pub fn build_stub(&self, name: &str) -> CompilationResult<()> {
         let output = format!("{name} instruction not implemented");
         let storage_name = format!("{name}_stub");
         self.build_panic(&output, &storage_name)?;
         Ok(())
-    }
-
-    /// Get a host pointer to a function which simply returns.
-    /// Calling this inside of a JIT'ed block will return to the callee of [`JitBuilder::run`].
-    pub(crate) fn return_from_jit_ptr(&self) -> CompilationResult<JitFunctionPointer> {
-        const NAME: &str = "return_from_jit_helper";
-        let module = self.context.create_module("return_from_jit_helper_module");
-        let func = self.set_func_attrs(module.add_function(
-            NAME,
-            self.context.void_type().fn_type(&[], false),
-            None,
-        ));
-
-        let block = self.context.append_basic_block(func, "entry");
-        self.builder.position_at_end(block);
-        {
-            // Since every function we call uses tail calls, this should immediately return to the caller.
-            self.builder.build_return(None)?;
-        }
-
-        self.execution_engine.add_module(&module).unwrap();
-        Ok(self.execution_engine.get_function_address(NAME).unwrap() as JitFunctionPointer)
     }
 
     pub fn read_memory(
@@ -516,10 +278,17 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
             16 => RuntimeFunction::ReadI16,
             32 => RuntimeFunction::ReadI32,
             64 => RuntimeFunction::ReadI64,
-            _ => panic!("unimplemented read_memory type: {ty}"),
+            _ => unimplemented!("read_memory type: {ty}"),
         };
 
-        Ok(env_call!(self, func, [address])?
+        // The callback API expects a 64-bit address parameter.
+        let addr = match address.get_type().get_bit_width() {
+            32 => self.zero_extend_to(self.context.i64_type(), address)?,
+            64 => address,
+            width => unimplemented!("read_memory address bit width: {width}"),
+        };
+
+        Ok(env_call!(self, func, [addr])?
             .try_as_basic_value()
             .left()
             .unwrap()
@@ -537,10 +306,17 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
             16 => RuntimeFunction::WriteI16,
             32 => RuntimeFunction::WriteI32,
             64 => RuntimeFunction::WriteI64,
-            _ => panic!("unimplemented write_memory type: {ty}"),
+            _ => unimplemented!("write_memory type: {ty}"),
         };
 
-        env_call!(self, func, [address, value])?;
+        // The callback API expects a 64-bit address parameter.
+        let addr = match address.get_type().get_bit_width() {
+            32 => self.zero_extend_to(self.context.i64_type(), address)?,
+            64 => address,
+            width => unimplemented!("write_memory address bit width: {width}"),
+        };
+
+        env_call!(self, func, [addr, value])?;
         Ok(())
     }
 
@@ -659,7 +435,7 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         .left()
         .unwrap()
         .into_int_value();
-        self.build_jump_to_jit_func_ptr(exception_vec_ptr, "exception_vector")?;
+        self.build_jump_to_host_ptr(exception_vec_ptr, "exception_vector")?;
         Ok(())
     }
 
@@ -813,58 +589,4 @@ impl<T: Target> Drop for CodeGen<'_, T> {
 pub enum FallthroughAmount {
     One,
     Two,
-}
-
-pub(crate) trait BitWidth: std::fmt::Display + Copy {
-    fn bit_width(&self) -> usize;
-}
-
-impl BitWidth for IntType<'_> {
-    fn bit_width(&self) -> usize {
-        self.get_bit_width() as usize
-    }
-}
-
-impl BitWidth for usize {
-    fn bit_width(&self) -> usize {
-        *self
-    }
-}
-
-pub(crate) trait NumericValue<'ctx>:
-    BasicValue<'ctx> + TryFrom<BasicValueEnum<'ctx>> + Copy
-{
-    type Tag: BasicType<'ctx> + Clone;
-
-    fn tag(context: &'ctx Context, bit_width: &impl BitWidth) -> Self::Tag;
-}
-
-impl<'ctx> NumericValue<'ctx> for IntValue<'ctx> {
-    type Tag = IntType<'ctx>;
-
-    fn tag(context: &'ctx Context, bit_width: &impl BitWidth) -> Self::Tag {
-        match bit_width.bit_width() {
-            1 => context.bool_type(),
-            8 => context.i8_type(),
-            16 => context.i16_type(),
-            32 => context.i32_type(),
-            64 => context.i64_type(),
-            128 => context.i128_type(),
-            _ => unimplemented!("<IntValue as NumericValue>::tag(): bit_width={bit_width}"),
-        }
-    }
-}
-
-impl<'ctx> NumericValue<'ctx> for FloatValue<'ctx> {
-    type Tag = FloatType<'ctx>;
-
-    fn tag(context: &'ctx Context, bit_width: &impl BitWidth) -> Self::Tag {
-        match bit_width.bit_width() {
-            16 => context.f16_type(),
-            32 => context.f32_type(),
-            64 => context.f64_type(),
-            128 => context.f128_type(),
-            _ => unimplemented!("<FloatValue as NumericValue>::tag(): bit_width={bit_width}"),
-        }
-    }
 }

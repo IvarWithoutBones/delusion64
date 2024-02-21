@@ -362,8 +362,8 @@ pub fn compile_instruction(
     let i128_type = codegen.context.i128_type();
     let f32_type = codegen.context.f32_type();
     let f64_type = codegen.context.f64_type();
-    let f32_size = 32;
-    let f64_size = 64;
+    let f32_size = 32_usize;
+    let f64_size = 64_usize;
 
     // TODO: assert this instruction supports the given format
     let float_format_size = || match instr.float_format() {
@@ -1294,19 +1294,22 @@ pub fn compile_instruction(
             // Loads a portion of a word beginning at memory address (base + offset), stores 1-4 bytes in high-order portion of rt
             let address = codegen.base_plus_offset(i64_type, instr, "lwl_addr")?;
             let shift = {
-                let zero = i32_type.const_zero();
-                let three = i32_type.const_int(3, false);
-                let eight = i32_type.const_int(8, false);
+                let zero = i64_type.const_zero();
+                let three = i64_type.const_int(3, false);
+                let eight = i64_type.const_int(8, false);
                 let xor = codegen.builder.build_xor(address, zero, "lwl_shift_xor")?;
                 let and = codegen.builder.build_and(xor, three, "lwl_shift_and")?;
-                codegen.builder.build_int_mul(eight, and, "lwl_shift_mul")?
+                codegen.truncate_to(
+                    i32_type,
+                    codegen.builder.build_int_mul(eight, and, "lwl_shift_mul")?,
+                )?
             };
 
             let result = {
                 let data = {
                     let addr = codegen.builder.build_and(
                         address,
-                        i32_type.const_int(!3, false),
+                        i64_type.const_int(!3, false),
                         "lwl_data_and",
                     )?;
                     let data = codegen.read_memory(i32_type, addr)?;
@@ -1341,11 +1344,14 @@ pub fn compile_instruction(
             // Loads a portion of a word beginning at memory address (base + offset), stores 1-4 bytes in low-order portion of rt
             let address = codegen.base_plus_offset(i64_type, instr, "lwr_addr")?;
             let shift = {
-                let three = i32_type.const_int(3, false);
-                let eight = i32_type.const_int(8, false);
+                let three = i64_type.const_int(3, false);
+                let eight = i64_type.const_int(8, false);
                 let xor = codegen.builder.build_xor(address, three, "lwr_shift_xor")?;
                 let and = codegen.builder.build_and(xor, three, "lwr_shift_and")?;
-                codegen.builder.build_int_mul(eight, and, "lwr_shift_mul")?
+                codegen.truncate_to(
+                    i32_type,
+                    codegen.builder.build_int_mul(eight, and, "lwr_shift_mul")?,
+                )?
             };
 
             let mask = {
@@ -1357,7 +1363,7 @@ pub fn compile_instruction(
             };
 
             let data = {
-                let not_three = i32_type.const_int(!3, false);
+                let not_three = i64_type.const_int(!3, false);
                 let addr = codegen
                     .builder
                     .build_and(address, not_three, "lwr_data_and")?;
@@ -1570,17 +1576,20 @@ pub fn compile_instruction(
             // Loads a portion of rt, stores 1-4 bytes in high-order portion of memory address (base + offset)
             let address = codegen.base_plus_offset(i64_type, instr, "swl_addr")?;
             let shift = {
-                let zero = i32_type.const_zero();
-                let three = i32_type.const_int(3, false);
-                let eight = i32_type.const_int(8, false);
+                let zero = i64_type.const_zero();
+                let three = i64_type.const_int(3, false);
+                let eight = i64_type.const_int(8, false);
                 let xor = codegen.builder.build_xor(address, zero, "swl_shift_xor")?;
                 let and = codegen.builder.build_and(xor, three, "swl_shift_and")?;
-                codegen.builder.build_int_mul(eight, and, "swl_shift_mul")?
+                codegen.truncate_to(
+                    i32_type,
+                    codegen.builder.build_int_mul(eight, and, "swl_shift_mul")?,
+                )?
             };
 
             let address_masked = codegen.builder.build_and(
                 address,
-                i32_type.const_int(!3, false),
+                i64_type.const_int(!3, false),
                 "swl_addr_masked",
             )?;
 
@@ -1618,10 +1627,13 @@ pub fn compile_instruction(
             let address = codegen.base_plus_offset(i64_type, instr, "swr_addr")?;
             let shift = {
                 let three = i64_type.const_int(3, false);
-                let eight = i32_type.const_int(8, false);
+                let eight = i64_type.const_int(8, false);
                 let xor = codegen.builder.build_xor(address, three, "swr_shift_xor")?;
                 let and = codegen.builder.build_and(xor, three, "swr_shift_and")?;
-                codegen.builder.build_int_mul(eight, and, "swr_shift_mul")?
+                codegen.truncate_to(
+                    i32_type,
+                    codegen.builder.build_int_mul(eight, and, "swr_shift_mul")?,
+                )?
             };
 
             let address_masked = codegen.builder.build_and(
@@ -2097,9 +2109,12 @@ pub fn compile_instruction(
 
             let source: FloatValue = codegen.read_fpu_register(f32_size, instr.fs())?;
             let target: FloatValue = codegen.read_fpu_register(f32_size, instr.ft())?;
-            let cmp = codegen
-                .builder
-                .build_float_compare(cond, source, target, "c_cond_res")?;
+            let cmp = codegen.zero_extend_to(
+                i32_type,
+                codegen
+                    .builder
+                    .build_float_compare(cond, source, target, "c_cond_res")?,
+            )?;
 
             let shift = i32_type.const_int(register::cpu::fpu::ControlStatus::CONDITION_BIT, false);
             let mask = codegen
