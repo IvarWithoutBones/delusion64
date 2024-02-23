@@ -9,9 +9,13 @@ use crate::{
 };
 use inkwell::values::IntValue;
 use mips_decomp::instruction::{Mnenomic, ParsedInstruction};
+use std::cmp::min;
 
 const ELEMENTS_MASK: u64 = 0b1111;
+/// The amount of elements, in bytes, in a vector register
 const ELEMENTS: u64 = 16;
+/// The amount of lanes, in u16's, in a vector register
+const LANES: u64 = 8;
 
 #[allow(clippy::too_many_lines)]
 pub(super) fn compile_instruction(
@@ -19,6 +23,7 @@ pub(super) fn compile_instruction(
     instr: &ParsedInstruction,
 ) -> CompilationResult<()> {
     let i8_type = codegen.context.i8_type();
+    let i16_type = codegen.context.i16_type();
     let i32_type = codegen.context.i32_type();
 
     let base_plus_offset = |access_size: u32, name: &str| -> CompilationResult<IntValue> {
@@ -43,7 +48,6 @@ pub(super) fn compile_instruction(
                 codegen.build_umin(align, max, "lqv_len")?
             };
 
-            // TODO: consider moving to the `llvm.masked.load`/`llvm.masked.gather` intrinsics
             codegen.build_for_loop(
                 "lqv_loop",
                 i32_type.const_zero(),
@@ -53,6 +57,36 @@ pub(super) fn compile_instruction(
                     let elem = codegen.builder.build_int_add(elem, i, "lqv_elem")?;
                     let addr = codegen.builder.build_int_add(addr, i, "lqv_addr")?;
                     let value = codegen.read_memory(i8_type, addr)?;
+                    codegen.write_vector_register_byte_offset(instr.vt(), value, elem)
+                },
+            )?;
+        }
+
+        Mnenomic::Lrv => {
+            // Load (up to) 16 bytes into a VPR, right-aligned
+            let addr = base_plus_offset(16, "lrv_addr")?;
+            let addr_base = codegen.build_mask(addr, !ELEMENTS_MASK, "lrv_addr_base")?;
+            // This might underflow, in which case the loop should not run
+            let len = codegen.build_unsigned_saturating_sub(
+                codegen.build_mask(addr, ELEMENTS_MASK, "lrv_offset")?,
+                i32_type.const_int(u64::from(instr.element()), false),
+                "lrv_len",
+            )?;
+
+            let elem = {
+                let last = i32_type.const_int(ELEMENTS, false);
+                codegen.builder.build_int_sub(last, len, "lrv_elem")?
+            };
+
+            codegen.build_for_loop(
+                "lrv_loop",
+                i32_type.const_zero(),
+                |i| cmpu!(codegen, i < len),
+                |i| codegen.increment(i, 1, "lrv_next_index"),
+                |i| {
+                    let addr = codegen.builder.build_int_add(addr_base, i, "lrv_addr")?;
+                    let value = codegen.read_memory(i8_type, addr)?;
+                    let elem = codegen.builder.build_int_add(elem, i, "lrv_elem")?;
                     codegen.write_vector_register_byte_offset(instr.vt(), value, elem)
                 },
             )?;
@@ -68,7 +102,7 @@ pub(super) fn compile_instruction(
                 "sqv_size",
             )?;
 
-            let target = codegen.read_vector_register(instr.vt())?;
+            let target = codegen.read_vector_register::<u8>(instr.vt())?;
             codegen.build_for_loop(
                 "sqv_loop",
                 i32_type.const_zero(),
@@ -96,7 +130,7 @@ pub(super) fn compile_instruction(
                 codegen.builder.build_int_sub(value, size, "srv_elem")?
             };
 
-            let target = codegen.read_vector_register(instr.vt())?;
+            let target = codegen.read_vector_register::<u8>(instr.vt())?;
             codegen.build_for_loop(
                 "srv_loop",
                 i32_type.const_zero(),
@@ -123,7 +157,7 @@ pub(super) fn compile_instruction(
             let addr = base_plus_offset(16, "swv_addr")?;
             let addr_base = codegen.build_mask(addr, !0b111, "swv_addr_base")?;
             let addr_offset = codegen.build_mask(addr, 0b111, "swv_offset")?;
-            let target = codegen.read_vector_register(instr.vt())?;
+            let target = codegen.read_vector_register::<u8>(instr.vt())?;
             for i in 0..16 {
                 let addr = codegen.builder.build_int_add(
                     addr_base,
@@ -151,7 +185,7 @@ pub(super) fn compile_instruction(
             let addr = base_plus_offset(16, "shv_addr")?;
             let addr_base = codegen.build_mask(addr, !0b111, "shv_addr_base")?;
             let addr_offset = codegen.build_mask(addr, 0b111, "shv_offset")?;
-            let target = codegen.read_vector_register(instr.vt())?;
+            let target = codegen.read_vector_register::<u8>(instr.vt())?;
             for i in (0..8).map(|i| i * 2) {
                 let addr = codegen.builder.build_int_add(
                     addr_base,
@@ -171,12 +205,12 @@ pub(super) fn compile_instruction(
                     let elem = u64::from(instr.element()) + i;
                     let value = codegen.builder.build_left_shift(
                         codegen.build_extract_element(target, elem, "shv_value")?,
-                        i32_type.const_int(1, false),
+                        i8_type.const_int(1, false),
                         "shv_value_shift",
                     )?;
                     let sign = codegen.builder.build_right_shift(
                         codegen.build_extract_element(target, elem + 1, "shv_sign")?,
-                        i32_type.const_int(7, false),
+                        i8_type.const_int(7, false),
                         false,
                         "shv_sign_shift",
                     )?;
@@ -194,7 +228,7 @@ pub(super) fn compile_instruction(
             let addr = base_plus_offset(16, "sfv_addr")?;
             let addr_base = codegen.build_mask(addr, !0b111, "sfv_addr_base")?;
             let addr_offset = codegen.build_mask(addr, 0b111, "sfv_addr_offset")?;
-            let target = codegen.read_vector_register(instr.vt())?;
+            let target = codegen.read_vector_register::<u16>(instr.vt())?;
 
             // The starting element is hardcoded depending on E. The three next ones can be determined by adding 1,2,3, but staying within the vector half
             let elem_base = match instr.element() {
@@ -224,19 +258,15 @@ pub(super) fn compile_instruction(
                 )?;
 
                 let value = if let Some(elem_base) = elem_base {
-                    let elem = ((elem_base & 0b100) | ((elem_base + i) & 0b11)) << 1;
-                    let data = codegen.builder.build_left_shift(
-                        codegen.build_extract_element(target, elem, "sfv_data")?,
-                        i32_type.const_int(1, false),
-                        "sfv_data_shift",
-                    )?;
-                    let sign = codegen.builder.build_right_shift(
-                        codegen.build_extract_element(target, elem + 1, "sfv_sign")?,
-                        i32_type.const_int(7, false),
-                        false,
-                        "sfv_sign_shift",
-                    )?;
-                    codegen.builder.build_or(data, sign, "sfv_value")?
+                    let elem = (elem_base & 0b100) | ((elem_base + i) & 0b11);
+                    codegen.truncate_to(
+                        i8_type,
+                        codegen.build_rotate_left(
+                            codegen.build_extract_element(target, elem, "sfv_value")?,
+                            i16_type.const_int(1, false),
+                            "sfv_rotate_value",
+                        )?,
+                    )?
                 } else {
                     // Invalid element specifier
                     i8_type.const_zero()
@@ -274,12 +304,152 @@ pub(super) fn compile_instruction(
                 let value = {
                     let elem = ((16 - (u64::from(instr.element()) & !0b1)) + i) & ELEMENTS_MASK;
                     let reg_index = u64::from(instr.vt() & !0b111) + (i / 2);
-                    let reg = codegen.read_vector_register(reg_index)?;
+                    let reg = codegen.read_vector_register::<u8>(reg_index)?;
                     codegen.build_extract_element(reg, elem, "stv_value")?
                 };
 
                 codegen.write_memory(addr, value)?;
             }
+        }
+
+        Mnenomic::Ltv => {
+            // Load 16 bytes into 8 different VPRs, starting at VPR vt
+            let elem = u64::from(instr.element());
+            let addr = base_plus_offset(16, "ltv_addr")?;
+            let addr_base = codegen.build_mask(addr, !0b111, "ltv_addr_base")?;
+            let addr_offset = codegen.build_mask(addr, 0b1000, "ltv_offset")?;
+
+            for i in 0..16 {
+                let addr = codegen.builder.build_int_add(
+                    addr_base,
+                    codegen.build_mask(
+                        codegen.builder.build_int_add(
+                            addr_offset,
+                            i32_type.const_int(i + elem, false),
+                            "ltv_base",
+                        )?,
+                        ELEMENTS_MASK,
+                        "ltv_base_mask",
+                    )?,
+                    "ltv_addr",
+                )?;
+
+                let value = codegen.read_memory(i8_type, addr)?;
+                let reg = u64::from(instr.vt() & !0b111) + (((elem >> 1) + (i / 2)) & 0b111);
+                codegen.write_vector_register_byte_offset(
+                    reg,
+                    value,
+                    i32_type.const_int(i, false),
+                )?;
+            }
+        }
+
+        Mnenomic::Lpv => {
+            // Load 8 8-bit signed values into VPR vt
+            compile_packed_load(codegen, instr, "lpv", |i, addr| {
+                // Zero-extend the value so that every other byte is zero'd out, overwriting the entire register
+                let elem = i32_type.const_int(i << 1, false);
+                let value = {
+                    let mem = codegen.read_memory(i8_type, addr)?;
+                    codegen.zero_extend_to(i16_type, mem)?
+                };
+                codegen.write_vector_register_byte_offset(instr.vt(), value, elem)
+            })?;
+        }
+
+        Mnenomic::Luv => {
+            // Load 8 8-bit unsigned values into VPR vt
+            compile_packed_load(codegen, instr, "luv", |i, addr| {
+                let value = codegen.build_rotate_right(
+                    codegen.zero_extend_to(i16_type, codegen.read_memory(i8_type, addr)?)?,
+                    i16_type.const_int(1, false),
+                    "luv_rotate_value",
+                )?;
+
+                let elem = i32_type.const_int(i << 1, false);
+                codegen.write_vector_register_byte_offset(instr.vt(), value, elem)
+            })?;
+        }
+
+        Mnenomic::Lhv => {
+            // Load 8 8-bit unsigned values into VPR vt, accessing every other byte in memory
+            compile_packed_load(codegen, instr, "lhv", |i, addr| {
+                let value = codegen.build_rotate_right(
+                    codegen.zero_extend_to(i16_type, codegen.read_memory(i8_type, addr)?)?,
+                    i16_type.const_int(1, false),
+                    "lhv_rotate_value",
+                )?;
+
+                let elem = i32_type.const_int(i, false);
+                codegen.write_vector_register_byte_offset(instr.vt(), value, elem)
+            })?;
+        }
+
+        Mnenomic::Lfv => {
+            // Load 4 8-bit unsigned values into VPR vt, accessing every fourth byte in memory
+            let elem = u64::from(instr.element());
+            let addr = base_plus_offset(16, "lfv_addr")?;
+            let addr_base = codegen.build_mask(addr, !0b111, "lfv_addr_base")?;
+            let addr_offset = {
+                let offset = codegen.build_mask(addr, 0b111, "lfv_addr_offset")?;
+                codegen.builder.build_int_sub(
+                    offset,
+                    i32_type.const_int(elem, false),
+                    "lfv_addr_offset_with_elem",
+                )?
+            };
+
+            let mut res = i16_type.vec_type(LANES.try_into().unwrap()).const_zero();
+            for i in 0..4 {
+                for offset in [0, 8] {
+                    let addr = codegen.builder.build_int_add(
+                        addr_base,
+                        codegen.build_mask(
+                            codegen.builder.build_int_add(
+                                addr_offset,
+                                i32_type.const_int((i << 2) + offset, false),
+                                "lfv_base",
+                            )?,
+                            ELEMENTS_MASK,
+                            "lfv_base_mask",
+                        )?,
+                        "lfv_addr",
+                    )?;
+
+                    let value = codegen.build_rotate_right(
+                        codegen.zero_extend_to(i16_type, codegen.read_memory(i8_type, addr)?)?,
+                        i16_type.const_int(1, false),
+                        "lfv_rotate_value",
+                    )?;
+
+                    res = codegen.builder.build_insert_element(
+                        res,
+                        value,
+                        i32_type.const_int(i + (offset / 2), false),
+                        "lfv_insert_value",
+                    )?;
+                }
+            }
+
+            let res = codegen
+                .builder
+                .build_bitcast(
+                    res,
+                    i8_type.vec_type(ELEMENTS.try_into().unwrap()),
+                    "lfv_result_as_i8_vec",
+                )?
+                .into_vector_value();
+            for i in elem..min(elem + 8, ELEMENTS) {
+                codegen.write_vector_register_byte_offset(
+                    instr.vt(),
+                    codegen.build_extract_element(res, i, "lfv_extract_result")?,
+                    i32_type.const_int(i, false),
+                )?;
+            }
+        }
+
+        Mnenomic::Lwv => {
+            // This instruction does nothing, unlike `swv`: no registers are read from or written to
         }
 
         Mnenomic::Spv | Mnenomic::Suv => {
@@ -288,8 +458,13 @@ pub(super) fn compile_instruction(
         }
 
         Mnenomic::Sbv | Mnenomic::Ssv | Mnenomic::Slv | Mnenomic::Sdv => {
-            // Store a certain amount of bytes from a VPR, into memory at (base + (offset * bytes))
+            // Store `size` bytes from VPR vt, to memory at `base + (offset * size)`
             compile_store(codegen, instr)?;
+        }
+
+        Mnenomic::Lsv | Mnenomic::Llv | Mnenomic::Ldv | Mnenomic::Lbv => {
+            // Load `size` bytes into VPR vt, from memory at `base + (offset * size)`
+            compile_load(codegen, instr)?;
         }
 
         _ => {
@@ -310,21 +485,14 @@ fn compile_packed_store(
     let shift_sign = match instr.mnemonic() {
         Mnenomic::Spv => 0b1000,
         Mnenomic::Suv => 0,
-        _ => unimplemented!("RSP compile_packed_store: {name}"),
+        _ => unimplemented!("Vector Unit compile_packed_store: {name}"),
     };
 
     let i8_type = codegen.context.i8_type();
     let i32_type = codegen.context.i32_type();
-    let i16_vec_type = codegen.context.i16_type().vec_type(8);
+    let i16_type = codegen.context.i16_type();
     let base = codegen.read_general_register(i32_type, instr.base())?;
-    let target = {
-        // TODO: implement a way to request the vector type from `read_vector_register`
-        let i8_vec = codegen.read_vector_register(instr.vt())?;
-        codegen
-            .builder
-            .build_bitcast(i8_vec, i16_vec_type, &format!("{name}_target"))?
-            .into_vector_value()
-    };
+    let target = codegen.read_vector_register::<u16>(instr.vt())?;
 
     for i in 0..8 {
         let addr = {
@@ -335,38 +503,22 @@ fn compile_packed_store(
 
         let data = {
             let elem_index = instr.element() + i;
+            let elem = u64::from(elem_index & 0b111);
             let lane_name = &format!("{name}_lane");
-            let lane =
-                codegen.build_extract_element(target, u64::from(elem_index & 0b111), lane_name)?;
+            let lane = codegen.build_extract_element(target, elem, lane_name)?;
 
-            let mut data = codegen.truncate_to(i8_type, lane)?;
             if (elem_index & 0b1000) == shift_sign {
-                // Take the most significant bit of the lane and shift it to the least significant of the data
-                let sign = codegen.truncate_to(
+                codegen.truncate_to(
                     i8_type,
-                    codegen.build_mask(
-                        codegen.builder.build_right_shift(
-                            lane,
-                            i32_type.const_int(15, false),
-                            false,
-                            &format!("{name}_lane_sign"),
-                        )?,
-                        1,
-                        &format!("{name}_lane_sign_mask"),
+                    codegen.build_rotate_left(
+                        lane,
+                        i16_type.const_int(1, false),
+                        &format!("{name}_rotate"),
                     )?,
-                )?;
-
-                data = codegen.builder.build_or(
-                    codegen.builder.build_left_shift(
-                        data,
-                        i32_type.const_int(1, false),
-                        &format!("{name}_data_pos"),
-                    )?,
-                    sign,
-                    &format!("{name}_combine_sign"),
-                )?;
+                )?
+            } else {
+                codegen.truncate_to(i8_type, lane)?
             }
-            data
         };
         codegen.write_memory(addr, data)?;
     }
@@ -380,11 +532,11 @@ fn compile_store(codegen: &CodeGen<Rsp>, instr: &ParsedInstruction) -> Compilati
         Mnenomic::Ssv => 2,
         Mnenomic::Slv => 4,
         Mnenomic::Sdv => 8,
-        _ => unimplemented!("RSP compile_vector_store: {name}"),
+        _ => unimplemented!("Vector Unit compile_store: {name}"),
     };
 
     let i32_type = codegen.context.i32_type();
-    let target = codegen.read_vector_register(instr.vt())?;
+    let target = codegen.read_vector_register::<u8>(instr.vt())?;
     let base = codegen.read_general_register(i32_type, instr.base())?;
     for i in 0..bytes {
         let addr = {
@@ -397,6 +549,78 @@ fn compile_store(codegen: &CodeGen<Rsp>, instr: &ParsedInstruction) -> Compilati
             codegen.build_extract_element(target, u64::from(instr.element() + i), name)?
         };
         codegen.write_memory(addr, data)?;
+    }
+    Ok(())
+}
+
+fn compile_load(codegen: &CodeGen<Rsp>, instr: &ParsedInstruction) -> CompilationResult<()> {
+    let i32_type = codegen.context.i32_type();
+    let base = codegen.read_general_register(i32_type, instr.base())?;
+    let bytes = match instr.mnemonic() {
+        Mnenomic::Lbv => 1,
+        Mnenomic::Lsv => 2,
+        Mnenomic::Llv => 4,
+        Mnenomic::Ldv => 8,
+        other => unimplemented!("Vector Unit compile_load: {other:?}"),
+    };
+
+    // Read while saturating if the element specifier overflows, unlike store instructions which wrap around
+    for i in 0..min(bytes, ELEMENTS - u64::from(instr.element())) {
+        let value = {
+            let addr_name = &format!("{}_addr", instr.mnemonic().name());
+            let offset = i32_type.const_int((u64::from(instr.offset()) * bytes) + i, false);
+            let addr = codegen.builder.build_int_add(base, offset, addr_name)?;
+            codegen.read_memory(codegen.context.i8_type(), addr)?
+        };
+
+        let elem = i32_type.const_int(u64::from(instr.element()) + i, false);
+        codegen.write_vector_register_byte_offset(instr.vt(), value, elem)?;
+    }
+    Ok(())
+}
+
+fn compile_packed_load<'ctx>(
+    codegen: &CodeGen<'ctx, Rsp>,
+    instr: &ParsedInstruction,
+    name: &str,
+    write: impl Fn(u64, IntValue<'ctx>) -> CompilationResult<()>,
+) -> CompilationResult<()> {
+    let (access_size, addr_shift) = match instr.mnemonic() {
+        Mnenomic::Luv | Mnenomic::Lpv => (8, 0),
+        Mnenomic::Lhv => (16, 1),
+        other => unimplemented!("Vector Unit compile_packed_load: {other:?}"),
+    };
+
+    let i32_type = codegen.context.i32_type();
+    let addr = {
+        let base = codegen.read_general_register(i32_type, instr.base())?;
+        let offset = i32_type.const_int(u64::from(instr.offset()) * access_size, false);
+        let name = &format!("{name}_addr");
+        codegen.builder.build_int_add(base, offset, name)?
+    };
+
+    let addr_base = codegen.build_mask(addr, !0b111, &format!("{name}_addr_base"))?;
+    let addr_offset = codegen.builder.build_int_sub(
+        codegen.build_mask(addr, 0b111, &format!("{name}_addr_offset"))?,
+        i32_type.const_int(u64::from(instr.element()), false),
+        &format!("{name}_addr_offset_with_elem"),
+    )?;
+
+    for i in (0..8).map(|i| i << addr_shift) {
+        let addr = codegen.builder.build_int_add(
+            addr_base,
+            codegen.build_mask(
+                codegen.builder.build_int_add(
+                    addr_offset,
+                    i32_type.const_int(i, false),
+                    &format!("{name}_base_plus_index"),
+                )?,
+                ELEMENTS_MASK,
+                &format!("{name}_base_plus_index_norm"),
+            )?,
+            &format!("{name}_addr_index"),
+        )?;
+        write(i, addr)?;
     }
     Ok(())
 }

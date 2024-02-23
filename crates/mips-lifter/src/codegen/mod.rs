@@ -17,8 +17,8 @@ use inkwell::{
     module::Module,
     types::{AnyType, BasicType, BasicTypeEnum, IntType},
     values::{
-        BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, GlobalValue, InstructionValue,
-        IntValue, PointerValue,
+        BasicMetadataValueEnum, BasicValue, BasicValueEnum, CallSiteValue, FunctionValue,
+        GlobalValue, InstructionValue, IntValue, PointerValue,
     },
     AtomicOrdering,
 };
@@ -247,6 +247,21 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
             .ok_or(CompilationError::IntrinsicNotFound(name))?
             .get_declaration(self.module(), param_types)
             .ok_or(CompilationError::IntrinsicNotFound(name))
+    }
+
+    fn call_intrinsic(
+        &self,
+        intrinsic_name: &'static str,
+        param_types: &[BasicTypeEnum],
+        params: &[BasicMetadataValueEnum<'ctx>],
+        call_name: &str,
+    ) -> CompilationResult<BasicValueEnum<'ctx>> {
+        let func = self.intrinsic_declaration(intrinsic_name, param_types)?;
+        self.builder
+            .build_call(func, params, call_name)?
+            .try_as_basic_value()
+            .left()
+            .ok_or(CompilationError::NoReturnValue)
     }
 
     pub fn build_panic(&self, string: &str, storage_name: &str) -> CompilationResult<()> {

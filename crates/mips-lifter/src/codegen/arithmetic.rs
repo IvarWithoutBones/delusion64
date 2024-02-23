@@ -1,6 +1,6 @@
 //! Helpers for building arithmetic operations.
 
-use super::{CodeGen, CompilationError, CompilationResult};
+use super::{CodeGen, CompilationResult};
 use crate::target::Target;
 use inkwell::{
     context::Context,
@@ -39,6 +39,23 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         Ok(self.builder.build_int_truncate(value, ty, &name)?)
     }
 
+    /// Subtracts the given `rhs` from the given `lhs`, saturating at zero.
+    pub fn build_unsigned_saturating_sub(
+        &self,
+        lhs: IntValue<'ctx>,
+        rhs: IntValue<'ctx>,
+        name: &str,
+    ) -> CompilationResult<IntValue<'ctx>> {
+        debug_assert_eq!(lhs.get_type(), rhs.get_type());
+        self.call_intrinsic(
+            "llvm.usub.sat",
+            &[lhs.get_type().into()],
+            &[lhs.into(), rhs.into()],
+            name,
+        )
+        .map(|v| v.into_int_value())
+    }
+
     /// Returns the argument with the smallest value, when treated as unsigned integers.
     pub fn build_umin(
         &self,
@@ -46,14 +63,70 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         rhs: IntValue<'ctx>,
         name: &str,
     ) -> CompilationResult<IntValue<'ctx>> {
-        let func = self.intrinsic_declaration("llvm.umin", &[lhs.get_type().into()])?;
-        Ok(self
-            .builder
-            .build_call(func, &[lhs.into(), rhs.into()], name)?
-            .try_as_basic_value()
-            .left()
-            .ok_or(CompilationError::NoReturnValue)?
-            .into_int_value())
+        debug_assert_eq!(lhs.get_type(), rhs.get_type());
+        self.call_intrinsic(
+            "llvm.umin",
+            &[lhs.get_type().into()],
+            &[lhs.into(), rhs.into()],
+            name,
+        )
+        .map(|v| v.into_int_value())
+    }
+
+    /// Builds an `fshr` operation, see the LLVM documentation: <https://releases.llvm.org/17.0.1/docs/LangRef.html#llvm-fshr-intrinsic>
+    pub fn build_funnel_shift_right(
+        &self,
+        a: IntValue<'ctx>,
+        b: IntValue<'ctx>,
+        shift: IntValue<'ctx>,
+        name: &str,
+    ) -> CompilationResult<IntValue<'ctx>> {
+        debug_assert_eq!(a.get_type(), b.get_type());
+        self.call_intrinsic(
+            "llvm.fshr",
+            &[a.get_type().into()],
+            &[a.into(), b.into(), shift.into()],
+            name,
+        )
+        .map(|v| v.into_int_value())
+    }
+
+    /// Builds an `fshl` operation, see the LLVM documentation: <https://releases.llvm.org/17.0.1/docs/LangRef.html#llvm-fshl-intrinsic>
+    pub fn build_funnel_shift_left(
+        &self,
+        a: IntValue<'ctx>,
+        b: IntValue<'ctx>,
+        shift: IntValue<'ctx>,
+        name: &str,
+    ) -> CompilationResult<IntValue<'ctx>> {
+        debug_assert_eq!(a.get_type(), b.get_type());
+        self.call_intrinsic(
+            "llvm.fshl",
+            &[a.get_type().into()],
+            &[a.into(), b.into(), shift.into()],
+            name,
+        )
+        .map(|v| v.into_int_value())
+    }
+
+    /// Shifts the given `value` to the right by `shift` bits, wrapping around upon overflow.
+    pub fn build_rotate_right(
+        &self,
+        value: IntValue<'ctx>,
+        shift: IntValue<'ctx>,
+        name: &str,
+    ) -> CompilationResult<IntValue<'ctx>> {
+        self.build_funnel_shift_right(value, value, shift, name)
+    }
+
+    /// Shifts the given `value` to the left by `shift` bits, wrapping around upon overflow.
+    pub fn build_rotate_left(
+        &self,
+        value: IntValue<'ctx>,
+        shift: IntValue<'ctx>,
+        name: &str,
+    ) -> CompilationResult<IntValue<'ctx>> {
+        self.build_funnel_shift_left(value, value, shift, name)
     }
 
     /// Splits the given integer in two, returning the high and low order bits, in that order.
@@ -97,8 +170,8 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         num: u64,
         name: &str,
     ) -> CompilationResult<IntValue<'ctx>> {
-        let one = value.get_type().const_int(num, false);
-        Ok(self.builder.build_int_add(value, one, name)?)
+        let inc = value.get_type().const_int(num, false);
+        Ok(self.builder.build_int_add(value, inc, name)?)
     }
 }
 

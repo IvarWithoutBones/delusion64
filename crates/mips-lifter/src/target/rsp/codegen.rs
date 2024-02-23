@@ -6,7 +6,8 @@ use crate::{
     target::Globals,
 };
 use inkwell::{
-    types::IntType,
+    context::Context,
+    types::{IntType, VectorType},
     values::{IntValue, VectorValue},
 };
 
@@ -41,13 +42,13 @@ impl<'ctx> CodeGen<'ctx, Rsp> {
     }
 
     /// Read the vector (CP2) register at the given index.
-    pub fn read_vector_register(
+    pub fn read_vector_register<T: VectorRegisterElement<'ctx>>(
         &self,
         index: impl Into<u64>,
     ) -> CompilationResult<VectorValue<'ctx>> {
         #[allow(clippy::cast_possible_truncation)]
         let reg = register::Vector::from_repr(index.into() as u8).unwrap();
-        let ty = self.context.i8_type().vec_type(16);
+        let ty = T::vector_type(self.context);
         Ok(self.read_register_raw(ty, reg)?.into_vector_value())
     }
 
@@ -106,13 +107,12 @@ impl<'ctx> CodeGen<'ctx, Rsp> {
         offset: IntValue<'ctx>,
     ) -> CompilationResult<()> {
         let i8_type = self.context.i8_type();
-        debug_assert_eq!(value.get_type(), i8_type);
         #[allow(clippy::cast_possible_truncation)]
         let reg = register::Vector::from_repr(index.into() as u8)
             .unwrap()
             .into();
 
-        // TODO: Validate the offset, this will read out of bounds when given an offset bigger than 15.
+        // TODO: Validate the offset in relation to the value's type, this can read out of bounds.
         let ptr = unsafe {
             self.builder.build_in_bounds_gep(
                 i8_type,
@@ -148,5 +148,21 @@ impl<'ctx> CodeGen<'ctx, Rsp> {
             register::Register::Vector(_r) => todo!("write_vector_register"),
             register::Register::Special(r) => self.write_special_register(r, value),
         }
+    }
+}
+
+pub trait VectorRegisterElement<'ctx> {
+    fn vector_type(context: &'ctx Context) -> VectorType<'ctx>;
+}
+
+impl<'ctx> VectorRegisterElement<'ctx> for u8 {
+    fn vector_type(context: &'ctx Context) -> VectorType<'ctx> {
+        context.i8_type().vec_type(16)
+    }
+}
+
+impl<'ctx> VectorRegisterElement<'ctx> for u16 {
+    fn vector_type(context: &'ctx Context) -> VectorType<'ctx> {
+        context.i16_type().vec_type(8)
     }
 }
