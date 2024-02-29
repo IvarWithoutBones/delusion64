@@ -22,6 +22,8 @@ impl target::Memory for Memory {
 pub struct Rsp;
 
 impl target::Target for Rsp {
+    const NAME: &'static str = "RSP";
+
     type Registers = Registers;
     type Memory = Memory;
 

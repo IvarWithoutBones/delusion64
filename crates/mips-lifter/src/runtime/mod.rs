@@ -217,7 +217,7 @@ where
             }
         } else {
             match action {
-                PanicAction::Kill => panic!("unrecoverable {:?} error", self.target),
+                PanicAction::Kill => panic!("unrecoverable {} error", T::NAME),
                 PanicAction::Idle => loop {
                     // The thread will be killed externally.
                     std::thread::park()

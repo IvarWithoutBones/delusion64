@@ -139,6 +139,8 @@ pub struct Cpu {
 }
 
 impl target::Target for Cpu {
+    const NAME: &'static str = "CPU";
+
     type Registers = Registers;
     type Memory = Memory;
 

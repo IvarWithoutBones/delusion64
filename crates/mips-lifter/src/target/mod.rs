@@ -123,6 +123,8 @@ pub(crate) trait LabelList: Sized + fmt::Debug {
 }
 
 pub(crate) trait Target: Sized + Default + fmt::Debug {
+    const NAME: &'static str;
+
     type Registers: RegisterStorage;
     type Memory: Memory<Registers = Self::Registers>;
 

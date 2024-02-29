@@ -594,9 +594,14 @@ impl<T: Target> Drop for CodeGen<'_, T> {
         // Without manually removing the modules from the execution engine LLVM segfaults.
         // We use drain here to run their Drop implementation prior to anything else, which prevents out of bounds reads/writes according to valgrind.
         for module in self.modules.drain(..) {
-            self.execution_engine.remove_module(&module).unwrap();
+            if let Err(err) = self.execution_engine.remove_module(&module) {
+                // Note that to avoid double-panics while unwinding we don't use `panic!` here, even though the error is fatal.
+                println!("failed to remove module while dropping CodeGen: {err}");
+            }
         }
-        self.execution_engine.remove_module(&self.module).unwrap();
+        if let Err(err) = self.execution_engine.remove_module(&self.module) {
+            println!("failed to remove main module while dropping CodeGen: {err}");
+        }
     }
 }
 
