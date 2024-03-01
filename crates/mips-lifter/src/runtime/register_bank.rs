@@ -98,6 +98,18 @@ impl<T: Integer, const LEN: usize> RegisterBank<T, LEN> {
         }
     }
 
+    /// Creates a new RegisterBank with exclusive access to the underlying array, filled with zeros.
+    pub fn zeroed_exclusive() -> Self {
+        let array = Box::new(std::array::from_fn(|_| T::default()));
+        Self::new_exclusive(array)
+    }
+
+    /// Creates a new RegisterBank with shared access to the underlying array, filled with zeros.
+    pub fn zeroed_shared() -> Self {
+        let array = Box::new(std::array::from_fn(|_| T::Atomic::default()));
+        Self::new_shared(array)
+    }
+
     /// Creates a new RegisterBank with shared access to the same underlying array as this one, or [`None`] if this bank is exclusive.
     pub fn share(&self) -> Option<Self> {
         match &self.ownership {
@@ -258,16 +270,15 @@ impl<T: Integer, const LEN: usize> Clone for RegisterBank<T, LEN> {
 
 impl<T: Integer, const LEN: usize> PartialEq for RegisterBank<T, LEN> {
     fn eq(&self, other: &Self) -> bool {
-        self.iter_relaxed().eq(other.iter_relaxed())
+        self.iter_relaxed()
+            .zip(other.iter_relaxed())
+            .all(|(a, b)| a == b)
     }
 }
 
 impl<T: Integer, const LEN: usize> Default for RegisterBank<T, LEN> {
     fn default() -> Self {
-        // Allocate directly onto the heap to avoid potential stack overflows.
-        let registers = vec![T::default(); LEN].into_boxed_slice();
-        let fixed_sized: Box<[T; LEN]> = registers.try_into().expect("LEN is correct");
-        Self::new_exclusive(fixed_sized)
+        Self::zeroed_exclusive()
     }
 }
 

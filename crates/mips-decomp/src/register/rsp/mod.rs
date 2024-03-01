@@ -13,14 +13,15 @@ pub use super::GeneralPurpose;
 #[derive(EnumCount, EnumIter, VariantNames, FromRepr, Debug, PartialEq, Eq, Clone, Copy)]
 #[repr(u8)]
 pub enum Control {
-    /// Address in `IMEM`/`DMEM` for a DMA transfer.
-    DmaSpAddress,
-    /// Address in `RDRAM` for a DMA transfer.
-    DmaRdramAddress,
+    /// Address in `IMEM`/`DMEM` for a DMA transfer. This refers to one of the two double-buffered registers.
+    DmaSpAddress1,
+    /// Address in `RDRAM` for a DMA transfer. This refers to one of the two double-buffered registers.
+    DmaRdramAddress1,
     /// Length of a DMA transfer. Writing this register triggers a DMA transfer from `RDRAM` to `IMEM`/`DMEM`.
-    DmaReadLength,
+    /// This refers to one of the two double-buffered registers.
+    DmaReadLength1,
     /// Length of a DMA transfer. Writing this register triggers a DMA transfer from `IMEM`/`DMEM` to `RDRAM`.
-    DmaWriteLength,
+    DmaWriteLength1,
     /// General status register.
     Status,
     /// Report whether there is a pending DMA transfer (mirror of the `DMA_FULL` bit of [`Self::Status`]).
@@ -29,15 +30,59 @@ pub enum Control {
     DmaBusy,
     /// Register to assist implementing a simple mutex between VR4300 and RSP.
     Semaphore,
+
+    // Note that the index of double-buffered registers does not particularly matter, just needs to be consistent.
+    /// Address in `IMEM`/`DMEM` for a DMA transfer. This refers to one of the two double-buffered registers.
+    DmaSpAddress2,
+    /// Address in `RDRAM` for a DMA transfer. This refers to one of the two double-buffered registers.
+    DmaRdramAddress2,
+    /// Length of a DMA transfer. Writing this register triggers a DMA transfer from `RDRAM` to `IMEM`/`DMEM`.
+    /// This refers to one of the two double-buffered registers.
+    DmaReadLength2,
+    /// Length of a DMA transfer. Writing this register triggers a DMA transfer from `IMEM`/`DMEM` to `RDRAM`.
+    /// This refers to one of the two double-buffered registers.
+    DmaWriteLength2,
 }
 
 impl_reg!(Control);
 
 impl Control {
+    /// The distance between the two double-buffered registers, to be used as an offset.
+    pub const DMA_BUFFER_OFFSET: usize =
+        Self::DmaSpAddress2.to_repr() - Self::DmaSpAddress1.to_repr();
+
     /// The offset from the base address of the RSP's control registers, for the CPU's MMIO.
     #[must_use]
     pub const fn offset(self) -> usize {
         self.to_repr() * size_of::<u32>()
+    }
+
+    /// Whether this register is a DMA register or not.
+    #[must_use]
+    pub const fn is_dma_register(self) -> bool {
+        matches!(
+            self,
+            Self::DmaSpAddress1
+                | Self::DmaRdramAddress1
+                | Self::DmaReadLength1
+                | Self::DmaWriteLength1
+                | Self::DmaSpAddress2
+                | Self::DmaRdramAddress2
+                | Self::DmaReadLength2
+                | Self::DmaWriteLength2
+        )
+    }
+
+    /// Returns the lowest register of the double-buffered pair.
+    #[must_use]
+    pub const fn to_lower_buffer(self) -> Self {
+        match self {
+            Self::DmaSpAddress2 => Self::DmaSpAddress1,
+            Self::DmaRdramAddress2 => Self::DmaRdramAddress1,
+            Self::DmaReadLength2 => Self::DmaReadLength1,
+            Self::DmaWriteLength2 => Self::DmaWriteLength1,
+            _ => self,
+        }
     }
 }
 

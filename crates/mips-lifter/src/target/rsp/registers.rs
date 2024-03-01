@@ -2,56 +2,128 @@ use crate::{runtime::register_bank::RegisterBankMapping, target, RegIndex, Regis
 use mips_decomp::register::rsp as register;
 use std::fmt;
 
-/// A single RSP register.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(transparent)]
-pub(crate) struct RegisterID(register::Register);
+impl_reg_bank_wrapper!(
+    SpecialRegisterBank,
+    register::Special,
+    u64,
+    { register::Special::count() },
+    "Special registers such as the program counter."
+);
 
-impl target::RegisterID for RegisterID {
-    const PROGRAM_COUNTER: Self = Self(register::Register::Special(
-        register::Special::ProgramCounter,
-    ));
+impl SpecialRegisterBank {
+    /// Read the contents of the program counter.
+    #[must_use]
+    pub fn read_program_counter(&self) -> u32 {
+        #[allow(clippy::cast_possible_truncation)] // `read()` will mask the irrelevant bits anyways
+        let value = self.read(register::Special::ProgramCounter) as u32;
+        register::special::ProgramCounter::from(value).read()
+    }
 
-    fn name(&self) -> &'static str {
-        self.0.name()
+    /// Write the given value to the program counter.
+    pub fn write_program_counter(&mut self, value: u32) {
+        let value = u32::from(register::special::ProgramCounter::from_raw(value));
+        self.write(register::Special::ProgramCounter, u64::from(value));
+    }
+
+    /// Increments the program counter by the given amount, accounting for wrapping and alignment.
+    pub fn increment_program_counter(&mut self, amount: u32) {
+        let mut pc = register::special::ProgramCounter::from(self.read_program_counter());
+        pc.increment(amount);
+        self.write_program_counter(pc.read());
     }
 }
 
-impl<T: Into<register::Register>> From<T> for RegisterID {
-    fn from(value: T) -> Self {
-        Self(value.into())
+impl_reg_bank_wrapper!(
+    ControlRegisterBank,
+    register::Control,
+    u32,
+    { register::Control::count() },
+    "The control registers, exposed to the CPU over MMIO."
+);
+
+impl ControlRegisterBank {
+    /// Reads and parses the register at the given index, resolving the DMA buffer if necessary.
+    #[must_use]
+    pub fn register_from_index(&self, index: usize) -> Option<register::Control> {
+        let register = register::Control::from_repr(index.try_into().ok()?)?;
+        if register.is_dma_register() {
+            // We need to get the "current" register, since the DMA registers are double buffered.
+            let status: register::control::Status = self.read_parsed();
+            let offset = register.to_lower_buffer().to_repr()
+                + usize::from(status.dma_busy()) * register::Control::DMA_BUFFER_OFFSET;
+            let result = register::Control::from_repr(offset.try_into().ok()?)?;
+            debug_assert!(result.is_dma_register());
+            Some(result)
+        } else {
+            Some(register)
+        }
+    }
+
+    fn normalise_register(&self, register: register::Control) -> register::Control {
+        self.register_from_index(register.to_repr())
+            .expect("register is valid")
+    }
+
+    /// Clears the semaphore register.
+    pub fn clear_semaphore(&mut self) {
+        let value = register::control::Semaphore::default();
+        self.write_parsed(value);
+    }
+
+    /// Reads and writes the semaphore register, updating the value. Returns the old value.
+    #[must_use]
+    pub fn read_write_semaphore(&mut self) -> bool {
+        let mut semaphore: register::control::Semaphore = self.read_parsed();
+        let value = semaphore.read();
+        self.write_parsed(semaphore);
+        value
+    }
+
+    /// Reads and parses the given control register, selecting the active DMA buffer if necessary.
+    #[must_use]
+    pub fn read_parsed<T: ControlRegisterDefinition>(&self) -> T {
+        let reg = self.normalise_register(T::ID);
+        T::from(self.read(reg))
+    }
+
+    /// Writes the given value to the given control register, selecting the active DMA buffer if necessary.
+    pub fn write_parsed<T: ControlRegisterDefinition>(&mut self, value: T) {
+        let reg = self.normalise_register(T::ID);
+        self.write(reg, value.into());
     }
 }
+
+pub trait ControlRegisterDefinition: From<u32> + Into<u32> {
+    const ID: register::Control;
+}
+
+macro_rules! impl_control_reg_def {
+    ($(($def: ident, $id: ident)),* $(,)?) => {
+        $(
+            impl ControlRegisterDefinition for register::control::$def {
+                const ID: register::Control = register::Control::$id;
+            }
+        )*
+    }
+}
+
+impl_control_reg_def!(
+    (DmaRdramAddress, DmaRdramAddress1),
+    (DmaSpAddress, DmaSpAddress1),
+    (DmaReadLength, DmaReadLength1),
+    (DmaWriteLength, DmaWriteLength1),
+    (Status, Status),
+    (Semaphore, Semaphore),
+);
 
 #[derive(Default)]
 pub struct Registers {
     pub general_purpose: RegisterBank<u32, { register::GeneralPurpose::count() }>,
-    pub control: RegisterBank<u32, { register::Control::count() }>,
+    pub control: ControlRegisterBank,
+    pub special: SpecialRegisterBank,
     /// In reality these are 128-bit registers, but since Rust does not have an AtomicU128 type, RegisterBank cannot be implemented for it.
     /// If you need to access the full 128-bit value, use [`RegIndex`]'s `read` and `write` methods.
     pub vector: RegisterBank<u64, { register::Vector::count() * 2 }>,
-    pub special: RegisterBank<u64, { register::Special::count() }>,
-}
-
-impl Registers {
-    #[must_use]
-    pub fn status(&self) -> register::control::StatusRead {
-        self.read(register::Control::Status).into()
-    }
-
-    pub fn set_status(&mut self, status: register::control::StatusRead) {
-        // When writing with values we choose ourselves, no need for `StatusWrite`.
-        let new = self.status().raw() | status.raw();
-        self.write(register::Control::Status, new);
-    }
-
-    #[allow(clippy::cast_possible_truncation)]
-    pub fn increment_pc(&mut self, amount: u32) {
-        let mut pc: register::special::ProgramCounter =
-            (self.read(register::Special::ProgramCounter) as u32).into();
-        pc.increment(amount);
-        self.write(register::Special::ProgramCounter, pc.read().into());
-    }
 }
 
 impl_reg_index!(
@@ -173,10 +245,31 @@ impl target::RegisterStorage for Registers {
             general_purpose: self
                 .general_purpose
                 .map_into(module, exec_engine, "general_purpose"),
-            control: self.control.map_into(module, exec_engine, "control"),
+            control: self.control.0.map_into(module, exec_engine, "control"),
             vector: self.vector.map_into(module, exec_engine, "vector"),
-            special: self.special.map_into(module, exec_engine, "special"),
+            special: self.special.0.map_into(module, exec_engine, "special"),
         }
+    }
+}
+
+/// A single RSP register.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub(crate) struct RegisterID(register::Register);
+
+impl target::RegisterID for RegisterID {
+    const PROGRAM_COUNTER: Self = Self(register::Register::Special(
+        register::Special::ProgramCounter,
+    ));
+
+    fn name(&self) -> &'static str {
+        self.0.name()
+    }
+}
+
+impl<T: Into<register::Register>> From<T> for RegisterID {
+    fn from(value: T) -> Self {
+        Self(value.into())
     }
 }
 

@@ -73,8 +73,22 @@ impl SideEffects {
         self.set_interrupt(InterruptRequest::Raise(device));
     }
 
+    /// Raise an interrupt for the given device.
+    #[must_use]
+    pub fn with_raise_interrupt(mut self, device: InterruptDevice) -> Self {
+        self.raise_interrupt(device);
+        self
+    }
+
     /// Lower an interrupt for the given device.
     pub fn lower_interrupt(&mut self, device: InterruptDevice) {
         self.set_interrupt(InterruptRequest::Lower(device));
+    }
+
+    /// Lower an interrupt for the given device.
+    #[must_use]
+    pub fn with_lower_interrupt(mut self, device: InterruptDevice) -> Self {
+        self.lower_interrupt(device);
+        self
     }
 }

@@ -1,24 +1,18 @@
 #![warn(clippy::all, clippy::pedantic)]
-#![allow(clippy::missing_panics_doc)] // TODO remove
 
-use self::register::Registers;
-use n64_common::{
-    utils::{boxed_array, thiserror::Error},
-    SideEffects,
-};
-use std::{
-    fmt,
-    ops::Range,
-    sync::{Arc, RwLock},
-};
-
-mod cpu;
-mod dma;
-mod register;
+use crate::{memory::Memory, register::Registers};
+use mips_lifter::target::rsp::register::control::Status;
+use n64_common::{utils::thiserror, SideEffects};
+use std::ops::Range;
 
 pub use mips_lifter::target::rsp::register::control::MemoryBank;
 
-#[derive(Error, Debug)]
+mod dma;
+mod jit;
+mod memory;
+mod register;
+
+#[derive(thiserror::Error, Debug)]
 pub enum RspError {
     #[error("Out of bounds register offset: {offset:#x}")]
     RegisterOffsetOutOfBounds { offset: usize },
@@ -27,39 +21,31 @@ pub enum RspError {
         range: Range<usize>,
         bank: MemoryBank,
     },
+    #[error("Failed to acquire read lock for bank {bank:#?}")]
+    ReadPoisonError { bank: MemoryBank },
+    #[error("Failed to acquire write lock for bank {bank:#?}")]
+    WritePoisonError { bank: MemoryBank },
 }
 
 pub type RspResult<T> = Result<T, RspError>;
 
-// TODO: remove the Box here, Arc is already heap-allocated
-type MemoryBankHandle = Arc<RwLock<Box<[u8; MemoryBank::LEN]>>>;
-
+#[derive(Debug)]
 pub struct Rsp {
     registers: Registers,
-    cpu: cpu::Handle,
-    dmem: MemoryBankHandle,
-    imem: MemoryBankHandle,
+    cpu: jit::Handle,
+    memory: Memory,
 }
 
 impl Rsp {
     /// This copies the first 0x1000 bytes of the PIF ROM to the RSP DMEM, simulating IPL2.
-    #[allow(clippy::similar_names)]
     #[must_use]
     pub fn new(pif_rom: &[u8]) -> Self {
-        let dmem: Arc<_> = {
-            let mut dmem = boxed_array();
-            let len = dmem.len().min(pif_rom.len()).min(0x1000);
-            dmem[..len].copy_from_slice(&pif_rom[..len]);
-            RwLock::new(dmem).into()
-        };
-        let imem: Arc<_> = RwLock::new(boxed_array()).into();
-        let cpu = cpu::Handle::new(dmem.clone(), imem.clone());
-
+        let memory = Memory::new(pif_rom);
+        let (cpu, registers) = jit::Handle::new(memory.clone());
         Self {
-            registers: Registers::new(),
+            registers,
             cpu,
-            imem,
-            dmem,
+            memory,
         }
     }
 
@@ -68,22 +54,7 @@ impl Rsp {
     /// # Errors
     /// Returns an error if the given offset is out of bounds
     pub fn read_register(&mut self, offset: usize) -> RspResult<u32> {
-        if offset == 0x10 {
-            // TODO: actual impl
-            static mut FIRST: bool = true;
-            unsafe {
-                if FIRST {
-                    FIRST = false;
-                    self.cpu.set_sp_status(1);
-                }
-            }
-            Ok(self.cpu.sp_status())
-        } else if offset == 0x40000 {
-            #[allow(clippy::cast_possible_truncation)]
-            Ok(self.cpu.pc() as u32)
-        } else {
-            self.registers.read(offset)
-        }
+        self.registers.read(offset)
     }
 
     /// Write a 32-bit integer to the RSP's memory-mapped COP0 registers
@@ -91,19 +62,7 @@ impl Rsp {
     /// # Errors
     /// Returns an error if the given offset is out of bounds
     pub fn write_register(&mut self, offset: usize, value: u32) -> RspResult<SideEffects> {
-        if offset == 0x10 {
-            // TODO: actual impl
-            let mut sp_status =
-                mips_lifter::target::rsp::register::control::StatusRead::from(self.cpu.sp_status());
-            sp_status.write(value);
-            self.cpu.set_sp_status(sp_status.into());
-            Ok(SideEffects::default())
-        } else if offset == 0x40000 {
-            self.cpu.set_pc(u64::from(value));
-            Ok(SideEffects::default())
-        } else {
-            self.registers.write(offset, value)
-        }
+        self.registers.write(offset, value)
     }
 
     /// Read `SIZE` bytes from the RSP's memory at the given bank and offset within said bank
@@ -116,13 +75,8 @@ impl Rsp {
         offset: usize,
     ) -> RspResult<[u8; SIZE]> {
         let range = offset..offset + SIZE;
-        let slice = match bank {
-            MemoryBank::IMem => &self.imem,
-            MemoryBank::DMem => &self.dmem,
-        }
-        .read()
-        .unwrap();
-        slice
+        self.memory
+            .read(bank)?
             .get(range.clone())
             .ok_or(RspError::MemoryRangeOutOfBounds { range, bank })
             // SAFETY: `slice.get()` returns a slice with the correct length
@@ -148,38 +102,27 @@ impl Rsp {
         };
 
         let range = offset..offset + value.len();
-        match bank {
-            MemoryBank::IMem => &mut self.imem,
-            MemoryBank::DMem => &mut self.dmem,
-        }
-        .write()
-        .unwrap()
-        .get_mut(range.clone())
-        .ok_or(RspError::MemoryRangeOutOfBounds { range, bank })?
-        .copy_from_slice(&value);
-
+        self.memory
+            .write(bank)?
+            .get_mut(range.clone())
+            .ok_or(RspError::MemoryRangeOutOfBounds { range, bank })?
+            .copy_from_slice(&value);
         Ok(())
     }
 
-    pub fn tick(&mut self, cycles: usize, rdram: &mut [u8]) -> SideEffects {
-        if (self.cpu.sp_status() & 1) != 1 {
-            // if !self.registers.halted() {
+    /// Tick the RSP for the given number of cycles.
+    ///
+    /// # Errors
+    /// Returns an error if the RSP is in an invalid state
+    pub fn tick(&mut self, cycles: usize, rdram: &mut [u8]) -> RspResult<SideEffects> {
+        if !self.registers.control.read_parsed::<Status>().halted() {
             self.cpu.tick(cycles);
         }
 
         self.registers.tick(&mut dma::TickContext {
+            memory: &mut self.memory,
             cycles,
             rdram,
-            dmem: self.dmem.write().unwrap().as_mut_slice(),
-            imem: self.imem.write().unwrap().as_mut_slice(),
         })
-    }
-}
-
-impl fmt::Debug for Rsp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RSP")
-            .field("registers", &self.registers)
-            .finish_non_exhaustive()
     }
 }

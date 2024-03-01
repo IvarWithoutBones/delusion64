@@ -3,7 +3,7 @@ use crate::{
     runtime::{bus::Bus, Environment, InterruptHandler, RuntimeFunction, TargetDependantCallbacks},
     RegIndex,
 };
-use mips_decomp::Exception;
+use mips_decomp::{register::rsp::control::Status, Exception, INSTRUCTION_SIZE};
 
 impl<B: Bus> Environment<'_, Rsp, B> {
     unsafe extern "C" fn handle_exception_jit(
@@ -16,19 +16,27 @@ impl<B: Bus> Environment<'_, Rsp, B> {
     ) -> usize {
         {
             // Ensure this is a breakpoint exception
-            #[allow(clippy::cast_possible_truncation)]
-            let code = Exception::from_repr(code as u8).unwrap();
-            assert_eq!(code, Exception::Breakpoint);
+            debug_assert_eq!(
+                Exception::from_repr(code.try_into().unwrap()).unwrap(),
+                Exception::Breakpoint
+            );
             debug_assert!(!has_coprocessor);
             debug_assert!(!has_bad_vaddr);
         }
 
-        self.registers.increment_pc(4);
+        self.registers
+            .special
+            .increment_program_counter(INSTRUCTION_SIZE.try_into().unwrap());
 
-        let status = self.registers.status().with_broke(true).with_halted(true);
-        self.registers.set_status(status);
+        let status = self
+            .registers
+            .control
+            .read_parsed::<Status>()
+            .with_broke(true)
+            .with_halted(true);
+        self.registers.control.write_parsed(status);
 
-        while self.registers.status().halted() {
+        while self.registers.control.read_parsed::<Status>().halted() {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
 

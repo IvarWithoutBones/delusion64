@@ -62,10 +62,8 @@ pub(crate) fn compile_instruction_with_delay_slot(
             let target_pc = instr
                 .try_resolve_constant_jump(pc)
                 .expect("target address for branch instruction could not be resolved");
-            codegen.build_constant_jump(target_pc)?;
-            Ok(())
-        })?;
-        Ok(())
+            codegen.build_constant_jump(target_pc)
+        })
     } else {
         // Evaluate the jump target, and set the link register if needed, prior to executing the delay slot instruction.
         let target = evaluate_jump(codegen, instr, delay_slot_pc)?;

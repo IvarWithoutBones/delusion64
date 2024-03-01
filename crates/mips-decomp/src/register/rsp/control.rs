@@ -26,7 +26,7 @@ bitfield_without_debug! {
 }
 
 impl DmaSpAddress {
-    pub const OFFSET: usize = Control::DmaSpAddress.offset();
+    pub const OFFSET: usize = Control::DmaSpAddress1.offset();
 
     /// DMEM or IMEM address used in SP DMAs.
     #[must_use]
@@ -72,7 +72,7 @@ bitfield_without_debug! {
 }
 
 impl DmaRdramAddress {
-    pub const OFFSET: usize = Control::DmaRdramAddress.offset();
+    pub const OFFSET: usize = Control::DmaRdramAddress1.offset();
 
     /// RDRAM address used in SP DMAs.
     #[must_use]
@@ -137,7 +137,7 @@ impl DmaLength {
 pub struct DmaReadLength(DmaLength);
 
 impl DmaReadLength {
-    pub const OFFSET: usize = Control::DmaReadLength.offset();
+    pub const OFFSET: usize = Control::DmaReadLength1.offset();
 }
 
 impl DmaReadLength {
@@ -188,7 +188,7 @@ impl From<DmaReadLength> for u32 {
 pub struct DmaWriteLength(DmaLength);
 
 impl DmaWriteLength {
-    pub const OFFSET: usize = Control::DmaWriteLength.offset();
+    pub const OFFSET: usize = Control::DmaWriteLength1.offset();
 }
 
 impl DmaWriteLength {
@@ -286,16 +286,16 @@ pub enum InterruptRequest {
 
 bitfield! {
     /// The RSP status register.
-    /// This definition is only accurate when reading. When writing, use [`SpStatusWrite`] or the [`SpStatus::write`] method to correctly apply changes.
+    /// This definition is only accurate when reading. When writing, use [`StatusWrite`] or the [`Status::write`] method to correctly apply changes.
     /// See [n64brew](https://n64brew.dev/wiki/Reality_Signal_Processor/Interface#SP_STATUS) for more information.
-    pub struct StatusRead(u32) {
+    pub struct Status(u32) {
         /// Indicates whether the RSP is currently running, or halted
         [0] pub halted,
         /// Set when the RSP executes a BREAK instruction
         [1] pub broke,
-        /// Set when there is a DMA transfer in progress
+        /// Set when there is a DMA transfer in progress. Mirrored in [`DmaBusy`]
         [2] pub dma_busy,
-        /// Set when there is a DMA transfer pending, and there is one in progress as well
+        /// Set when there is a DMA transfer pending, and there is one in progress as well. Mirrored in [`DmaFull`]
         [3] pub dma_full,
         /// Set when the RSP is accessing either DMEM or IMEM
         [4] pub io_busy,
@@ -310,22 +310,22 @@ bitfield! {
 
 bitfield! {
     /// The RSP status register.
-    /// This definition is only accurate when writing. When reading, use [`SpStatus`] instead.
+    /// This definition is only accurate when writing. When reading, use [`Status`] instead.
     /// See [n64brew](https://n64brew.dev/wiki/Reality_Signal_Processor/Interface#SP_STATUS) for more information.
     pub struct StatusWrite(u32) {
-        /// Start running RSP code from the current RSP PC, and clear the [`SpStatus::halted`] flag
+        /// Start running RSP code from the current RSP PC, and clear the [`Status::halted`] flag
         [0] pub clear_halted,
-        /// Pause execution of RSP code, and set the [`SpStatus::halted`] pub flag
+        /// Pause execution of RSP code, and set the [`Status::halted`] pub flag
         [1] pub set_halted,
-        /// Clear the [`SpStatus::broke`] pub flag
+        /// Clear the [`Status::broke`] flag
         [2] pub clear_broke,
         /// Acknowledge an RSP MI interrupt
         [3] pub clear_interrupt,
         /// Manually trigger an RSP MI interrupt
         [4] pub set_interrupt,
-        /// Disable single-step mode, and clear the [`SpStatus::single_step`] pub flag
+        /// Disable single-step mode, and clear the [`Status::single_step`] pub flag
         [5] pub clear_single_step,
-        /// Enable single-step mode, and set the [`SpStatus::single_step`] pub flag. In single-step mode, RSP auto-halts itself after a single opcode is ran
+        /// Enable single-step mode, and set the [`Status::single_step`] pub flag. In single-step mode, RSP auto-halts itself after a single opcode is ran
         [6] pub set_single_step,
         /// Disable triggering an RSP MI interrupt when the BREAK instruction is ran
         [7] pub clear_interrupt_break,
@@ -336,13 +336,8 @@ bitfield! {
     }
 }
 
-impl StatusRead {
+impl Status {
     pub const OFFSET: usize = Control::Status.offset();
-
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default().with_halted(true)
-    }
 
     #[must_use]
     pub fn raw(&self) -> u32 {
@@ -350,6 +345,7 @@ impl StatusRead {
     }
 
     /// Write the given value into the register, correctly applying changes.
+    #[must_use]
     pub fn write(&mut self, x: impl Into<StatusWrite>) -> Option<InterruptRequest> {
         let x = x.into();
         self.set_signals(self.signals().write(x.raw_signals()));
@@ -389,7 +385,7 @@ bitfield! {
     /// Report whether there is a pending DMA transfer.
     /// See [n64brew](https://n64brew.dev/wiki/Reality_Signal_Processor/Interface#SP_DMA_FULL) for more information.
     pub struct DmaFull(u32) {
-        /// Mirror of [`StatusRead::dma_full`]
+        /// Mirror of [`Status::dma_full`]
         [0] pub dma_full,
     }
 }
@@ -402,7 +398,7 @@ bitfield! {
     /// Report whether there is a DMA transfer in progress.
     /// See [n64brew](https://n64brew.dev/wiki/Reality_Signal_Processor/Interface#SP_DMA_BUSY) for more information.
     pub struct DmaBusy(u32) {
-        /// Mirror of [`StatusRead::dma_busy`]
+        /// Mirror of [`Status::dma_busy`]
         [0] pub dma_busy,
     }
 }

@@ -13,20 +13,53 @@ use std::fmt;
 
 /// Helper for implementing the `RegIndex` trait for a target.
 macro_rules! impl_reg_index {
-    ($target:path, $(($ty:ty, $output:ty, $field:ident)),*) => {
+    ($target:path, $(($ty:ty, $output:ty, $field:tt)),*) => {
         $(
             impl crate::runtime::register_bank::RegIndex<$ty> for $target {
                 type Output = $output;
 
                 fn read(&self, index: $ty) -> Self::Output {
-                    self.$field.read_relaxed(index.into()).unwrap()
+                    self.$field.read_relaxed(index.into()).expect("register read failed")
                 }
 
                 fn write(&mut self, index: $ty, value: Self::Output) {
-                    self.$field.write_relaxed(index.into(), value).unwrap()
+                    self.$field.write_relaxed(index.into(), value).expect("register write failed");
                 }
             }
         )*
+    };
+}
+
+macro_rules! impl_reg_bank_wrapper {
+    ($name:ident, $id:ty, $inner:ty, $len:expr, $doc:expr) => {
+        #[doc = $doc]
+        #[derive(Debug, Default)]
+        #[repr(transparent)]
+        pub struct $name(pub RegisterBank<$inner, $len>);
+
+        impl $name {
+            pub fn share(&self) -> Option<Self> {
+                self.0.share().map(Self)
+            }
+
+            #[must_use]
+            pub fn read_relaxed(&self, index: usize) -> Option<$inner> {
+                self.0.read_relaxed(index)
+            }
+
+            #[must_use]
+            pub fn write_relaxed(&self, index: usize, value: $inner) -> Option<()> {
+                self.0.write_relaxed(index, value)
+            }
+        }
+
+        impl From<RegisterBank<$inner, $len>> for $name {
+            fn from(inner: RegisterBank<$inner, $len>) -> Self {
+                Self(inner)
+            }
+        }
+
+        impl_reg_index!($name, ($id, $inner, 0));
     };
 }
 

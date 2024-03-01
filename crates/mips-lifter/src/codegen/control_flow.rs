@@ -47,7 +47,6 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
             self.builder
                 .build_indirect_call(func_type, ptr, &[], name)?,
         );
-        self.builder.build_return(None)?;
         Ok(())
     }
 

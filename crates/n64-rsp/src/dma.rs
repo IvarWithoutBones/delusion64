@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
+use crate::memory::Memory;
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(crate) enum Direction {
     ToRdram,
     ToSpMemory,
@@ -21,6 +23,5 @@ impl State {
 pub(crate) struct TickContext<'a> {
     pub cycles: usize,
     pub rdram: &'a mut [u8],
-    pub imem: &'a mut [u8],
-    pub dmem: &'a mut [u8],
+    pub memory: &'a mut Memory,
 }

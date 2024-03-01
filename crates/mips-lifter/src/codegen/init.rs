@@ -101,7 +101,8 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
                 .left()
                 .unwrap()
                 .into_int_value();
-            self.build_jump_to_host_ptr(ptr, "jump_fn_call")?
+            self.build_jump_to_host_ptr(ptr, "jump_fn_call")?;
+            self.builder.build_return(None)?;
         }
 
         self.helpers.jump = Some(func);

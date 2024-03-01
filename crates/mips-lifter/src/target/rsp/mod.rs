@@ -2,8 +2,9 @@ use crate::{
     codegen::{CodeGen, CompilationResult},
     target,
 };
+
 pub use mips_decomp::register::rsp as register;
-pub use registers::Registers;
+pub use registers::{ControlRegisterBank, Registers, SpecialRegisterBank};
 
 mod codegen;
 mod gdb;

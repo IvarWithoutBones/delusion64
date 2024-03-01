@@ -367,7 +367,7 @@ impl BusInterface for Bus {
         self.handle(vi_side_effects, &mut result);
 
         let rsp_side_effects = self.rsp.tick(cycles, self.rdram.as_mut_slice());
-        self.handle(rsp_side_effects, &mut result);
+        self.handle(rsp_side_effects?, &mut result);
 
         let pi_side_effects = self.pi.tick(cycles);
         self.handle(pi_side_effects, &mut result);

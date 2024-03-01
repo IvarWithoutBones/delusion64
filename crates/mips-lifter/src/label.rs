@@ -83,7 +83,7 @@ impl<'ctx, T: Target> LabelWithContext<'ctx, T> {
         let exception_occured = cmp!(codegen, maybe_exception_vec != 0)?;
         codegen.build_if("exception_occured", exception_occured, || {
             codegen.build_jump_to_host_ptr(maybe_exception_vec, "exception_vector_jmp")?;
-            Ok(())
+            Ok(codegen.builder.build_return(None)?)
         })?;
         Ok(())
     }

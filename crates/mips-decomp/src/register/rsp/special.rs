@@ -11,6 +11,14 @@ bitfield! {
 impl ProgramCounter {
     pub const OFFSET: usize = 0x40000; // 0x0408_0000
 
+    /// Creates a new program counter register with the given value.
+    #[must_use]
+    pub fn from_raw(value: u32) -> Self {
+        let mut res = Self::default();
+        res.write(value);
+        res
+    }
+
     /// Writes the given value into the program counter register.
     pub fn write(&mut self, value: u32) {
         // The least significant two bits are always zero (i.e. aligned to 4 bytes)
