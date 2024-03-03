@@ -26,13 +26,11 @@
       lib = nixpkgs.lib;
       pkgs = import nixpkgs {
         inherit system;
-        overlays = [ (import rust-overlay) ];
+        overlays = [ rust-overlay.overlays.default ];
       };
 
       hostPlatform = pkgs.stdenvNoCC.hostPlatform;
-      rustToolchain = pkgs.rust-bin.stable.latest.default.override {
-        extensions = [ "rust-src" "clippy" "rustfmt" "rust-analyzer" ];
-      };
+      rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
 
       naerskLib = pkgs.callPackage naersk {
         cargo = rustToolchain;
