@@ -12,7 +12,7 @@ use crate::{
 
 pub struct JitBuilder<const READY: bool, T: Target, B: Bus>
 where
-    for<'a> runtime::Environment<'a, T, B>: runtime::ValidRuntime,
+    for<'a> runtime::Environment<'a, T, B>: runtime::ValidRuntime<T>,
 {
     pub(crate) bus: B,
     pub(crate) registers: Option<T::Registers>,
@@ -44,7 +44,7 @@ impl<B: Bus> JitBuilder<false, Cpu, B> {
 
 impl<const READY: bool, T: Target, B: Bus> JitBuilder<READY, T, B>
 where
-    for<'a> runtime::Environment<'a, T, B>: runtime::ValidRuntime,
+    for<'a> runtime::Environment<'a, T, B>: runtime::ValidRuntime<T>,
 {
     pub fn maybe_with_trace(self, trace: Option<bool>) -> Self {
         let trace = trace.unwrap_or(self.trace);
@@ -87,7 +87,7 @@ impl<B: Bus> JitBuilder<false, Rsp, B> {
 
 impl<T: Target, B: Bus> JitBuilder<true, T, B>
 where
-    for<'a> runtime::Environment<'a, T, B>: runtime::ValidRuntime,
+    for<'a> runtime::Environment<'a, T, B>: runtime::ValidRuntime<T>,
 {
     pub fn run(self) -> B {
         run(self)

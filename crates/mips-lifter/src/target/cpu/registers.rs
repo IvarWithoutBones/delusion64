@@ -180,11 +180,19 @@ impl fmt::Debug for Registers {
 }
 
 impl target::RegisterStorage for Registers {
-    type RegisterID = RegisterID;
+    type Id = RegisterID;
     type Globals<'ctx> = Globals<'ctx>;
 
     fn read_program_counter(&self) -> u64 {
         self.read(register::cpu::Special::Pc)
+    }
+
+    fn read_register(&self, reg: Self::Id) -> u64 {
+        self.read(reg.0)
+    }
+
+    fn write_register(&mut self, reg: Self::Id, value: u64) {
+        self.write(reg.0, value);
     }
 
     fn build_globals<'ctx>(
@@ -207,6 +215,14 @@ impl target::RegisterStorage for Registers {
                 "floating_point_control_registers",
             ),
         }
+    }
+
+    fn copy_into(&self, other: &mut Self) {
+        self.general_purpose.copy_into(&other.general_purpose);
+        self.cp0.copy_into(&other.cp0);
+        self.fpu.copy_into(&other.fpu);
+        self.fpu_control.copy_into(&other.fpu_control);
+        self.special.copy_into(&other.special);
     }
 }
 

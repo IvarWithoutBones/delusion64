@@ -6,6 +6,11 @@ llvm-ir input-c output-ll *args:
 compile-ll input-ll output-bin:
     llc -filetype obj -relocation-model=pic -mtriple=mips64 -mcpu=mips3 -O2 -o "{{output-bin}}" "{{input-ll}}"
 
+gdb target *args="":
+    {{if target == "cpu" { "" } else if target == "rsp" { "" } else { error("invalid target") } }}
+    @# Will enable target-specific settings in .gdbinit
+    @gdb --init-eval-command 'set $d64_target_{{target}} = 1' {{args}}
+
 cargo_flamegraph_flags := "--palette hot" + if os() == "macos" { " --root" } else { "" }
 
 flamegraph *args:

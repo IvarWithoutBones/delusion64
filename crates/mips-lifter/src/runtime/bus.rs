@@ -34,7 +34,7 @@ impl<V> BusValue<V> {
 
     pub(crate) fn handle<T: Target, B: Bus>(self, env: &mut Environment<T, B>) -> V
     where
-        for<'a> Environment<'a, T, B>: ValidRuntime,
+        for<'a> Environment<'a, T, B>: ValidRuntime<T>,
     {
         if let Some(paddrs) = self.mutated {
             let vaddr_start = env
@@ -279,6 +279,15 @@ pub trait Bus {
         address: PhysicalAddress,
     ) -> BusResult<Int<SIZE>, Self::Error> {
         self.read_memory(address)
+    }
+
+    /// Writes a value into instruction memory. By default [`Bus::write_memory`] will be used for both data/instruction writes, in case there is no destinction.
+    fn write_instruction_memory<const SIZE: usize>(
+        &mut self,
+        address: PhysicalAddress,
+        value: Int<SIZE>,
+    ) -> BusResult<(), Self::Error> {
+        self.write_memory(address, value)
     }
 
     /// Performs a single tick, used to emulate clock cycles.

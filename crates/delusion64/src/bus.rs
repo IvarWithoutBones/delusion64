@@ -15,6 +15,7 @@ use n64_pi::{BusDevice as PiDevice, PeripheralInterface, PiError};
 use n64_rsp::{MemoryBank as RspBank, Rsp, RspError};
 use n64_si::{Channel, PifError, SerialInterface, SiError};
 use n64_vi::{ViError, VideoInterface};
+use std::net::TcpStream;
 
 /// The amount of CPU instructions to execute before checking for GUI events.
 const GUI_POLL_RATE: usize = 100_000;
@@ -39,6 +40,7 @@ impl Bus {
     pub fn new(
         context: context::Emulator<ControllerEvent>,
         cartridge: Cartridge,
+        rsp_gdb: Option<TcpStream>,
         gui_connected: bool,
     ) -> Self {
         let cartridge_rom = {
@@ -66,7 +68,7 @@ impl Bus {
         Self {
             gui_poll_counter: GUI_POLL_RATE,
             rdram,
-            rsp: Rsp::new(cartridge_rom.as_ref()),
+            rsp: Rsp::new(cartridge_rom.as_ref(), rsp_gdb),
             pi: PeripheralInterface::new(cartridge_rom, cartridge.header.pi_bsd_domain_1_flags),
             mi: MipsInterface::new(),
             vi: VideoInterface::new(),

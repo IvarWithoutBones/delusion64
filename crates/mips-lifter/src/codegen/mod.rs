@@ -465,7 +465,7 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         add_name: &str,
     ) -> CompilationResult<IntValue<'ctx>>
     where
-        <T::Registers as RegisterStorage>::RegisterID: From<register::GeneralPurpose>,
+        <T::Registers as RegisterStorage>::Id: From<register::GeneralPurpose>,
     {
         let i16_type = self.context.i16_type();
         let base = self.read_general_register(ty, instr.base())?;
@@ -488,7 +488,7 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         &self,
         ptr: PointerValue<'ctx>,
         ty: impl BasicType<'ctx> + Clone,
-        reg: <T::Registers as RegisterStorage>::RegisterID,
+        reg: <T::Registers as RegisterStorage>::Id,
     ) -> CompilationResult<BasicValueEnum<'ctx>> {
         let name = &format!("{}_", reg.name());
         let value = self.builder.build_load(ty.clone(), ptr, name)?;
@@ -507,7 +507,7 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         &self,
         value: BasicValueEnum<'ctx>,
         ptr: PointerValue<'ctx>,
-        reg: <T::Registers as RegisterStorage>::RegisterID,
+        reg: <T::Registers as RegisterStorage>::Id,
     ) -> CompilationResult<()> {
         let i = self.builder.build_store(ptr, value)?;
         if self.globals().registers.is_atomic(reg) {
@@ -521,7 +521,7 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
     pub(crate) fn read_register_raw(
         &self,
         ty: impl BasicType<'ctx> + Clone,
-        reg: impl Into<<T::Registers as RegisterStorage>::RegisterID>,
+        reg: impl Into<<T::Registers as RegisterStorage>::Id>,
     ) -> CompilationResult<BasicValueEnum<'ctx>> {
         let reg = reg.into();
         let ptr = self.globals().registers.pointer_value(self, &reg);
@@ -530,7 +530,7 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
 
     pub(crate) fn write_register_raw(
         &self,
-        reg: impl Into<<T::Registers as RegisterStorage>::RegisterID>,
+        reg: impl Into<<T::Registers as RegisterStorage>::Id>,
         value: impl Into<BasicValueEnum<'ctx>>,
     ) -> CompilationResult<()> {
         let reg = reg.into();
@@ -546,7 +546,7 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         index: impl Into<u64>,
     ) -> CompilationResult<IntValue<'ctx>>
     where
-        <T::Registers as RegisterStorage>::RegisterID: From<register::GeneralPurpose>,
+        <T::Registers as RegisterStorage>::Id: From<register::GeneralPurpose>,
     {
         let index = u8::try_from(index.into()).expect("index must be less than 32");
         let reg = register::GeneralPurpose::from_repr(index).unwrap();
@@ -565,7 +565,7 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         value: IntValue<'ctx>,
     ) -> CompilationResult<()>
     where
-        <T::Registers as RegisterStorage>::RegisterID: From<register::GeneralPurpose>,
+        <T::Registers as RegisterStorage>::Id: From<register::GeneralPurpose>,
     {
         let index = u8::try_from(index.into()).expect("index must be less than 32");
         let reg = register::cpu::GeneralPurpose::from_repr(index).unwrap();
@@ -578,12 +578,14 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
 
     pub fn read_program_counter(&self) -> CompilationResult<IntValue<'ctx>> {
         let ty = self.context.i64_type();
-        let reg = <<T::Registers as target::RegisterStorage>::RegisterID as target::RegisterID>::PROGRAM_COUNTER;
+        let reg =
+            <<T::Registers as target::RegisterStorage>::Id as target::RegisterID>::PROGRAM_COUNTER;
         Ok(self.read_register_raw(ty, reg)?.into_int_value())
     }
 
     pub fn write_program_counter(&self, value: u64) -> CompilationResult<()> {
-        let pc_id = <<T::Registers as target::RegisterStorage>::RegisterID as target::RegisterID>::PROGRAM_COUNTER;
+        let pc_id =
+            <<T::Registers as target::RegisterStorage>::Id as target::RegisterID>::PROGRAM_COUNTER;
         let value = self.context.i64_type().const_int(value, false);
         self.write_register_raw(pc_id, value)
     }

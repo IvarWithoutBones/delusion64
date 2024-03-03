@@ -14,7 +14,22 @@ pub mod gdb {
 
     pub mod util {
         //! Utilities for parsing GDB commands.
+        use std::{
+            io,
+            net::{TcpListener, TcpStream},
+        };
+
         pub use crate::runtime::gdb::command::str_to_u64;
+
+        /// Blocks until a GDB client connects via TCP, on localhost.
+        pub fn wait_for_gdb_connection(port: Option<u16>) -> io::Result<TcpStream> {
+            let sockaddr = format!("localhost:{}", port.unwrap_or(9001));
+            eprintln!("waiting for a GDB connection on {sockaddr:?}...");
+            let sock = TcpListener::bind(sockaddr)?;
+            let (stream, addr) = sock.accept()?;
+            eprintln!("debugger connected from {addr}");
+            Ok(stream)
+        }
     }
 }
 
@@ -42,7 +57,7 @@ pub(crate) fn run<T, B>(builder: JitBuilder<true, T, B>) -> B
 where
     B: runtime::bus::Bus,
     T: target::Target,
-    for<'a> runtime::Environment<'a, T, B>: runtime::ValidRuntime,
+    for<'a> runtime::Environment<'a, T, B>: runtime::ValidRuntime<T>,
 {
     // Without calling this, the JIT will get optimised out when building with LTO.
     inkwell::execution_engine::ExecutionEngine::link_in_mc_jit();

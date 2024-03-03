@@ -3,7 +3,7 @@
 use crate::{memory::Memory, register::Registers};
 use mips_lifter::target::rsp::register::control::Status;
 use n64_common::{utils::thiserror, SideEffects};
-use std::ops::Range;
+use std::{net::TcpStream, ops::Range};
 
 pub use mips_lifter::target::rsp::register::control::MemoryBank;
 
@@ -39,9 +39,9 @@ pub struct Rsp {
 impl Rsp {
     /// This copies the first 0x1000 bytes of the PIF ROM to the RSP DMEM, simulating IPL2.
     #[must_use]
-    pub fn new(pif_rom: &[u8]) -> Self {
+    pub fn new(pif_rom: &[u8], gdb: Option<TcpStream>) -> Self {
         let memory = Memory::new(pif_rom);
-        let (cpu, registers) = jit::Handle::new(memory.clone());
+        let (cpu, registers) = jit::Handle::new(memory.clone(), gdb);
         Self {
             registers,
             cpu,

@@ -42,60 +42,47 @@ pub(crate) trait InterruptHandler {
     fn handle_interrupt(&mut self, interrupt_pending: u8);
 }
 
-pub(crate) trait GdbIntegration: Sized {
-    type Arch: gdbstub::arch::Arch<Usize = u64>;
-
-    /// Copy of [`gdbstub::target::ext::base::single_register_access::SingleRegisterAccess::read_register`], see its documentation for more information.
-    fn gdb_read_register(
-        &mut self,
-        reg_id: <<Self as GdbIntegration>::Arch as gdbstub::arch::Arch>::RegId,
-        buf: &mut [u8],
-    ) -> gdbstub::target::TargetResult<usize, Self>
-    where
-        Self: gdbstub::target::Target<Arch = <Self as GdbIntegration>::Arch>;
-
-    /// Copy of [`gdbstub::target::ext::base::single_register_access::SingleRegisterAccess::write_register`], see its documentation for more information.
-    fn gdb_write_register(
-        &mut self,
-        reg_id: <<Self as GdbIntegration>::Arch as gdbstub::arch::Arch>::RegId,
-        value: &[u8],
-    ) -> gdbstub::target::TargetResult<(), Self>
-    where
-        Self: gdbstub::target::Target<Arch = <Self as GdbIntegration>::Arch>;
-
-    /// Copy of [`gdbstub::target::ext::base::singlethread::SingleThreadBase::read_registers`], see its documentation for more information.
-    fn gdb_read_registers(
-        &mut self,
-        regs: &mut <<Self as gdbstub::target::Target>::Arch as gdbstub::arch::Arch>::Registers,
-    ) -> gdbstub::target::TargetResult<(), Self>
-    where
-        Self: gdbstub::target::Target<Arch = <Self as GdbIntegration>::Arch>;
-
-    /// Copy of [`gdbstub::target::ext::base::singlethread::SingleThreadBase::write_registers`], see its documentation for more information.
-    fn gdb_write_registers(
-        &mut self,
-        regs: &<<Self as gdbstub::target::Target>::Arch as gdbstub::arch::Arch>::Registers,
-    ) -> gdbstub::target::TargetResult<(), Self>
-    where
-        Self: gdbstub::target::Target;
+pub(crate) trait GdbIntegration<T: Target>: Sized {
+    type Usize: gdb::AsU64;
+    type Arch: gdbstub::arch::Arch<
+        Usize = Self::Usize,
+        Registers = T::Registers,
+        RegId = <T::Registers as RegisterStorage>::Id,
+    >;
 
     /// Extra GDB monitor commands to register.
     fn extra_monitor_commands() -> Vec<MonitorCommand<Self>> {
         Vec::new()
     }
+
+    /// Converts the given address from GDB into one that can be used by the runtime.
+    /// This is needed to distinguish between instruction/data memory for the RSP.
+    fn to_runtime_address(&mut self, address: u64) -> u64 {
+        address
+    }
+
+    /// Picks a memory type for the given GDB supplied address.
+    fn memory_type_for_address(&self, _address: u64) -> memory::Type {
+        memory::Type::Unknown
+    }
 }
 
 /// A shorthand for all the traits that the target must implement on the runtime environment.
-pub(crate) trait ValidRuntime:
-    TargetDependantCallbacks + InterruptHandler + GdbIntegration
+pub(crate) trait ValidRuntime<T: Target>:
+    TargetDependantCallbacks + InterruptHandler + GdbIntegration<T>
 {
 }
 
-impl<R: TargetDependantCallbacks + InterruptHandler + GdbIntegration> ValidRuntime for R {}
+impl<T, R> ValidRuntime<T> for R
+where
+    T: Target,
+    R: TargetDependantCallbacks + InterruptHandler + GdbIntegration<T>,
+{
+}
 
 pub(crate) struct Environment<'ctx, T: Target, B: Bus>
 where
-    for<'a> Environment<'a, T, B>: ValidRuntime,
+    for<'a> Environment<'a, T, B>: ValidRuntime<T>,
 {
     pub(crate) bus: B,
     pub(crate) target: T,
@@ -111,7 +98,7 @@ where
 
 impl<'ctx, T: Target, B: Bus> Environment<'ctx, T, B>
 where
-    for<'a> Environment<'a, T, B>: ValidRuntime,
+    for<'a> Environment<'a, T, B>: ValidRuntime<T>,
 {
     pub(crate) fn new(
         mut builder: JitBuilder<true, T, B>,

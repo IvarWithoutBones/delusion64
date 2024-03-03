@@ -33,7 +33,7 @@ macro_rules! impl_reg_index {
 macro_rules! impl_reg_bank_wrapper {
     ($name:ident, $id:ty, $inner:ty, $len:expr, $doc:expr) => {
         #[doc = $doc]
-        #[derive(Debug, Default)]
+        #[derive(Debug, Default, Clone, PartialEq)]
         #[repr(transparent)]
         pub struct $name(pub RegisterBank<$inner, $len>);
 
@@ -73,16 +73,27 @@ pub(crate) trait RegisterID: Sized + fmt::Debug {
 }
 
 pub(crate) trait RegisterStorage: fmt::Debug {
-    type RegisterID: RegisterID;
-    type Globals<'ctx>: Globals<'ctx, RegisterID = Self::RegisterID>;
+    type Id: RegisterID;
+    type Globals<'ctx>: Globals<'ctx, RegisterID = Self::Id>;
 
-    fn read_program_counter(&self) -> u64;
+    // TODO: dont hardcode u64, we need some mechanism to specify the register size.
+    // Some registers within the same storage differ in size, which complicates things.
+    fn read_register(&self, reg: Self::Id) -> u64;
+    fn write_register(&mut self, reg: Self::Id, value: u64);
+
+    fn read_program_counter(&self) -> u64 {
+        let id = <Self::Id as RegisterID>::PROGRAM_COUNTER;
+        self.read_register(id)
+    }
 
     fn build_globals<'ctx>(
         &self,
         module: &Module<'ctx>,
         exec_engine: &ExecutionEngine<'ctx>,
     ) -> Self::Globals<'ctx>;
+
+    /// Copy the contents of all the registers from `other` into `self`.
+    fn copy_into(&self, other: &mut Self);
 }
 
 pub(crate) trait Globals<'ctx>: fmt::Debug {

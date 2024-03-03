@@ -13,15 +13,6 @@ fn write_be_bytes(values: impl IntoIterator<Item = u64>, write_byte: &mut impl F
     }
 }
 
-fn copy_reg(
-    reg: impl Into<register::cpu::Register>,
-    src: &super::Registers,
-    dst: &mut super::Registers,
-) {
-    let reg = reg.into();
-    dst.write(reg, src.read(reg));
-}
-
 impl gdbstub::arch::RegId for RegisterID {
     // See the architecture XML files:
     // https://github.com/bminor/binutils-gdb/blob/213516ef315dc1785e4990ef0fc011abedb38cc0/gdb/features/mips64-cpu.xml
@@ -122,75 +113,9 @@ impl gdbstub::arch::Arch for GdbArch {
     }
 }
 
-impl<B: Bus> GdbIntegration for Environment<'_, Cpu, B> {
+impl<B: Bus> GdbIntegration<Cpu> for Environment<'_, Cpu, B> {
+    type Usize = u64;
     type Arch = GdbArch;
-
-    fn gdb_read_register(
-        &mut self,
-        reg_id: <<Self as GdbIntegration>::Arch as gdbstub::arch::Arch>::RegId,
-        buf: &mut [u8],
-    ) -> gdbstub::target::TargetResult<usize, Self> {
-        let value = self.registers.read(reg_id.0).to_be_bytes();
-        let len = buf.len().min(value.len());
-        buf[..len].copy_from_slice(&value[..len]);
-        Ok(len)
-    }
-
-    fn gdb_write_register(
-        &mut self,
-        reg_id: <<Self as GdbIntegration>::Arch as gdbstub::arch::Arch>::RegId,
-        value: &[u8],
-    ) -> gdbstub::target::TargetResult<(), Self> {
-        let value: [u8; size_of::<u64>()] = value.try_into().expect("guaranteed to be reg size");
-        self.registers.write(reg_id.0, u64::from_be_bytes(value));
-        Ok(())
-    }
-
-    fn gdb_read_registers(
-        &mut self,
-        regs: &mut <<Self as gdbstub::target::Target>::Arch as gdbstub::arch::Arch>::Registers,
-    ) -> gdbstub::target::TargetResult<(), Self> {
-        copy_reg(register::cpu::Special::Pc, &self.registers, regs);
-        copy_reg(register::cpu::Special::Hi, &self.registers, regs);
-        copy_reg(register::cpu::Special::Lo, &self.registers, regs);
-        copy_reg(register::cpu::Cp0::Cause, &self.registers, regs);
-        copy_reg(register::cpu::Cp0::Status, &self.registers, regs);
-        copy_reg(register::cpu::Cp0::BadVAddr, &self.registers, regs);
-
-        for (i, r) in self.registers.general_purpose.iter_relaxed().enumerate() {
-            regs.general_purpose.write_relaxed(i, r).unwrap();
-        }
-
-        for (i, r) in self.registers.fpu.iter_relaxed().enumerate() {
-            regs.fpu.write_relaxed(i, r).unwrap();
-        }
-
-        Ok(())
-    }
-
-    fn gdb_write_registers(
-        &mut self,
-        regs: &<<Self as gdbstub::target::Target>::Arch as gdbstub::arch::Arch>::Registers,
-    ) -> gdbstub::target::TargetResult<(), Self> {
-        assert!(
-            regs.read(register::cpu::Special::Pc)
-                == self.registers.read(register::cpu::Special::Pc),
-            "gdb: attempted to change PC"
-        );
-
-        copy_reg(register::cpu::Special::Hi, regs, &mut self.registers);
-        copy_reg(register::cpu::Special::Lo, regs, &mut self.registers);
-        copy_reg(register::cpu::Cp0::Cause, regs, &mut self.registers);
-        copy_reg(register::cpu::Cp0::Status, regs, &mut self.registers);
-        copy_reg(register::cpu::Cp0::BadVAddr, regs, &mut self.registers);
-        for (i, r) in regs.general_purpose.iter_relaxed().enumerate() {
-            self.registers.general_purpose.write_relaxed(i, r).unwrap();
-        }
-        for (i, r) in regs.fpu.iter_relaxed().enumerate() {
-            self.registers.fpu.write_relaxed(i, r).unwrap();
-        }
-        Ok(())
-    }
 
     fn extra_monitor_commands() -> Vec<MonitorCommand<Self>> {
         vec![

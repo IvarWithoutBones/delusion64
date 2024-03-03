@@ -1,28 +1,16 @@
 use crate::bus::Bus;
-use clap::Parser;
-use emgui::{context, EmulatorHandle, UiBuilder};
+use clap::{Parser, ValueEnum};
+use emgui::{context, UiBuilder};
 use input::ControllerEvent;
-use mips_lifter::{gdb, target::cpu::register, JitBuilder};
-use n64_cartridge::{Cartridge, Cic};
-use std::{
-    io,
-    net::{TcpListener, TcpStream},
+use mips_lifter::{
+    gdb::{self, util::wait_for_gdb_connection},
+    target::cpu::register,
+    JitBuilder,
 };
+use n64_cartridge::{Cartridge, Cic};
 
 pub mod bus;
 pub mod input;
-
-/// Blocks until a GDB client connects via TCP
-fn wait_for_gdb_connection(port: u16) -> io::Result<TcpStream> {
-    let sockaddr = format!("localhost:{port}");
-    eprintln!("waiting for a GDB connection on {sockaddr:?}...");
-    let sock = TcpListener::bind(sockaddr)?;
-    let (stream, addr) = sock.accept()?;
-    eprintln!("debugger connected from {addr}");
-    Ok(stream)
-}
-
-const DEFAULT_GDB_PORT: u16 = 9001;
 
 const FALLBACK_CIC: Cic = Cic::Cic6102;
 
@@ -50,6 +38,7 @@ impl Emulator {
         rom: Box<[u8]>,
         ctx: context::Emulator<ControllerEvent>,
         args: CommandLineInterface,
+        has_gui: bool,
     ) -> context::Emulator<ControllerEvent> {
         println!("spawning emu");
         let mut cart = Cartridge::new(&rom).unwrap_or_else(|e| {
@@ -57,12 +46,24 @@ impl Emulator {
             std::process::exit(1);
         });
 
-        let gdb = args.gdb.map(|port| {
-            let stream = wait_for_gdb_connection(port.unwrap_or(DEFAULT_GDB_PORT))
-                .expect("failed to wait for GDB connection");
-            gdb::Connection::new_cpu(stream, Some(Bus::gdb_monitor_commands()))
-                .expect("failed to create to GDB connection")
-        });
+        let (cpu_gdb, rsp_gdb) = args
+            .gdb
+            .map(|cmd| match cmd {
+                GdbType::Rsp => {
+                    let stream = wait_for_gdb_connection(None)
+                        .expect("failed to wait for RSP GDB connection");
+                    (None, Some(stream))
+                }
+                GdbType::Cpu => {
+                    let stream = wait_for_gdb_connection(None)
+                        .expect("failed to wait for CPU GDB connection");
+                    let cmds = Some(Bus::gdb_monitor_commands());
+                    let conn = gdb::Connection::new_cpu(stream, cmds)
+                        .expect("failed to create to GDB connection");
+                    (Some(conn), None)
+                }
+            })
+            .unwrap_or((None, None));
 
         cart.cic = cart.cic.or_else(|e| {
             println!("warning: did not recognize CIC variant, assuming {FALLBACK_CIC:#?}: {e:#x?}");
@@ -92,10 +93,10 @@ impl Emulator {
 
         // This will copy the first 0x1000 bytes of the PIF ROM to the RSP DMEM, simulating IPL2.
         // It will also write the size of RDRAM.
-        let bus = Bus::new(ctx, cart, false);
+        let bus = Bus::new(ctx, cart, rsp_gdb, has_gui);
 
         JitBuilder::new_cpu(bus)
-            .maybe_with_gdb(gdb)
+            .maybe_with_gdb(cpu_gdb)
             .with_trace(args.trace)
             .with_cpu_registers(regs.into())
             .run()
@@ -112,7 +113,7 @@ impl emgui::EmulatorHandle for Emulator {
         self.thread = Some(
             std::thread::Builder::new()
                 .name("cpu".to_string())
-                .spawn(move || Self::run(rom, ctx, args))
+                .spawn(move || Self::run(rom, ctx, args, true))
                 .expect("failed to spawn emulator thread"),
         );
     }
@@ -122,8 +123,14 @@ impl emgui::EmulatorHandle for Emulator {
     }
 }
 
+#[derive(ValueEnum, Debug, Clone)]
+enum GdbType {
+    Cpu,
+    Rsp,
+}
+
 #[derive(Parser, Debug, Clone)]
-#[command(author = "IvarWithoutBones")]
+#[command(author = "IvarWithoutBones", version)]
 struct CommandLineInterface {
     #[clap(short, long)]
     rom: Option<String>,
@@ -134,8 +141,9 @@ struct CommandLineInterface {
     #[clap(long)]
     headless: bool,
 
-    #[clap(short, long, value_name = "port")]
-    gdb: Option<Option<u16>>,
+    // TODO: configure the address
+    #[clap(long, short)]
+    gdb: Option<GdbType>,
 }
 
 fn main() {
@@ -144,7 +152,7 @@ fn main() {
     let mut emu = Emulator::new(emu_context, cli.clone());
 
     if cli.headless {
-        let rom = if let Some(path) = cli.rom {
+        let rom = if let Some(path) = &cli.rom {
             std::fs::read(path)
                 .expect("failed to read ROM")
                 .into_boxed_slice()
@@ -153,8 +161,7 @@ fn main() {
             std::process::exit(1);
         };
 
-        emu.start(rom);
-        emu.join_thread();
+        Emulator::run(rom, emu.context.take().unwrap(), cli, false);
     } else {
         let mut ui = UiBuilder::new("Delusion64", emu, ui_context)
             .with_initial_screen_size([640.0, 480.0])

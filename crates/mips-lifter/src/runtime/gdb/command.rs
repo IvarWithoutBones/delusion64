@@ -9,7 +9,7 @@ pub type MonitorCommandMap<'ctx, T, B> = HashMap<&'static str, Command<'ctx, T, 
 
 pub enum Command<'ctx, T: Target, B: Bus>
 where
-    for<'a> Environment<'a, T, B>: ValidRuntime,
+    for<'a> Environment<'a, T, B>: ValidRuntime<T>,
 {
     Internal(MonitorCommand<Environment<'ctx, T, B>>),
     External(MonitorCommand<B>),
@@ -17,7 +17,7 @@ where
 
 impl<'ctx, T: Target, B: Bus> Command<'ctx, T, B>
 where
-    for<'a> Environment<'a, T, B>: ValidRuntime,
+    for<'a> Environment<'a, T, B>: ValidRuntime<T>,
 {
     /// Merges internal and external monitor commands into a single map.
     pub fn monitor_command_map(external: Vec<MonitorCommand<B>>) -> MonitorCommandMap<'ctx, T, B> {
@@ -97,7 +97,7 @@ pub struct MonitorCommand<This> {
 
 impl<T: Target, B: Bus> Environment<'_, T, B>
 where
-    for<'a> Environment<'a, T, B>: ValidRuntime,
+    for<'a> Environment<'a, T, B>: ValidRuntime<T>,
 {
     /// The internal monitor commands, related to the CPU state.
     pub(crate) fn monitor_commands() -> Vec<MonitorCommand<Self>> {
@@ -195,7 +195,7 @@ where
 
 impl<T: Target, B: Bus> gdbstub::target::ext::monitor_cmd::MonitorCmd for Environment<'_, T, B>
 where
-    for<'a> Environment<'a, T, B>: ValidRuntime,
+    for<'a> Environment<'a, T, B>: ValidRuntime<T>,
 {
     fn handle_monitor_cmd(
         &mut self,

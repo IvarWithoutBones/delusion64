@@ -209,6 +209,15 @@ impl<T: Integer, const LEN: usize> RegisterBank<T, LEN> {
         self.iter(atomic::Ordering::Relaxed)
     }
 
+    /// Copies the contents of `self` into `other`, without affecting the ownership of either.
+    pub fn copy_into(&self, other: &Self) {
+        let ordering = atomic::Ordering::Relaxed;
+        for (index, value) in self.iter(ordering).enumerate() {
+            // SAFETY: `index` is always within bounds, since `self` has the same length as `other`.
+            unsafe { other.write_unchecked(index, value, ordering) };
+        }
+    }
+
     pub(crate) fn map_into<'ctx>(
         &self,
         module: &Module<'ctx>,

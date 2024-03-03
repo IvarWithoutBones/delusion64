@@ -1,24 +1,41 @@
 use self::command::{Command, MonitorCommand, MonitorCommandMap};
-use super::{memory::tlb::AccessMode, Bus, Environment, GdbIntegration, ValidRuntime};
-use crate::target::{cpu::Cpu, Memory, Target};
+use super::{Bus, Environment, GdbIntegration, ValidRuntime};
+use crate::target::{cpu::Cpu, rsp::Rsp, Target};
 use gdbstub::{
     conn::ConnectionExt,
     stub::{state_machine::GdbStubStateMachine, GdbStub, SingleThreadStopReason},
-    target::{
-        self,
-        ext::{
-            base::{
-                single_register_access::SingleRegisterAccess,
-                singlethread::{SingleThreadBase, SingleThreadResume, SingleThreadSingleStep},
-            },
-            breakpoints::{Breakpoints, HwWatchpoint, SwBreakpoint, WatchKind},
-        },
-        Target as GdbTarget, TargetResult,
-    },
+    target::ext::breakpoints::WatchKind,
 };
 use std::{collections::HashSet, net::TcpStream, ops::Range};
 
 pub(crate) mod command;
+mod extension;
+
+pub(crate) trait AsU64: Sized + Copy + Clone + std::fmt::Debug + std::fmt::Display {
+    fn as_u64(self) -> u64;
+
+    fn from_u64(value: u64) -> Self;
+}
+
+impl AsU64 for u64 {
+    fn as_u64(self) -> u64 {
+        self
+    }
+
+    fn from_u64(value: u64) -> Self {
+        value
+    }
+}
+
+impl AsU64 for u32 {
+    fn as_u64(self) -> u64 {
+        self as u64
+    }
+
+    fn from_u64(value: u64) -> Self {
+        value as u32
+    }
+}
 
 /// An error that can occur when creating a GDB connection.
 #[derive(thiserror::Error, Debug)]
@@ -43,7 +60,7 @@ impl<B: Bus> Connection<B> {
         monitor_commands: Option<Vec<MonitorCommand<B>>>,
     ) -> Result<Self, GdbConnectionError>
     where
-        for<'a> Environment<'a, T, B>: ValidRuntime,
+        for<'a> Environment<'a, T, B>: ValidRuntime<T>,
     {
         if let Some(cmds) = &monitor_commands {
             for (i, cmd) in cmds.iter().enumerate() {
@@ -74,6 +91,14 @@ impl<B: Bus> Connection<B> {
     ) -> Result<Self, GdbConnectionError> {
         Self::new_with_target::<Cpu>(stream, monitor_commands)
     }
+
+    /// Create a new GDB connection for the RSP target, and optionally register custom monitor commands.
+    pub fn new_rsp(
+        stream: TcpStream,
+        monitor_commands: Option<Vec<MonitorCommand<B>>>,
+    ) -> Result<Self, GdbConnectionError> {
+        Self::new_with_target::<Rsp>(stream, monitor_commands)
+    }
 }
 
 /// MIPS-specific breakpoint kinds.
@@ -99,7 +124,7 @@ impl gdbstub::arch::BreakpointKind for BreakpointKind {
             3 => BreakpointKind::MicroMips16,
             4 => BreakpointKind::Mips32,
             5 => BreakpointKind::MicroMips32,
-            _ => None?,
+            _ => return None,
         })
     }
 }
@@ -118,12 +143,14 @@ enum State {
     SingleStep,
 }
 
+type Address<'ctx, T, B> = <Environment<'ctx, T, B> as GdbIntegration<T>>::Usize;
+
 pub struct Debugger<'ctx, T: Target, B: Bus>
 where
-    for<'a> Environment<'a, T, B>: ValidRuntime,
+    for<'a> Environment<'a, T, B>: ValidRuntime<T>,
 {
     state_machine: Option<GdbStubStateMachine<'ctx, Environment<'ctx, T, B>, TcpStream>>,
-    stop_reason: Option<SingleThreadStopReason<u64>>,
+    stop_reason: Option<SingleThreadStopReason<Address<'ctx, T, B>>>,
     state: State,
     monitor_commands: MonitorCommandMap<'ctx, T, B>,
     breakpoints: HashSet<u64>,
@@ -132,7 +159,7 @@ where
 
 impl<'ctx, T: Target, B: Bus> Debugger<'ctx, T, B>
 where
-    for<'a> Environment<'a, T, B>: ValidRuntime,
+    for<'a> Environment<'a, T, B>: ValidRuntime<T>,
 {
     pub fn new(env: &mut Environment<'ctx, T, B>, gdb: Connection<B>) -> Self {
         let state_machine = GdbStub::new(gdb.stream).run_state_machine(env).unwrap();
@@ -179,13 +206,14 @@ where
 
 impl<T: Target, B: Bus> Environment<'_, T, B>
 where
-    for<'a> Environment<'a, T, B>: ValidRuntime,
+    for<'a> Environment<'a, T, B>: ValidRuntime<T>,
 {
-    fn debugger_signal_memory_access(&mut self, addr: u64, len: usize, kind: WatchKind) {
+    fn debugger_signal_memory_access(&mut self, addr: impl AsU64, len: usize, kind: WatchKind) {
         let Some(debugger) = self.debugger.as_mut() else {
             return;
         };
 
+        let addr = addr.as_u64();
         if let Some(watch) = debugger.watchpoints.iter().find(|w| {
             let kind_match = (w.kind == kind) || (w.kind == WatchKind::ReadWrite);
             let addr_match =
@@ -196,7 +224,7 @@ where
             debugger.stop_reason = Some(SingleThreadStopReason::Watch {
                 tid: (),
                 kind: watch.kind,
-                addr,
+                addr: Address::from_u64(addr),
             });
         }
     }
@@ -252,236 +280,5 @@ where
                 self.panic_update_debugger("GDB disconnected");
             }
         };
-    }
-}
-
-impl<T: Target, B: Bus> GdbTarget for Environment<'_, T, B>
-where
-    for<'a> Environment<'a, T, B>: ValidRuntime,
-{
-    type Arch = <Self as GdbIntegration>::Arch;
-    type Error = &'static str;
-
-    #[inline(always)]
-    fn base_ops(&mut self) -> target::ext::base::BaseOps<'_, Self::Arch, Self::Error> {
-        target::ext::base::BaseOps::SingleThread(self)
-    }
-
-    #[inline(always)]
-    fn support_breakpoints(
-        &mut self,
-    ) -> Option<target::ext::breakpoints::BreakpointsOps<'_, Self>> {
-        Some(self)
-    }
-
-    #[inline(always)]
-    fn support_monitor_cmd(&mut self) -> Option<target::ext::monitor_cmd::MonitorCmdOps<'_, Self>> {
-        // See `src/runtime/gdb/command.rs`.
-        Some(self)
-    }
-}
-
-impl<T: Target, B: Bus> Breakpoints for Environment<'_, T, B>
-where
-    for<'a> Environment<'a, T, B>: ValidRuntime,
-{
-    #[inline(always)]
-    fn support_sw_breakpoint(
-        &mut self,
-    ) -> Option<target::ext::breakpoints::SwBreakpointOps<'_, Self>> {
-        Some(self)
-    }
-
-    #[inline(always)]
-    fn support_hw_watchpoint(
-        &mut self,
-    ) -> Option<target::ext::breakpoints::HwWatchpointOps<'_, Self>> {
-        Some(self)
-    }
-}
-
-impl<T: Target, B: Bus> SwBreakpoint for Environment<'_, T, B>
-where
-    for<'a> Environment<'a, T, B>: ValidRuntime,
-{
-    fn add_sw_breakpoint(
-        &mut self,
-        vaddr: <Self::Arch as gdbstub::arch::Arch>::Usize,
-        _kind: <Self::Arch as gdbstub::arch::Arch>::BreakpointKind,
-    ) -> TargetResult<bool, Self> {
-        Ok(self.debugger.as_mut().unwrap().breakpoints.insert(vaddr))
-    }
-
-    fn remove_sw_breakpoint(
-        &mut self,
-        vaddr: <Self::Arch as gdbstub::arch::Arch>::Usize,
-        _kind: <Self::Arch as gdbstub::arch::Arch>::BreakpointKind,
-    ) -> TargetResult<bool, Self> {
-        Ok(self.debugger.as_mut().unwrap().breakpoints.remove(&vaddr))
-    }
-}
-
-impl<T: Target, B: Bus> HwWatchpoint for Environment<'_, T, B>
-where
-    for<'a> Environment<'a, T, B>: ValidRuntime,
-{
-    fn add_hw_watchpoint(
-        &mut self,
-        addr: <Self::Arch as gdbstub::arch::Arch>::Usize,
-        len: <Self::Arch as gdbstub::arch::Arch>::Usize,
-        kind: WatchKind,
-    ) -> TargetResult<bool, Self> {
-        let addresses = addr..addr + len;
-        let watchpoint = Watchpoint { addresses, kind };
-        self.debugger.as_mut().unwrap().watchpoints.push(watchpoint);
-        Ok(true)
-    }
-
-    fn remove_hw_watchpoint(
-        &mut self,
-        addr: <Self::Arch as gdbstub::arch::Arch>::Usize,
-        len: <Self::Arch as gdbstub::arch::Arch>::Usize,
-        kind: WatchKind,
-    ) -> TargetResult<bool, Self> {
-        let addresses = addr..addr + len;
-        let watchpoints = &mut self.debugger.as_mut().unwrap().watchpoints;
-        let Some(index) = watchpoints
-            .iter()
-            .position(|w| (w.addresses == addresses) && (w.kind == kind))
-        else {
-            return Ok(false);
-        };
-        watchpoints.remove(index);
-        Ok(true)
-    }
-}
-
-impl<T: Target, B: Bus> SingleThreadBase for Environment<'_, T, B>
-where
-    for<'a> Environment<'a, T, B>: ValidRuntime,
-{
-    fn read_addrs(
-        &mut self,
-        start_addr: <Self::Arch as gdbstub::arch::Arch>::Usize,
-        data: &mut [u8],
-    ) -> TargetResult<usize, Self> {
-        for i in (0..data.len()).step_by(4) {
-            let word: u32 = {
-                let vaddr = start_addr + i as u64;
-                let paddr = self
-                    .memory
-                    .virtual_to_physical_address(vaddr, AccessMode::Read, &self.registers)
-                    .map_err(|_| ())?;
-                self.read(vaddr, paddr).map_err(|_| ())?.into()
-            };
-            let end = data.len().min(i + 4);
-            data[i..end].copy_from_slice(&word.to_be_bytes()[..end - i]);
-        }
-        Ok(data.len())
-    }
-
-    fn write_addrs(
-        &mut self,
-        start_addr: <Self::Arch as gdbstub::arch::Arch>::Usize,
-        data: &[u8],
-    ) -> TargetResult<(), Self> {
-        for i in (0..data.len()).step_by(4) {
-            let value = {
-                let end = data.len().min(i + 4);
-                u32::from_be_bytes(data[i..end].try_into().unwrap())
-            };
-            let vaddr = start_addr + i as u64;
-            let paddr = self
-                .memory
-                .virtual_to_physical_address(vaddr, AccessMode::Write, &self.registers)
-                .map_err(|_| ())?;
-            self.write(vaddr, paddr, value.into()).map_err(|_| ())?;
-        }
-        Ok(())
-    }
-
-    fn read_registers(
-        &mut self,
-        regs: &mut <Self::Arch as gdbstub::arch::Arch>::Registers,
-    ) -> TargetResult<(), Self> {
-        self.gdb_read_registers(regs)
-    }
-
-    fn write_registers(
-        &mut self,
-        regs: &<Self::Arch as gdbstub::arch::Arch>::Registers,
-    ) -> TargetResult<(), Self> {
-        self.gdb_write_registers(regs)
-    }
-
-    #[inline(always)]
-    fn support_single_register_access(
-        &mut self,
-    ) -> Option<target::ext::base::single_register_access::SingleRegisterAccessOps<'_, (), Self>>
-    {
-        Some(self)
-    }
-
-    #[inline(always)]
-    fn support_resume(
-        &mut self,
-    ) -> Option<target::ext::base::singlethread::SingleThreadResumeOps<'_, Self>> {
-        Some(self)
-    }
-}
-
-impl<T: Target, B: Bus> SingleRegisterAccess<()> for Environment<'_, T, B>
-where
-    for<'a> Environment<'a, T, B>: ValidRuntime,
-{
-    fn read_register(
-        &mut self,
-        _tid: (),
-        reg_id: <Self::Arch as gdbstub::arch::Arch>::RegId,
-        buf: &mut [u8],
-    ) -> TargetResult<usize, Self> {
-        self.gdb_read_register(reg_id, buf)
-    }
-
-    fn write_register(
-        &mut self,
-        _tid: (),
-        reg_id: <Self::Arch as gdbstub::arch::Arch>::RegId,
-        val: &[u8],
-    ) -> TargetResult<(), Self> {
-        self.gdb_write_register(reg_id, val)
-    }
-}
-
-impl<T: Target, B: Bus> SingleThreadResume for Environment<'_, T, B>
-where
-    for<'a> Environment<'a, T, B>: ValidRuntime,
-{
-    fn resume(&mut self, signal: Option<gdbstub::common::Signal>) -> Result<(), Self::Error> {
-        if let Some(signal) = signal {
-            println!("gdb: resume with signal {signal} is not supported");
-        }
-        self.debugger.as_mut().unwrap().state = State::Running;
-        Ok(())
-    }
-
-    #[inline(always)]
-    fn support_single_step(
-        &mut self,
-    ) -> Option<target::ext::base::singlethread::SingleThreadSingleStepOps<'_, Self>> {
-        Some(self)
-    }
-}
-
-impl<T: Target, B: Bus> SingleThreadSingleStep for Environment<'_, T, B>
-where
-    for<'a> Environment<'a, T, B>: ValidRuntime,
-{
-    fn step(&mut self, signal: Option<gdbstub::common::Signal>) -> Result<(), Self::Error> {
-        if let Some(signal) = signal {
-            println!("gdb: step with signal {signal} is not supported");
-        }
-        self.debugger.as_mut().unwrap().state = State::SingleStep;
-        Ok(())
     }
 }

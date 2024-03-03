@@ -8,6 +8,7 @@ use mips_lifter::{
     JitBuilder, RegisterBank,
 };
 use std::{
+    net::TcpStream,
     sync::{
         atomic::{self, AtomicUsize},
         Arc,
@@ -22,7 +23,7 @@ pub struct Handle {
 }
 
 impl Handle {
-    pub fn new(memory: Memory) -> (Self, Registers) {
+    pub fn new(memory: Memory, gdb: Option<TcpStream>) -> (Self, Registers) {
         let cycle_budget = Arc::from(AtomicUsize::default());
         let special = SpecialRegisterBank::from(RegisterBank::zeroed_shared());
         let mut control = ControlRegisterBank::from(RegisterBank::zeroed_shared());
@@ -36,7 +37,13 @@ impl Handle {
                 let special_registers = special.share().expect("special regs are shared");
                 let control_registers = control.share().expect("control regs are shared");
                 std::thread::spawn(|| {
-                    Bus::new(control_registers, special_registers, cycle_budget, memory)
+                    Bus::new(
+                        control_registers,
+                        special_registers,
+                        cycle_budget,
+                        memory,
+                        gdb,
+                    )
                 })
             },
             cycle_budget,
@@ -62,6 +69,7 @@ impl Bus {
         special: SpecialRegisterBank,
         cycle_budget: Arc<AtomicUsize>,
         memory: Memory,
+        gdb: Option<TcpStream>,
     ) -> Self {
         while control.read_parsed::<Status>().halted() {
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -78,8 +86,14 @@ impl Bus {
             ..Default::default()
         };
 
+        let gdb = gdb.map(|stream| {
+            mips_lifter::gdb::Connection::new_rsp(stream, None)
+                .expect("failed to create GDB connection")
+        });
+
         JitBuilder::new_rsp(this)
             .with_rsp_registers(regs)
+            .maybe_with_gdb(gdb)
             .with_trace(true)
             .run()
     }

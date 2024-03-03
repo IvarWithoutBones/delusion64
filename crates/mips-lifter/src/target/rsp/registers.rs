@@ -116,7 +116,7 @@ impl_control_reg_def!(
     (Semaphore, Semaphore),
 );
 
-#[derive(Default)]
+#[derive(Default, Clone, PartialEq)]
 pub struct Registers {
     pub general_purpose: RegisterBank<u32, { register::GeneralPurpose::count() }>,
     pub control: ControlRegisterBank,
@@ -229,11 +229,15 @@ impl fmt::Debug for Registers {
 }
 
 impl target::RegisterStorage for Registers {
-    type RegisterID = RegisterID;
+    type Id = RegisterID;
     type Globals<'ctx> = RegisterGlobals<'ctx>;
 
-    fn read_program_counter(&self) -> u64 {
-        self.read(register::Special::ProgramCounter)
+    fn read_register(&self, reg: Self::Id) -> u64 {
+        self.read(reg.0).try_into().expect("value too large")
+    }
+
+    fn write_register(&mut self, reg: Self::Id, value: u64) {
+        self.write(reg.0, value.into());
     }
 
     fn build_globals<'ctx>(
@@ -250,12 +254,19 @@ impl target::RegisterStorage for Registers {
             special: self.special.0.map_into(module, exec_engine, "special"),
         }
     }
+
+    fn copy_into(&self, other: &mut Self) {
+        self.general_purpose.copy_into(&other.general_purpose);
+        self.vector.copy_into(&other.vector);
+        self.control.0.copy_into(&other.control.0);
+        self.special.0.copy_into(&other.special.0);
+    }
 }
 
 /// A single RSP register.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
-pub(crate) struct RegisterID(register::Register);
+pub(crate) struct RegisterID(pub(crate) register::Register);
 
 impl target::RegisterID for RegisterID {
     const PROGRAM_COUNTER: Self = Self(register::Register::Special(
