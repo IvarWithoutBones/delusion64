@@ -53,7 +53,7 @@ impl<B: Bus> TargetDependantCallbacks for Environment<'_, Rsp, B> {
     }
 
     fn on_block_entered(&mut self, _instructions_in_block: usize) -> usize {
-        // TODO: mechanism for the CPU to mark blocks as dirty
+        // TODO: mechanism for the CPU to mark blocks as dirty, this breaks the `llvm-ir` GDB monitor command
         self.codegen.labels.remove_within_range(0..0x1000);
         0
     }

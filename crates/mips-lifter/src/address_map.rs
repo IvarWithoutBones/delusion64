@@ -9,62 +9,75 @@ use std::ops::Range;
 #[allow(clippy::module_name_repetitions)]
 #[derive(Debug, Default)]
 pub struct VirtualAddressMap<'ctx, T: Target> {
-    labels: Vec<LabelWithContext<'ctx, T>>,
+    inner: Vec<LabelWithContext<'ctx, T>>,
 }
 
 impl<'ctx, T: Target> VirtualAddressMap<'ctx, T> {
     pub const fn new() -> Self {
-        Self { labels: Vec::new() }
+        Self { inner: Vec::new() }
     }
 
-    /// On success this returns the label that contains the given virtual address,
-    /// otherwise the index where it should be inserted while maintaining the sort order, which is meant to be used with [`insert`].
+    /// Finds a label that starts with the given virtual address. If no such label exists, the index where it could be inserted is returned.
     pub fn get(&self, vaddr: u64) -> Result<&LabelWithContext<'ctx, T>, usize> {
-        self.labels
+        self.inner
             .binary_search_by_key(&vaddr, |l| l.label.start())
             // SAFETY: binary_search_by_key returns the index of the found element, which is always in bounds.
-            .map(|i| unsafe { self.labels.get_unchecked(i) })
+            .map(|i| unsafe { self.inner.get_unchecked(i) })
+    }
+
+    /// An iterator over all labels that contain the given virtual address.
+    pub fn get_containing(&self, vaddr: u64) -> impl Iterator<Item = &LabelWithContext<'ctx, T>> {
+        #[allow(clippy::range_plus_one)] // `indices_containing` does not accept RangeInclusive.
+        self.indices_containing(vaddr..vaddr + 1)
+            .into_iter()
+            .flat_map(|range| self.inner[range].iter())
     }
 
     /// Inserts the given label at the given index. After insertion, the labels must still be sorted by starting address.
-    /// The index is obtained by the error case of the [`get`] method, when no existing label could be found.
+    /// The index can safely be obtained by calling [`Self::get`], assuming no mutation occurs between the calls.
     pub unsafe fn insert(&mut self, index: usize, label: LabelWithContext<'ctx, T>) {
-        self.labels.insert(index, label);
+        self.inner.insert(index, label);
+    }
+
+    /// Get a mutable reference to the inner vector.
+    ///
+    /// # Safety
+    /// The caller must ensure that the vector is not modified in a way that would break the sort order.
+    pub unsafe fn inner_mut(&mut self) -> &mut Vec<LabelWithContext<'ctx, T>> {
+        &mut self.inner
     }
 
     /// Removes every label that resides within the given range of virtual addresses.
     pub fn remove_within_range(&mut self, range: Range<u64>) {
-        let start = {
-            let start = self
-                .labels
-                .partition_point(|l| l.label.start() < range.start);
-            (0..start)
-                .rev()
-                .take_while(|&i| {
-                    // SAFETY: We iterate backwards from start, the index is always in bounds.
-                    let label = unsafe { self.labels.get_unchecked(i) };
-                    #[allow(clippy::cast_possible_truncation)] // Limited by range() already
-                    label.label.range().contains(&range.start)
-                })
-                .last()
-                .unwrap_or(start)
-        };
-
-        let end = {
-            let end = self.labels.partition_point(|l| l.label.start() < range.end);
-            (end..self.labels.len())
-                .take_while(|&i| {
-                    // SAFETY: We iterate until labels.len(), the index is always in bounds.
-                    let label = unsafe { self.labels.get_unchecked(i) };
-                    #[allow(clippy::cast_possible_truncation)] // Limited by range() already
-                    label.label.range().contains(&range.end)
-                })
-                .last()
-                .unwrap_or(end)
-        };
-
-        if start != end {
-            self.labels.drain(start..end);
+        if let Some(indices) = self.indices_containing(range) {
+            self.inner.drain(indices);
         }
+    }
+
+    fn indices_containing(&self, addrs: Range<u64>) -> Option<Range<usize>> {
+        // This is a bit tricky because of the backtracking, this is the idea:
+        // 1. Find the index of the first label that starts at the given address, or the place it could be inserted.
+        // 2. Iterate backwards until the address no longer falls within the range of the label.
+        //    This is needed because different labels may overlap due to branches.
+        // 3. Take the index of the matching label with the lowest starting address, or return None.
+        // 4. Iterate forwards until the address no longer falls within the range of the label.
+        let overlaps = |a: &Range<u64>, b: &Range<u64>| (a.start < b.end) && (b.start < a.end);
+        let start = (0..=self
+            .inner
+            .binary_search_by_key(&addrs.start, |l| l.label.start())
+            .map_or_else(|i| i.saturating_sub(1), |i| i))
+            .rev()
+            .take_while(|&i| {
+                // SAFETY: `binary_search_by_key` returns a valid index, from which we iterate backwards.
+                let range = unsafe { self.inner.get_unchecked(i) }.label.range();
+                overlaps(&range, &addrs)
+            })
+            .last()?;
+        let end = self.inner[start..]
+            .iter()
+            .take_while(|l| overlaps(&l.label.range(), &addrs))
+            .count()
+            .checked_add(start)?;
+        Some(start..end)
     }
 }

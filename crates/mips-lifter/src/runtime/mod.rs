@@ -6,7 +6,7 @@ use self::{
 };
 use crate::{
     codegen::{self, CodeGen, CompilationError, FallthroughAmount},
-    label::{generate_label_functions, JitFunctionPointer, LabelWithContext},
+    label::{generate_labels, JitFunctionPointer, LabelWithContext},
     runtime::{
         bus::{BusError, PanicAction},
         memory::tlb::AccessMode,
@@ -15,7 +15,8 @@ use crate::{
     JitBuilder,
 };
 use inkwell::{context::Context, execution_engine::ExecutionEngine, module::Module};
-use std::{cell::UnsafeCell, collections::HashMap, mem::size_of, pin::Pin};
+use mips_decomp::INSTRUCTION_SIZE;
+use std::{cell::UnsafeCell, collections::HashMap, pin::Pin};
 use strum::IntoEnumIterator;
 
 pub(crate) use self::function::RuntimeFunction;
@@ -259,7 +260,7 @@ where
     fn read_label_list(&mut self, mut paddr: PhysicalAddress, vaddr: u64) -> T::LabelList {
         let iter = std::iter::from_fn(|| {
             let value = self.read_raw_instruction(paddr);
-            paddr += size_of::<u32>() as PhysicalAddress;
+            paddr += INSTRUCTION_SIZE as PhysicalAddress;
             Some(value)
         })
         // Arbitrary limit on the maximum number of instructions in a block, to avoid infinitely fetching when there is no terminator.
@@ -307,9 +308,7 @@ where
                 if self.trace {
                     println!("found existing block at {vaddr:#x}");
                 }
-
-                let ptr = label.pointer.unwrap();
-                return ptr;
+                return label.pointer.expect("label pointer is cached");
             }
             Err(insert_index) => insert_index,
         };
@@ -327,12 +326,13 @@ where
             .codegen
             .add_dynamic_function(module, globals, |codegen, module| {
                 let mut lab: LabelWithContext<'_, T> = {
-                    let mut labels = generate_label_functions(label_list, codegen.context, module);
+                    let mut labels = generate_labels(label_list, codegen.context, module);
                     labels
                         .pop()
                         .ok_or(CompilationError::LabelFunctionGeneration { vaddr })?
                 };
 
+                // TODO: move this logic to label.rs
                 if let Ok(fallthrough) = codegen.labels.get(lab.label.end() as u64) {
                     lab.fallthrough_fn = Some(fallthrough.function);
                     if self.trace {
@@ -359,7 +359,7 @@ where
             })
             .unwrap_or_else(|err| self.panic_update_debugger(err.to_string().as_str()));
 
-        let ptr = lab.pointer.unwrap();
+        let ptr = lab.pointer.expect("label pointer is cached");
         self.codegen.labels.insert(insert_index, lab);
         ptr
     }

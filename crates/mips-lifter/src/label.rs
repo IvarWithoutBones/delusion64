@@ -7,10 +7,7 @@ use crate::{
 };
 use inkwell::{attributes::AttributeLoc, context::Context, module::Module, values::FunctionValue};
 use mips_decomp::INSTRUCTION_SIZE;
-use std::{
-    marker::PhantomData,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub type JitFunctionPointer = usize;
 
@@ -19,18 +16,19 @@ static ID: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug)]
 pub struct LabelWithContext<'ctx, T: Target> {
-    /// The label containing the instructions that will be compiled into this function.
+    /// The container for the instructions that will be compiled into this function.
     pub label: T::Label,
-    /// The function that will be called to execute the instructions in this label.
+    /// The native LLVM function that will be called to emulate the instructions.
     pub function: FunctionValue<'ctx>,
+    /// A raw pointer to the JIT compiled function, from LLVM's execution engine. Cached to avoid hashing the function name to find it.
+    pub pointer: Option<JitFunctionPointer>,
+    /// The module this function is defined in. This will be set once code generation is complete.
+    pub module: Option<Module<'ctx>>,
+
     /// The function that will be called to fall through to the next block.
     pub fallthrough_fn: Option<FunctionValue<'ctx>>,
     /// The instruction that the next block contains, if the current block ends with a delay slot.
     pub fallthrough_instr: Option<T::Instruction>,
-    /// A raw pointer to the JIT compiled function, from LLVM's execution engine.
-    pub pointer: Option<JitFunctionPointer>,
-    /// The guest target that this label is compiled for.
-    _target: PhantomData<T>,
 }
 
 impl<'ctx, T: Target> LabelWithContext<'ctx, T> {
@@ -59,8 +57,8 @@ impl<'ctx, T: Target> LabelWithContext<'ctx, T> {
             function,
             fallthrough_fn,
             fallthrough_instr,
+            module: None,
             pointer: None,
-            _target: PhantomData,
         }
     }
 
@@ -188,12 +186,12 @@ impl<'ctx, T: Target> LabelWithContext<'ctx, T> {
 
     fn index_to_virtual_address(&self, index: usize) -> u64 {
         // Assumes the label start corresponds to a virtual address.
-        debug_assert!((self.label.len() / 4) > index);
+        debug_assert!((self.label.len() / INSTRUCTION_SIZE) > index);
         (self.label.start() as usize + (index * INSTRUCTION_SIZE)) as u64
     }
 }
 
-pub fn generate_label_functions<'ctx, T: Target>(
+pub fn generate_labels<'ctx, T: Target>(
     labels: T::LabelList,
     context: &'ctx Context,
     module: &Module<'ctx>,

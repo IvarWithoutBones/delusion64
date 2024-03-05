@@ -89,14 +89,16 @@ pub struct Globals<'ctx, T: Target> {
 #[derive(Debug)]
 pub struct CodeGen<'ctx, T: Target> {
     pub context: &'ctx Context,
-    module: Module<'ctx>,
     pub builder: Builder<'ctx>,
     pub execution_engine: ExecutionEngine<'ctx>,
     pub labels: VirtualAddressMap<'ctx, T>,
     globals: Option<Globals<'ctx, T>>,
     helpers: Helpers<'ctx>,
-    /// Every single module we compiled. We need to keep these around to cleanly shut down LLVM.
-    modules: Vec<Module<'ctx>>,
+
+    /// The module containing the main function. Everything branches from here.
+    main_module: Module<'ctx>,
+    /// The module we are currently recompiling into. This will get moved into the label once we're done with it.
+    active_module: Option<Module<'ctx>>,
 }
 
 impl<'ctx, T: Target> CodeGen<'ctx, T> {
@@ -106,9 +108,9 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         execution_engine: ExecutionEngine<'ctx>,
     ) -> Self {
         Self {
-            modules: vec![],
             context,
-            module,
+            active_module: None,
+            main_module: module,
             helpers: Helpers::new(),
             builder: context.create_builder(),
             execution_engine,
@@ -148,7 +150,7 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
 
     /// The currently active module.
     pub fn module(&self) -> &Module<'ctx> {
-        self.modules.last().unwrap_or(&self.module)
+        self.active_module.as_ref().unwrap_or(&self.main_module)
     }
 
     pub fn fallthrough_function(&self, amount: FallthroughAmount) -> FunctionValue<'ctx> {
@@ -217,36 +219,24 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         Ok(())
     }
 
-    pub fn add_dynamic_function<F>(
+    pub fn add_dynamic_function(
         &mut self,
         module: Module<'ctx>,
         globals: Globals<'ctx, T>,
-        f: F,
-    ) -> CompilationResult<LabelWithContext<'ctx, T>>
-    where
-        F: FnOnce(&CodeGen<'ctx, T>, &Module<'ctx>) -> CompilationResult<LabelWithContext<'ctx, T>>,
-    {
+        f: impl FnOnce(&CodeGen<'ctx, T>, &Module<'ctx>) -> CompilationResult<LabelWithContext<'ctx, T>>,
+    ) -> CompilationResult<LabelWithContext<'ctx, T>> {
         self.globals = Some(globals);
         self.helpers.map_into(&module);
-        self.modules.push(module);
+        self.active_module = Some(module);
 
         let mut lab = f(self, self.module())?;
         self.link_in_module(&mut lab)?;
+        lab.module = Some(self.active_module.take().unwrap());
+
         if cfg!(debug_assertions) {
             self.verify()?;
         }
         Ok(lab)
-    }
-
-    fn intrinsic_declaration(
-        &self,
-        name: &'static str,
-        param_types: &[BasicTypeEnum],
-    ) -> CompilationResult<FunctionValue<'ctx>> {
-        Intrinsic::find(name)
-            .ok_or(CompilationError::IntrinsicNotFound(name))?
-            .get_declaration(self.module(), param_types)
-            .ok_or(CompilationError::IntrinsicNotFound(name))
     }
 
     fn call_intrinsic(
@@ -256,7 +246,10 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         params: &[BasicMetadataValueEnum<'ctx>],
         call_name: &str,
     ) -> CompilationResult<BasicValueEnum<'ctx>> {
-        let func = self.intrinsic_declaration(intrinsic_name, param_types)?;
+        let func = Intrinsic::find(intrinsic_name)
+            .ok_or(CompilationError::IntrinsicNotFound(intrinsic_name))?
+            .get_declaration(self.module(), param_types)
+            .ok_or(CompilationError::IntrinsicNotFound(intrinsic_name))?;
         self.builder
             .build_call(func, params, call_name)?
             .try_as_basic_value()
@@ -593,16 +586,20 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
 
 impl<T: Target> Drop for CodeGen<'_, T> {
     fn drop(&mut self) {
-        // Without manually removing the modules from the execution engine LLVM segfaults.
-        // We use drain here to run their Drop implementation prior to anything else, which prevents out of bounds reads/writes according to valgrind.
-        for module in self.modules.drain(..) {
+        // SAFETY: We remove ever module here, so the sort order will be maintained.
+        let modules = unsafe { self.labels.inner_mut() }
+            .drain(..)
+            .flat_map(|l| l.module)
+            .chain(self.active_module.take());
+
+        // Without manually removing the modules from the execution engine LLVM segfaults when restarting the JIT.
+        // We use `drain()` to run their `Drop` implementation prior to anything else,
+        // which prevents out of bounds reads/writes according to valgrind.
+        for module in modules {
             if let Err(err) = self.execution_engine.remove_module(&module) {
                 // Note that to avoid double-panics while unwinding we don't use `panic!` here, even though the error is fatal.
                 println!("failed to remove module while dropping CodeGen: {err}");
             }
-        }
-        if let Err(err) = self.execution_engine.remove_module(&self.module) {
-            println!("failed to remove main module while dropping CodeGen: {err}");
         }
     }
 }

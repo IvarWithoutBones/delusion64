@@ -67,7 +67,7 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
 
     fn build_main(&mut self) -> CompilationResult<()> {
         let fn_type = self.context.void_type().fn_type(&[], false);
-        let main_fn = self.module.add_function("main", fn_type, None);
+        let main_fn = self.main_module.add_function("main", fn_type, None);
 
         let entry_block = self.context.append_basic_block(main_fn, "entry");
         self.builder.position_at_end(entry_block);
@@ -85,7 +85,7 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         let void_type = self.context.void_type();
 
         // Generate the function signature
-        let func = self.set_func_attrs(self.module.add_function(
+        let func = self.set_func_attrs(self.main_module.add_function(
             "jump_to_vaddr",
             void_type.fn_type(&[i64_type.into()], false),
             None,
@@ -114,7 +114,7 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         let make_func =
             |codegen: &Self, amount: u64, name: &str| -> CompilationResult<FunctionValue<'ctx>> {
                 // Generate the function declaration.
-                let func = codegen.set_func_attrs(codegen.module.add_function(
+                let func = codegen.set_func_attrs(codegen.main_module.add_function(
                     name,
                     codegen.context.void_type().fn_type(&[], false),
                     None,

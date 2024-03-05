@@ -1,6 +1,6 @@
 use crate::{
     runtime::{memory::tlb::AccessMode, Bus, Environment, GdbIntegration, ValidRuntime},
-    target::Target,
+    target::{RegisterStorage, Target},
 };
 use gdbstub::outputln;
 use std::{collections::HashMap, num::ParseIntError};
@@ -174,9 +174,24 @@ where
             },
             MonitorCommand {
                 name: "llvm-ir",
-                description: "dump the LLVM IR for the previously compiled module. If an argument is given, it is used as the output file path.",
+                description: "dump the LLVM IR for a given virtual address, or the program counter. usage: llvm-ir [vaddr] [path]",
                 handler: Box::new(|env, out, args| {
-                    let module = env.codegen.module();
+                    let vaddr = if let Some(vaddr) = args.next() {
+                        str_to_u64(vaddr).map_err(|err| format!("invalid virtual address: {err}"))?
+                    } else {
+                        env.registers.read_program_counter()
+                    };
+
+                    let module = env
+                        .codegen
+                        .labels
+                        .get_containing(vaddr)
+                        .next()
+                        .ok_or_else(|| format!("no label at {vaddr:#x}"))?
+                        .module
+                        .as_ref()
+                        .ok_or_else(|| format!("label at {vaddr:#x} contains no module"))?;
+
                     if let Some(path) = args.next() {
                         module.print_to_file(path).map_err(|err| err.to_string())?;
                         outputln!(out, "wrote LLVM IR to {path}");
@@ -210,7 +225,7 @@ where
             let mut iter = cmd.split_whitespace().peekable();
 
             // Juggle around the command to appease the borrow checker
-            let cmd = if let Some(name) = iter.next() {
+            if let Some(name) = iter.next() {
                 if let Some(mut cmd) = self
                     .debugger
                     .as_mut()
@@ -221,20 +236,18 @@ where
                     cmd.handle(self, &mut out, &mut iter).unwrap_or_else(|err| {
                         outputln!(out, "{err:#?}");
                     });
-                    Some(cmd)
+
+                    self.debugger
+                        .as_mut()
+                        .unwrap()
+                        .monitor_commands
+                        .insert(cmd.name(), cmd);
                 } else {
                     outputln!(out, "unrecognized command: '{cmd}'");
-                    None
                 }
             } else {
                 outputln!(out, "no command specified");
-                None
             };
-            if let Some(cmd) = cmd {
-                // Put the command back into the debugger
-                let debugger = self.debugger.as_mut().unwrap();
-                debugger.monitor_commands.insert(cmd.name(), cmd);
-            }
 
             if iter.peek().is_some() {
                 outputln!(out, "warning: ignoring extra arguments");
@@ -254,7 +267,7 @@ pub fn str_to_u64(str: &str) -> Result<u64, ParseIntError> {
         .map(|(prefix, radix)| (&str[prefix.len()..], *radix))
         .unwrap_or((str, 10));
     // Read as a signed integer to support negative numbers
-    Ok(i64::from_str_radix(str, radix)? as u64)
+    Ok(i128::from_str_radix(str, radix)? as u64)
 }
 
 #[cfg(test)]
