@@ -3,9 +3,12 @@ use crate::{
     runtime::{bus::Bus, memory::tlb::AccessMode, Environment, GdbIntegration, ValidRuntime},
     target::{Memory, RegisterStorage, Target},
 };
-use gdbstub::target::{
-    ext::{self as gdb_target, base as gdb_base},
-    TargetResult,
+use gdbstub::{
+    outputln,
+    target::{
+        ext::{self as gdb_target, base as gdb_base},
+        TargetResult,
+    },
 };
 
 impl<T: Target, B: Bus> gdbstub::target::Target for Environment<'_, T, B>
@@ -27,7 +30,6 @@ where
 
     #[inline(always)]
     fn support_monitor_cmd(&mut self) -> Option<gdb_target::monitor_cmd::MonitorCmdOps<'_, Self>> {
-        // See `gdb::command`
         Some(self)
     }
 }
@@ -255,6 +257,56 @@ where
             println!("gdb: step with signal {signal} is not supported");
         }
         self.debugger.as_mut().unwrap().state = State::SingleStep;
+        Ok(())
+    }
+}
+
+impl<T: Target, B: Bus> gdb_target::monitor_cmd::MonitorCmd for Environment<'_, T, B>
+where
+    for<'a> Environment<'a, T, B>: ValidRuntime<T>,
+{
+    fn handle_monitor_cmd(
+        &mut self,
+        cmd: &[u8],
+        mut out: gdb_target::monitor_cmd::ConsoleOutput<'_>,
+    ) -> Result<(), Self::Error> {
+        // This is a closure so that we can early-return using `?`, without propagating the error.
+        let _ = || -> Result<(), ()> {
+            let cmd = std::str::from_utf8(cmd).map_err(|_| {
+                outputln!(out, "monitor command is not valid UTF-8");
+            })?;
+            let mut iter = cmd.split_whitespace().peekable();
+
+            // Juggle around the command to appease the borrow checker
+            if let Some(name) = iter.next() {
+                if let Some(mut cmd) = self
+                    .debugger
+                    .as_mut()
+                    .unwrap()
+                    .monitor_commands
+                    .remove(name)
+                {
+                    cmd.handle(self, &mut out, &mut iter).unwrap_or_else(|err| {
+                        outputln!(out, "{err}");
+                    });
+
+                    self.debugger
+                        .as_mut()
+                        .unwrap()
+                        .monitor_commands
+                        .insert(cmd.name(), cmd);
+                } else {
+                    outputln!(out, "unrecognized command: '{cmd}'");
+                }
+            } else {
+                outputln!(out, "no command specified");
+            };
+
+            if iter.peek().is_some() {
+                outputln!(out, "warning: ignoring extra arguments");
+            }
+            Ok(())
+        }();
         Ok(())
     }
 }

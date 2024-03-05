@@ -14,7 +14,7 @@ pub struct BusValue<T> {
     inner: T,
     /// The range of physical addresses that were mutated by this operation.
     /// When modifying memory this *must* be set so that the relevant JIT blocks can be invalidated.
-    pub mutated: Option<Range<PhysicalAddress>>,
+    pub mutated: Vec<Range<PhysicalAddress>>,
     /// The mask of the external interrupt(s) that was triggered by this operation, if any.
     /// Only external interrupts should be set, which occupy bits 2..=6.
     pub interrupt: Option<u8>,
@@ -23,20 +23,24 @@ pub struct BusValue<T> {
 }
 
 impl<V> BusValue<V> {
-    pub fn new(value: V) -> Self {
+    pub const fn new(value: V) -> Self {
         Self {
             inner: value,
-            mutated: None,
+            mutated: Vec::new(),
             interrupt: None,
             request_exit: false,
         }
+    }
+
+    pub fn mutated(&mut self, range: Range<PhysicalAddress>) {
+        self.mutated.push(range);
     }
 
     pub(crate) fn handle<T: Target, B: Bus>(self, env: &mut Environment<T, B>) -> V
     where
         for<'a> Environment<'a, T, B>: ValidRuntime<T>,
     {
-        if let Some(paddrs) = self.mutated {
+        for paddrs in self.mutated {
             let vaddr_start = env
                 .memory
                 .physical_to_virtual_address(paddrs.start, AccessMode::Write, &env.registers)
@@ -273,7 +277,7 @@ pub trait Bus {
         value: Int<SIZE>,
     ) -> BusResult<(), Self::Error>;
 
-    /// Read a value from instruction memory. By default [`Bus::read_memory`] will be used for both data/instruction reads, in case there is no destinction.
+    /// Read a value from instruction memory. By default [`Bus::read_memory`] will be used for both data/instruction reads, but this can be specialised.
     fn read_instruction_memory<const SIZE: usize>(
         &mut self,
         address: PhysicalAddress,
@@ -281,7 +285,7 @@ pub trait Bus {
         self.read_memory(address)
     }
 
-    /// Writes a value into instruction memory. By default [`Bus::write_memory`] will be used for both data/instruction writes, in case there is no destinction.
+    /// Writes a value into instruction memory. By default [`Bus::write_memory`] will be used for both data/instruction writes, but this can be specialised.
     fn write_instruction_memory<const SIZE: usize>(
         &mut self,
         address: PhysicalAddress,
@@ -292,6 +296,13 @@ pub trait Bus {
 
     /// Performs a single tick, used to emulate clock cycles.
     fn tick(&mut self, cycles: usize) -> BusResult<(), Self::Error>;
+
+    /// Should return any ranges of physical addresses that were mutated since the last time mutations were reported.
+    /// This currently only gets called prior to looking up cached JIT blocks.
+    #[inline(always)]
+    fn ranges_to_invalidate(&mut self) -> Vec<Range<PhysicalAddress>> {
+        Vec::new()
+    }
 
     /// Called when an unrecoverable error occurs in the CPU. This can be used to notify the rest of the system of a shutdown.
     /// If GDB integration is enabled, its connection will be kept alive and the [`PanicAction`] is ignored.

@@ -1,4 +1,4 @@
-use self::command::{Command, MonitorCommand, MonitorCommandMap};
+use self::command::{Command, MappedCommand, MonitorCommandMap};
 use super::{Bus, Environment, GdbIntegration, ValidRuntime};
 use crate::target::{cpu::Cpu, rsp::Rsp, Target};
 use gdbstub::{
@@ -51,13 +51,13 @@ pub enum GdbConnectionError {
 /// A connection to a GDB client.
 pub struct Connection<B: Bus> {
     stream: TcpStream,
-    monitor_commands: Option<Vec<MonitorCommand<B>>>,
+    monitor_commands: Vec<Command<B>>,
 }
 
 impl<B: Bus> Connection<B> {
     fn new_with_target<T: Target>(
         stream: TcpStream,
-        monitor_commands: Option<Vec<MonitorCommand<B>>>,
+        monitor_commands: Option<Vec<Command<B>>>,
     ) -> Result<Self, GdbConnectionError>
     where
         for<'a> Environment<'a, T, B>: ValidRuntime<T>,
@@ -80,14 +80,14 @@ impl<B: Bus> Connection<B> {
         }
         Ok(Self {
             stream,
-            monitor_commands,
+            monitor_commands: monitor_commands.unwrap_or_default(),
         })
     }
 
     /// Create a new GDB connection for the CPU target, and optionally register custom monitor commands.
     pub fn new_cpu(
         stream: TcpStream,
-        monitor_commands: Option<Vec<MonitorCommand<B>>>,
+        monitor_commands: Option<Vec<Command<B>>>,
     ) -> Result<Self, GdbConnectionError> {
         Self::new_with_target::<Cpu>(stream, monitor_commands)
     }
@@ -95,7 +95,7 @@ impl<B: Bus> Connection<B> {
     /// Create a new GDB connection for the RSP target, and optionally register custom monitor commands.
     pub fn new_rsp(
         stream: TcpStream,
-        monitor_commands: Option<Vec<MonitorCommand<B>>>,
+        monitor_commands: Option<Vec<Command<B>>>,
     ) -> Result<Self, GdbConnectionError> {
         Self::new_with_target::<Rsp>(stream, monitor_commands)
     }
@@ -163,8 +163,7 @@ where
 {
     pub fn new(env: &mut Environment<'ctx, T, B>, gdb: Connection<B>) -> Self {
         let state_machine = GdbStub::new(gdb.stream).run_state_machine(env).unwrap();
-        let monitor_commands =
-            Command::monitor_command_map(gdb.monitor_commands.unwrap_or_default());
+        let monitor_commands = MappedCommand::new_map(gdb.monitor_commands);
 
         Self {
             state: State::default(),

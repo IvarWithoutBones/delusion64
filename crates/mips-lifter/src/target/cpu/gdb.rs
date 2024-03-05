@@ -1,6 +1,6 @@
 use super::{registers::RegisterID, Cpu};
 use crate::{
-    gdb::MonitorCommand,
+    gdb,
     runtime::{self, bus::Bus, Environment, GdbIntegration},
     RegIndex,
 };
@@ -117,9 +117,9 @@ impl<B: Bus> GdbIntegration<Cpu> for Environment<'_, Cpu, B> {
     type Usize = u64;
     type Arch = GdbArch;
 
-    fn extra_monitor_commands() -> Vec<MonitorCommand<Self>> {
+    fn extra_monitor_commands() -> Vec<gdb::Command<Self>> {
         vec![
-            MonitorCommand {
+            gdb::Command {
                 name: "status",
                 description: "print the coprocessor 0 status register",
                 handler: Box::new(|env, out, _args| {
@@ -127,7 +127,7 @@ impl<B: Bus> GdbIntegration<Cpu> for Environment<'_, Cpu, B> {
                     Ok(())
                 }),
             },
-            MonitorCommand {
+            gdb::Command {
                 name: "cause",
                 description: "print the coprocessor 0 cause register",
                 handler: Box::new(|env, out, _args| {
@@ -135,7 +135,7 @@ impl<B: Bus> GdbIntegration<Cpu> for Environment<'_, Cpu, B> {
                     Ok(())
                 }),
             },
-            MonitorCommand {
+            gdb::Command {
                 name: "fpu-status",
                 description: "print the FPU control and status register",
                 handler: Box::new(|env, out, _args| {
@@ -143,7 +143,7 @@ impl<B: Bus> GdbIntegration<Cpu> for Environment<'_, Cpu, B> {
                     Ok(())
                 }),
             },
-            MonitorCommand {
+            gdb::Command {
                 name: "tlb",
                 description: "print every entry in the TLB",
                 handler: Box::new(|env, out, _args| {

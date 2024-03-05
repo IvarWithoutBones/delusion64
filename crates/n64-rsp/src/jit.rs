@@ -1,6 +1,7 @@
 use crate::{register::Registers, Memory, RspError, RspResult};
 use mips_lifter::{
-    runtime::bus::{Bus as BusInterface, BusResult, Int, PhysicalAddress},
+    gdb,
+    runtime::bus::{Bus as BusInterface, BusResult, BusValue, Int, PhysicalAddress},
     target::rsp::{
         register::control::{MemoryBank, Status},
         ControlRegisterBank, SpecialRegisterBank,
@@ -9,17 +10,22 @@ use mips_lifter::{
 };
 use std::{
     net::TcpStream,
+    ops::Range,
     sync::{
         atomic::{self, AtomicUsize},
+        mpsc::{self, Receiver, Sender},
         Arc,
     },
     thread::JoinHandle,
 };
 
+pub(crate) type IMemRange = Range<u32>;
+
 #[derive(Debug)]
 pub struct Handle {
     _thread: JoinHandle<Bus>,
     cycle_budget: Arc<AtomicUsize>,
+    imem_mutation_sender: Sender<IMemRange>,
 }
 
 impl Handle {
@@ -31,6 +37,7 @@ impl Handle {
         // The RSP is halted by default, until the CPU tells it to start running
         control.write_parsed(Status::default().with_halted(true));
 
+        let (imem_mutation_sender, imem_mutation_receiver) = mpsc::channel();
         let this = Self {
             _thread: {
                 let cycle_budget = cycle_budget.clone();
@@ -41,11 +48,13 @@ impl Handle {
                         control_registers,
                         special_registers,
                         cycle_budget,
+                        imem_mutation_receiver,
                         memory,
                         gdb,
                     )
                 })
             },
+            imem_mutation_sender,
             cycle_budget,
         };
         let regs = Registers::new(control, special);
@@ -56,11 +65,20 @@ impl Handle {
         self.cycle_budget
             .fetch_add(cycles, atomic::Ordering::Relaxed);
     }
+
+    pub fn invalidate_imem(&self, range: Range<usize>) {
+        let range = range.start.try_into().expect("address too large")
+            ..range.end.try_into().expect("address too large");
+        self.imem_mutation_sender
+            .send(range)
+            .expect("failed to send IMem mutation");
+    }
 }
 
 struct Bus {
     memory: Memory,
     cycle_budget: Arc<AtomicUsize>,
+    imem_mutation_receiver: Receiver<IMemRange>,
 }
 
 impl Bus {
@@ -68,6 +86,7 @@ impl Bus {
         control: ControlRegisterBank,
         special: SpecialRegisterBank,
         cycle_budget: Arc<AtomicUsize>,
+        imem_mutation_receiver: Receiver<IMemRange>,
         memory: Memory,
         gdb: Option<TcpStream>,
     ) -> Self {
@@ -78,6 +97,7 @@ impl Bus {
         let this = Self {
             memory,
             cycle_budget,
+            imem_mutation_receiver,
         };
 
         let regs = mips_lifter::target::rsp::Registers {
@@ -87,8 +107,7 @@ impl Bus {
         };
 
         let gdb = gdb.map(|stream| {
-            mips_lifter::gdb::Connection::new_rsp(stream, None)
-                .expect("failed to create GDB connection")
+            gdb::Connection::new_rsp(stream, None).expect("failed to create GDB connection")
         });
 
         JitBuilder::new_rsp(this)
@@ -105,17 +124,19 @@ impl Bus {
         }))
     }
 
-    fn write<const SIZE: usize>(
-        &mut self,
-        bank: MemoryBank,
-        address: u32,
-        slice: &[u8; SIZE],
-    ) -> RspResult<()> {
-        let mut mem = self.memory.write(bank)?;
+    fn write<const SIZE: usize>(&mut self, address: u32, slice: &[u8; SIZE]) -> RspResult<()> {
+        // Note: we only ever write to DMEM, no need to invalidate IMEM
+        let mut mem = self.memory.write(MemoryBank::DMem)?;
         for (i, value) in slice.iter().enumerate() {
             mem[((address as usize) + i) % MemoryBank::LEN] = *value;
         }
         Ok(())
+    }
+
+    fn check_imem_mutations<T>(&self, v: &mut BusValue<T>) {
+        while let Ok(range) = self.imem_mutation_receiver.try_recv() {
+            v.mutated(range);
+        }
     }
 }
 
@@ -126,8 +147,12 @@ impl BusInterface for Bus {
         &mut self,
         address: PhysicalAddress,
     ) -> BusResult<Int<SIZE>, Self::Error> {
+        // TODO: Optimally we'd check for imem mutations here,
+        // but mutating the label cache while in the middle of codegen breaks things.
         let value = self.read(MemoryBank::IMem, address)?;
-        Ok(Int::from_array(value).into())
+        let mut result = Int::from_array(value).into();
+        self.check_imem_mutations(&mut result);
+        Ok(result)
     }
 
     fn read_memory<const SIZE: usize>(
@@ -143,11 +168,17 @@ impl BusInterface for Bus {
         address: PhysicalAddress,
         value: Int<SIZE>,
     ) -> BusResult<(), Self::Error> {
-        self.write(MemoryBank::DMem, address, value.as_slice())?;
+        self.write(address, value.as_slice())?;
         Ok(().into())
     }
 
+    fn ranges_to_invalidate(&mut self) -> Vec<Range<PhysicalAddress>> {
+        self.imem_mutation_receiver.try_iter().collect()
+    }
+
     fn tick(&mut self, cycles: usize) -> BusResult<(), Self::Error> {
+        let mut result = BusValue::default();
+
         // Yield until our budget is big enough (i.e. the CPU has ran enough cycles for us to catch up to it)
         while self.cycle_budget.load(atomic::Ordering::Relaxed) < cycles {
             std::thread::sleep(std::time::Duration::from_millis(1));
@@ -155,6 +186,8 @@ impl BusInterface for Bus {
 
         self.cycle_budget
             .fetch_sub(cycles, atomic::Ordering::Relaxed);
-        Ok(().into())
+
+        self.check_imem_mutations(&mut result);
+        Ok(result)
     }
 }

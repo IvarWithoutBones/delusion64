@@ -122,6 +122,8 @@ impl Registers {
     }
 
     pub fn tick(&mut self, ctx: &mut dma::TickContext) -> RspResult<SideEffects> {
+        // Transfer in chunks of 8 bytes so we can both account for wrapping, and (in the future) support count/skip
+        const CHUNK: usize = 8;
         let mut effects = SideEffects::default();
         let Some(mut state) = self.dma_states[Self::CURRENT].take() else {
             return Ok(effects);
@@ -149,7 +151,10 @@ impl Registers {
                 let addr = sp_address.address() as usize;
                 let range = addr..addr + read_length.length() as usize;
                 let section = match sp_address.bank() {
-                    MemoryBank::IMem => Section::RspIMemory,
+                    MemoryBank::IMem => {
+                        ctx.cpu.invalidate_imem(range.clone());
+                        Section::RspIMemory
+                    }
                     MemoryBank::DMem => Section::RspDMemory,
                 };
                 effects.set_dirty_section(section, range);
@@ -157,11 +162,10 @@ impl Registers {
             }
         };
 
-        // Transfer in chunks of 8 bytes so we can both account for wrapping, and (in the future) support count/skip
-        for _ in 0..(bytes / 8) {
-            let rdram_slice = &mut ctx.rdram[rdram_address.address() as usize..][..8];
-            let sp_slice =
-                &mut ctx.memory.write(sp_address.bank())?[sp_address.address() as usize..][..8];
+        for _ in 0..(bytes / CHUNK) {
+            let bank = sp_address.bank();
+            let rdram_slice = &mut ctx.rdram[rdram_address.address() as usize..][..CHUNK];
+            let sp_slice = &mut ctx.memory.write(bank)?[sp_address.address() as usize..][..CHUNK];
 
             let (src, dst) = match state.direction {
                 dma::Direction::ToRdram => {

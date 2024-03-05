@@ -8,7 +8,7 @@ pub use self::{
 
 pub mod gdb {
     pub use crate::runtime::gdb::{
-        command::{MonitorCommand, MonitorCommandHandler, MonitorCommandHandlerError},
+        command::{Command, MonitorCommandHandler, MonitorCommandHandlerError},
         Connection,
     };
 

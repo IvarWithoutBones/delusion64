@@ -2,7 +2,7 @@
 
 use self::{
     bus::{Bus, PhysicalAddress},
-    gdb::command::MonitorCommand,
+    gdb::command::Command,
 };
 use crate::{
     codegen::{self, CodeGen, CompilationError, FallthroughAmount},
@@ -51,8 +51,8 @@ pub(crate) trait GdbIntegration<T: Target>: Sized {
         RegId = <T::Registers as RegisterStorage>::Id,
     >;
 
-    /// Extra GDB monitor commands to register.
-    fn extra_monitor_commands() -> Vec<MonitorCommand<Self>> {
+    /// Extra internal GDB monitor commands to register.
+    fn extra_monitor_commands() -> Vec<Command<Self>> {
         Vec::new()
     }
 
@@ -246,20 +246,24 @@ where
         unsafe { self.jit_flags.get().read() }
     }
 
-    fn read_raw_instruction(&mut self, paddr: PhysicalAddress) -> u32 {
-        self.bus
+    fn read_raw_instruction(&mut self, paddr: PhysicalAddress) -> (u32, bool) {
+        let res = self
+            .bus
             .read_instruction_memory(paddr)
             .unwrap_or_else(|err| {
                 let msg = &format!("failed to read instruction memory at {paddr:#x}: {err:#?}");
                 self.panic_update_debugger(msg)
-            })
-            .handle(self)
-            .into()
+            });
+        let did_mutate = !res.mutated.is_empty();
+        (res.handle(self).into(), did_mutate)
     }
 
-    fn read_label_list(&mut self, mut paddr: PhysicalAddress, vaddr: u64) -> T::LabelList {
+    fn read_label_list(&mut self, mut paddr: PhysicalAddress, vaddr: u64) -> (T::LabelList, bool) {
+        let mut invalidate = false;
         let iter = std::iter::from_fn(|| {
-            let value = self.read_raw_instruction(paddr);
+            let (value, did_mutate) = self.read_raw_instruction(paddr);
+            invalidate |= did_mutate;
+
             paddr += INSTRUCTION_SIZE as PhysicalAddress;
             Some(value)
         })
@@ -271,7 +275,15 @@ where
             self.panic_update_debugger(msg)
         });
         res.set_start(vaddr);
-        res
+        (res, invalidate)
+    }
+
+    fn check_invalidations(&mut self) {
+        for range in self.bus.ranges_to_invalidate() {
+            let start = self.physical_to_virtual_address(range.start, AccessMode::Read);
+            let end = self.physical_to_virtual_address(range.end, AccessMode::Read);
+            self.codegen.labels.remove_within_range(start..end);
+        }
     }
 
     /*
@@ -303,7 +315,8 @@ where
     }
 
     pub(crate) unsafe extern "C" fn get_function_ptr(&mut self, vaddr: u64) -> JitFunctionPointer {
-        let insert_index = match self.codegen.labels.get(vaddr) {
+        self.check_invalidations();
+        let mut insert_index = match self.codegen.labels.get(vaddr) {
             Ok(label) => {
                 if self.trace {
                     println!("found existing block at {vaddr:#x}");
@@ -318,7 +331,7 @@ where
         }
 
         let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
-        let label_list = self.read_label_list(paddr, vaddr);
+        let (label_list, regenerate_index) = self.read_label_list(paddr, vaddr);
 
         let module = self.codegen.context.create_module("tmp");
         let globals = self.map_into(&module, &self.codegen.execution_engine);
@@ -359,6 +372,15 @@ where
             })
             .unwrap_or_else(|err| self.panic_update_debugger(err.to_string().as_str()));
 
+        if regenerate_index {
+            // If we got a request to invalidate cached labels while disassembling, the `insert_index` may have been invalidated because we removed items.
+            insert_index = self
+                .codegen
+                .labels
+                .get(vaddr)
+                .expect_err("no labels were inserted while generating block");
+        }
+
         let ptr = lab.pointer.expect("label pointer is cached");
         self.codegen.labels.insert(insert_index, lab);
         ptr
@@ -370,7 +392,7 @@ where
 
         if self.trace {
             let paddr = self.virtual_to_physical_address(pc_vaddr, AccessMode::Read);
-            let instr_raw = self.read_raw_instruction(paddr);
+            let (instr_raw, _did_mutate) = self.read_raw_instruction(paddr);
             let instr: T::Instruction = instr_raw.try_into().unwrap_or_else(|_err| {
                 let msg = format!("failed to parse instruction at {pc_vaddr:#x}");
                 self.panic_update_debugger(&msg)

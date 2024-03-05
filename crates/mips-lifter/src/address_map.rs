@@ -50,7 +50,9 @@ impl<'ctx, T: Target> VirtualAddressMap<'ctx, T> {
     /// Removes every label that resides within the given range of virtual addresses.
     pub fn remove_within_range(&mut self, range: Range<u64>) {
         if let Some(indices) = self.indices_containing(range) {
-            self.inner.drain(indices);
+            for label in self.inner.drain(indices) {
+                println!("{:#x?}", label.label.range());
+            }
         }
     }
 
@@ -68,9 +70,9 @@ impl<'ctx, T: Target> VirtualAddressMap<'ctx, T> {
             .map_or_else(|i| i.saturating_sub(1), |i| i))
             .rev()
             .take_while(|&i| {
-                // SAFETY: `binary_search_by_key` returns a valid index, from which we iterate backwards.
-                let range = unsafe { self.inner.get_unchecked(i) }.label.range();
-                overlaps(&range, &addrs)
+                self.inner
+                    .get(i)
+                    .is_some_and(|l| overlaps(&l.label.range(), &addrs))
             })
             .last()?;
         let end = self.inner[start..]

@@ -1,4 +1,4 @@
-use crate::memory::Memory;
+use crate::{jit, memory::Memory};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(crate) enum Direction {
@@ -24,4 +24,5 @@ pub(crate) struct TickContext<'a> {
     pub cycles: usize,
     pub rdram: &'a mut [u8],
     pub memory: &'a mut Memory,
+    pub cpu: &'a jit::Handle,
 }

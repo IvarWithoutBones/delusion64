@@ -105,8 +105,15 @@ impl Rsp {
         self.memory
             .write(bank)?
             .get_mut(range.clone())
-            .ok_or(RspError::MemoryRangeOutOfBounds { range, bank })?
+            .ok_or(RspError::MemoryRangeOutOfBounds {
+                range: range.clone(),
+                bank,
+            })?
             .copy_from_slice(&value);
+        if matches!(bank, MemoryBank::IMem) {
+            self.cpu.invalidate_imem(range);
+        }
+
         Ok(())
     }
 
@@ -121,6 +128,7 @@ impl Rsp {
 
         self.registers.tick(&mut dma::TickContext {
             memory: &mut self.memory,
+            cpu: &self.cpu,
             cycles,
             rdram,
         })

@@ -5,59 +5,7 @@ use crate::{
 use gdbstub::outputln;
 use std::{collections::HashMap, num::ParseIntError};
 
-pub type MonitorCommandMap<'ctx, T, B> = HashMap<&'static str, Command<'ctx, T, B>>;
-
-pub enum Command<'ctx, T: Target, B: Bus>
-where
-    for<'a> Environment<'a, T, B>: ValidRuntime<T>,
-{
-    Internal(MonitorCommand<Environment<'ctx, T, B>>),
-    External(MonitorCommand<B>),
-}
-
-impl<'ctx, T: Target, B: Bus> Command<'ctx, T, B>
-where
-    for<'a> Environment<'a, T, B>: ValidRuntime<T>,
-{
-    /// Merges internal and external monitor commands into a single map.
-    pub fn monitor_command_map(external: Vec<MonitorCommand<B>>) -> MonitorCommandMap<'ctx, T, B> {
-        Environment::monitor_commands()
-            .into_iter()
-            .map(|cmd| (cmd.name, Command::Internal(cmd)))
-            .chain(
-                external
-                    .into_iter()
-                    .map(|cmd| (cmd.name, Command::External(cmd))),
-            )
-            .collect()
-    }
-
-    pub fn name(&self) -> &'static str {
-        match self {
-            Command::Internal(cmd) => cmd.name,
-            Command::External(cmd) => cmd.name,
-        }
-    }
-
-    pub fn description(&self) -> &'static str {
-        match self {
-            Command::Internal(cmd) => cmd.description,
-            Command::External(cmd) => cmd.description,
-        }
-    }
-
-    pub fn handle(
-        &mut self,
-        env: &mut Environment<'ctx, T, B>,
-        output: &mut dyn std::fmt::Write,
-        args: &mut dyn Iterator<Item = &str>,
-    ) -> Result<(), MonitorCommandHandlerError> {
-        match self {
-            Command::Internal(cmd) => (cmd.handler)(env, output, args),
-            Command::External(cmd) => (cmd.handler)(&mut env.bus, output, args),
-        }
-    }
-}
+pub type MonitorCommandMap<'ctx, T, B> = HashMap<&'static str, MappedCommand<'ctx, T, B>>;
 
 /// An error that can occur when handling a monitor command.
 #[derive(Debug, thiserror::Error)]
@@ -82,17 +30,72 @@ impl<'a> From<&'a str> for MonitorCommandHandlerError {
     }
 }
 
-/// A callback to handle a monitor command.
+/// Callback to handle a monitor command.
 pub type MonitorCommandHandler<This> = dyn FnMut(
     &mut This,
     &mut dyn std::fmt::Write,
     &mut dyn Iterator<Item = &str>,
 ) -> Result<(), MonitorCommandHandlerError>;
 
-pub struct MonitorCommand<This> {
+/// A monitor command definition.
+pub struct Command<This> {
     pub name: &'static str,
     pub description: &'static str,
     pub handler: Box<MonitorCommandHandler<This>>,
+}
+
+/// A monitor command that can be mapped to either an internal or external handler.
+/// This is used inside the [`MonitorCommandMap`], so that we can dispatch to the correct handler.
+pub(crate) enum MappedCommand<'ctx, T: Target, B: Bus>
+where
+    for<'a> Environment<'a, T, B>: ValidRuntime<T>,
+{
+    Internal(Command<Environment<'ctx, T, B>>),
+    External(Command<B>),
+}
+
+impl<'ctx, T: Target, B: Bus> MappedCommand<'ctx, T, B>
+where
+    for<'a> Environment<'a, T, B>: ValidRuntime<T>,
+{
+    /// Merges internal and external monitor commands into a single map.
+    pub fn new_map(external: Vec<Command<B>>) -> MonitorCommandMap<'ctx, T, B> {
+        Environment::monitor_commands()
+            .into_iter()
+            .map(|cmd| (cmd.name, MappedCommand::Internal(cmd)))
+            .chain(
+                external
+                    .into_iter()
+                    .map(|cmd| (cmd.name, MappedCommand::External(cmd))),
+            )
+            .collect()
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            MappedCommand::Internal(cmd) => cmd.name,
+            MappedCommand::External(cmd) => cmd.name,
+        }
+    }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            MappedCommand::Internal(cmd) => cmd.description,
+            MappedCommand::External(cmd) => cmd.description,
+        }
+    }
+
+    pub fn handle(
+        &mut self,
+        env: &mut Environment<'ctx, T, B>,
+        output: &mut dyn std::fmt::Write,
+        args: &mut dyn Iterator<Item = &str>,
+    ) -> Result<(), MonitorCommandHandlerError> {
+        match self {
+            MappedCommand::Internal(cmd) => (cmd.handler)(env, output, args),
+            MappedCommand::External(cmd) => (cmd.handler)(&mut env.bus, output, args),
+        }
+    }
 }
 
 impl<T: Target, B: Bus> Environment<'_, T, B>
@@ -100,9 +103,9 @@ where
     for<'a> Environment<'a, T, B>: ValidRuntime<T>,
 {
     /// The internal monitor commands, related to the CPU state.
-    pub(crate) fn monitor_commands() -> Vec<MonitorCommand<Self>> {
-        let mut result: Vec<MonitorCommand<Self>> = vec![
-            MonitorCommand {
+    pub(crate) fn monitor_commands() -> Vec<Command<Self>> {
+        let mut result: Vec<Command<Self>> = vec![
+            Command {
                 name: "help",
                 description: "print this help message",
                 handler: Box::new(|env, out, args| {
@@ -123,7 +126,7 @@ where
                     Ok(())
                 }),
             },
-            MonitorCommand {
+            Command {
                 name: "regs",
                 description: "print all the CPU registers",
                 handler: Box::new(|env, out, _args| {
@@ -131,7 +134,7 @@ where
                     Ok(())
                 }),
             },
-            MonitorCommand {
+            Command {
                 name: "trace",
                 description: "enable or disable instruction tracing to standard output. usage: trace [on|off]",
                 handler: Box::new(|env, out, args| {
@@ -150,7 +153,7 @@ where
                     Ok(())
                 }),
             },
-            MonitorCommand {
+            Command {
                 name: "paddr",
                 description: "translate a virtual address to a physical address",
                 handler: Box::new(|env, out, args| {
@@ -161,7 +164,7 @@ where
                     Ok(())
                 }),
             },
-            MonitorCommand {
+            Command {
                 name: "vaddr",
                 description: "translate a physical address to a virtual address",
                 handler: Box::new(|env, out, args| {
@@ -172,7 +175,7 @@ where
                     Ok(())
                 }),
             },
-            MonitorCommand {
+            Command {
                 name: "llvm-ir",
                 description: "dump the LLVM IR for a given virtual address, or the program counter. usage: llvm-ir [vaddr] [path]",
                 handler: Box::new(|env, out, args| {
@@ -205,56 +208,6 @@ where
         ];
         result.extend(GdbIntegration::extra_monitor_commands());
         result
-    }
-}
-
-impl<T: Target, B: Bus> gdbstub::target::ext::monitor_cmd::MonitorCmd for Environment<'_, T, B>
-where
-    for<'a> Environment<'a, T, B>: ValidRuntime<T>,
-{
-    fn handle_monitor_cmd(
-        &mut self,
-        cmd: &[u8],
-        mut out: gdbstub::target::ext::monitor_cmd::ConsoleOutput<'_>,
-    ) -> Result<(), Self::Error> {
-        // This is a closure so that we can early-return using `?`, without propagating the error.
-        let _ = || -> Result<(), ()> {
-            let cmd = std::str::from_utf8(cmd).map_err(|_| {
-                outputln!(out, "monitor command is not valid UTF-8");
-            })?;
-            let mut iter = cmd.split_whitespace().peekable();
-
-            // Juggle around the command to appease the borrow checker
-            if let Some(name) = iter.next() {
-                if let Some(mut cmd) = self
-                    .debugger
-                    .as_mut()
-                    .unwrap()
-                    .monitor_commands
-                    .remove(name)
-                {
-                    cmd.handle(self, &mut out, &mut iter).unwrap_or_else(|err| {
-                        outputln!(out, "{err:#?}");
-                    });
-
-                    self.debugger
-                        .as_mut()
-                        .unwrap()
-                        .monitor_commands
-                        .insert(cmd.name(), cmd);
-                } else {
-                    outputln!(out, "unrecognized command: '{cmd}'");
-                }
-            } else {
-                outputln!(out, "no command specified");
-            };
-
-            if iter.peek().is_some() {
-                outputln!(out, "warning: ignoring extra arguments");
-            }
-            Ok(())
-        }();
-        Ok(())
     }
 }
 

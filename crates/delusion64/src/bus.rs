@@ -1,7 +1,7 @@
 use crate::input::{Controller, ControllerEvent};
 use emgui::context::{self, ReceiveItem, SendItem};
 use mips_lifter::{
-    gdb::MonitorCommand,
+    gdb,
     runtime::bus::{Bus as BusInterface, BusResult, BusValue, Int, IntError, PanicAction},
 };
 use n64_cartridge::Cartridge;
@@ -79,9 +79,9 @@ impl Bus {
         }
     }
 
-    pub fn gdb_monitor_commands() -> Vec<MonitorCommand<Self>> {
+    pub fn gdb_monitor_commands() -> Vec<gdb::Command<Self>> {
         vec![
-            MonitorCommand {
+            gdb::Command {
                 name: "mi",
                 description: "print the MIPS interface registers",
                 handler: Box::new(|bus, out, _args| {
@@ -89,7 +89,7 @@ impl Bus {
                     Ok(())
                 }),
             },
-            MonitorCommand {
+            gdb::Command {
                 name: "pi",
                 description: "print the peripheral interface registers",
                 handler: Box::new(|bus, out, _args| {
@@ -97,7 +97,7 @@ impl Bus {
                     Ok(())
                 }),
             },
-            MonitorCommand {
+            gdb::Command {
                 name: "si",
                 description: "print the serial interface registers",
                 handler: Box::new(|bus, out, _args| {
@@ -105,7 +105,7 @@ impl Bus {
                     Ok(())
                 }),
             },
-            MonitorCommand {
+            gdb::Command {
                 name: "vi",
                 description: "print the video interface registers",
                 handler: Box::new(|bus, out, _args| {
@@ -113,7 +113,7 @@ impl Bus {
                     Ok(())
                 }),
             },
-            MonitorCommand {
+            gdb::Command {
                 name: "rsp",
                 description: "print the RSP status",
                 handler: Box::new(|bus, out, _args| {
@@ -152,7 +152,10 @@ impl Bus {
     fn handle<T>(&mut self, side_effects: n64_common::SideEffects, bus_val: &mut BusValue<T>) {
         let n64_common::SideEffects { interrupt, dirty } = side_effects;
 
-        bus_val.mutated = dirty;
+        if let Some(dirty) = dirty {
+            bus_val.mutated(dirty);
+        }
+
         if let Some(interrupt) = interrupt {
             match interrupt {
                 n64_common::InterruptRequest::Raise(dev) => {

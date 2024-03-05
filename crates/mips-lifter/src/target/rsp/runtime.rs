@@ -1,7 +1,7 @@
-use super::{register, Rsp};
+use super::Rsp;
 use crate::{
     runtime::{bus::Bus, Environment, InterruptHandler, RuntimeFunction, TargetDependantCallbacks},
-    RegIndex,
+    target::RegisterStorage,
 };
 use mips_decomp::{register::rsp::control::Status, Exception, INSTRUCTION_SIZE};
 
@@ -40,7 +40,7 @@ impl<B: Bus> Environment<'_, Rsp, B> {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
 
-        self.get_function_ptr(self.registers.read(register::Special::ProgramCounter))
+        self.get_function_ptr(self.registers.read_program_counter())
     }
 }
 
@@ -54,7 +54,7 @@ impl<B: Bus> TargetDependantCallbacks for Environment<'_, Rsp, B> {
 
     fn on_block_entered(&mut self, _instructions_in_block: usize) -> usize {
         // TODO: mechanism for the CPU to mark blocks as dirty, this breaks the `llvm-ir` GDB monitor command
-        self.codegen.labels.remove_within_range(0..0x1000);
+        // self.codegen.labels.remove_within_range(0..0x1000);
         0
     }
 }
