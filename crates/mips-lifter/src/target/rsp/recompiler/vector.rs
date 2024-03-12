@@ -33,6 +33,45 @@ pub(super) fn compile_instruction(
     };
 
     match instr.mnemonic() {
+        Mnenomic::Mtc2 => {
+            // Copy the lower 16 bits of GPR rt into vector register vd, at byte offset `element`
+            let elem = u64::from(instr.element());
+            let target = codegen.read_general_register(i16_type, instr.rt())?;
+            let mut value = codegen.build_bswap(target, "mtc2_value")?;
+            if elem == (ELEMENTS - 1) {
+                // If the u16 would not fit, the value gets truncated, unlike mfc2 which wraps around
+                value = codegen.truncate_to(i8_type, value)?;
+            }
+
+            let offset = i32_type.const_int(elem, false);
+            codegen.write_vector_register_byte_offset(instr.vd(), value, offset)?;
+        }
+
+        Mnenomic::Mfc2 => {
+            // Copy the lower 16 bits of vector register vd, at byte offset `element`, into GPR rd
+            let elem = u64::from(instr.element());
+            let target = codegen.read_vector_register::<u8>(instr.vt())?;
+
+            // Note that `build_extract_element` performs wrapping, which is desirable here unlike mtc2
+            let highest = codegen.build_extract_element(target, elem, "mfc2_value_msb")?;
+            let lowest = codegen.build_extract_element(target, elem + 1, "mfc2_value_lsb")?;
+
+            // Combine the two u8's into a single u16, then sign extend it to a u32
+            let value = codegen.sign_extend_to(
+                i32_type,
+                codegen.builder.build_or(
+                    codegen.builder.build_left_shift(
+                        codegen.zero_extend_to(i16_type, highest)?,
+                        i16_type.const_int(8, false),
+                        "mfc2_value",
+                    )?,
+                    codegen.zero_extend_to(i16_type, lowest)?,
+                    "mfc2_value",
+                )?,
+            )?;
+            codegen.write_general_register(instr.rd(), value)?;
+        }
+
         Mnenomic::Lqv => {
             // Load (up to) 16 bytes into VPR vt, left-aligned
             let elem = i32_type.const_int(u64::from(instr.element()), false);

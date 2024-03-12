@@ -14,6 +14,8 @@ pub enum MemoryBank {
 impl MemoryBank {
     /// The sizes of a bank of memory, in bytes.
     pub const LEN: usize = 0x1000;
+    /// A mask covering the entire bank of memory.
+    pub const MASK: u64 = Self::LEN as u64 - 1;
 }
 
 bitfield_without_debug! {

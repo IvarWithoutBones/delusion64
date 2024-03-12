@@ -1,6 +1,6 @@
 use super::{register, Rsp};
 use crate::{
-    codegen::{CodeGen, CompilationResult},
+    codegen::{CodeGen, CompilationError, CompilationResult},
     macros::env_call,
     runtime::RuntimeFunction,
     target::Globals,
@@ -161,7 +161,9 @@ impl<'ctx> CodeGen<'ctx, Rsp> {
             | register::Control::DmaReadLength2
             | register::Control::DmaWriteLength1
             | register::Control::DmaWriteLength2 => {
-                todo!("start DMA from RSP JIT")
+                let name = reg.name();
+                let msg = format!("tried to start DMA from the RSP JIT by writing to {name}");
+                Err(CompilationError::UnimplementedInstruction(msg))
             }
 
             _ if reg.is_dma_register() => {
@@ -169,7 +171,6 @@ impl<'ctx> CodeGen<'ctx, Rsp> {
                 self.write_register_pointer(value.into(), ptr, reg.into())
             }
 
-            // TODO: this assumes DMA buffer 0, which is not always the case
             _ => self.write_register_raw(reg, value),
         }
     }

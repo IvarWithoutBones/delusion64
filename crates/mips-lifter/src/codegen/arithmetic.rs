@@ -129,6 +129,21 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         self.build_funnel_shift_left(value, value, shift, name)
     }
 
+    /// Byte-swaps the given integer. See the LLVM documentation: <https://releases.llvm.org/17.0.1/docs/LangRef.html#llvm-bswap-intrinsics>
+    pub fn build_bswap(
+        &self,
+        value: IntValue<'ctx>,
+        name: &str,
+    ) -> CompilationResult<IntValue<'ctx>> {
+        self.call_intrinsic(
+            "llvm.bswap",
+            &[value.get_type().into()],
+            &[value.into()],
+            name,
+        )
+        .map(|v| v.into_int_value())
+    }
+
     /// Splits the given integer in two, returning the high and low order bits, in that order.
     /// The type of integer that is returned is half the bit width of the input integer.
     /// For example, if the input integer is 64 bits wide, the high and low order bits will both. be 32 bits

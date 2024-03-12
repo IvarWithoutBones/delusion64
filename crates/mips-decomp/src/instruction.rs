@@ -316,7 +316,9 @@ impl Mnenomic {
     pub const fn is_vector_instruction(&self) -> bool {
         matches!(
             self,
-            Self::Sbv
+            Self::Mtc2
+                | Self::Mfc2
+                | Self::Sbv
                 | Self::Ssv
                 | Self::Slv
                 | Self::Sdv
@@ -1023,13 +1025,11 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(Lwu,     "1001 11bb bbbt tttt ffff ffff ffff ffff", (Target)(Offset, Signed16)(Base)),
     instr!(Mfc0,    "0100 0000 000t tttt dddd d000 0000 0000", (Target)(Destination)),
     instr!(Mfc1,    "0100 0100 000t tttt SSSS S000 0000 0000", (Target)(FloatSource)),
-    instr!(Mfc2,    "0100 1000 000t tttt dddd d000 0000 0000", (Target)(Destination)),
     instr!(Mfc3,    "0100 1100 000t tttt dddd d000 0000 0000", (Target)(Destination)),
     instr!(Mfhi,    "0000 0000 0000 0000 dddd d000 0001 0000", (Destination)),
     instr!(Mflo,    "0000 0000 0000 0000 dddd d000 0001 0010", (Destination)),
     instr!(Mtc0,    "0100 0000 100t tttt dddd d000 0000 0000", (Target)(Destination)),
     instr!(Mtc1,    "0100 0100 100t tttt SSSS S000 0000 0000", (Target)(FloatSource)),
-    instr!(Mtc2,    "0100 1000 100t tttt dddd d000 0000 0000", (Target)(Destination)),
     instr!(Mtc3,    "0100 1100 100t tttt dddd d000 0000 0000", (Target)(Destination)),
     instr!(Mthi,    "0000 00ss sss0 0000 0000 0000 0001 0001", (Source)),
     instr!(Mtlo,    "0000 00ss sss0 0000 0000 0000 0001 0011", (Source)),
@@ -1107,6 +1107,8 @@ const INSTRUCTIONS: &[Instruction] = &[
     instr!(TruncWFmt,  "0100 01aa aaa0 0000 SSSS SDDD DD00 1101", (Format)(FloatDestination)(FloatSource)),
 
     // Vector
+    instr!(Mfc2,  "0100 1000 000d dddd vvvv veee e000 0000", (Destination)(VectorTarget)(VectorElement)),
+    instr!(Mtc2,  "0100 1000 100t tttt zzzz zeee e000 0000", (VectorDestination)(VectorElement)(Target)),
     instr!(Sbv,   "1110 10bb bbbv vvvv 0000 0eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
     instr!(Ssv,   "1110 10bb bbbv vvvv 0000 1eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
     instr!(Slv,   "1110 10bb bbbv vvvv 0001 0eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),

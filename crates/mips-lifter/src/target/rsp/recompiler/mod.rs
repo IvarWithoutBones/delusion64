@@ -17,7 +17,7 @@ mod vector;
 fn jump_address(delay_slot_pc: u64, target: u32) -> u64 {
     let masked_delay_slot = delay_slot_pc & 0xFFFF_FFFF_F000_0000;
     let shifted_target = u64::from(target) << 2;
-    shifted_target | masked_delay_slot
+    (shifted_target | masked_delay_slot) & MemoryBank::MASK
 }
 
 enum JumpTarget<'ctx> {
@@ -33,8 +33,8 @@ pub(crate) fn compile_instruction_with_delay_slot(
     on_instruction: impl Fn(u64) -> CompilationResult<()>,
 ) -> CompilationResult<()> {
     debug_assert!(instr.mnemonic().is_branch() || instr.mnemonic().is_jump());
-    let delay_slot_pc = (pc + INSTRUCTION_SIZE as u64) % MemoryBank::LEN as u64;
-    let pc = pc % MemoryBank::LEN as u64;
+    let delay_slot_pc = (pc + INSTRUCTION_SIZE as u64) & MemoryBank::MASK;
+    let pc = pc & MemoryBank::MASK;
 
     let compile_delay_slot_instr = || -> CompilationResult<()> {
         // Update runtime metadata about delay slots so we can properly handle traps and exceptions

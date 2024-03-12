@@ -99,12 +99,10 @@ impl<'ctx, T: Target> LabelWithContext<'ctx, T> {
         let len = self.label.len();
         for (i, instr) in self.label.instructions().enumerate() {
             if !instr.has_delay_slot() {
-                if self
-                    .compile_instruction(i, instr_callback, &instr, codegen)
-                    .is_err()
-                {
-                    // Stubbed instruction encountered in the middle of the basic block, stop now so our runtime panic can take care of it.
-                    // Note that we do not panic here because the runtime environment has the ability to update the debugger connection post panic.
+                if let Err(err) = self.compile_instruction(i, instr_callback, &instr, codegen) {
+                    // We do not propagate the error here because the runtime environment can update the debugger.
+                    // Instead, jump to the panic handler when the faulty instruction would otherwise be executed.
+                    codegen.build_panic(&err.to_string(), "error_while_compiling_instruction")?;
                     break;
                 }
             } else {
@@ -135,9 +133,16 @@ impl<'ctx, T: Target> LabelWithContext<'ctx, T> {
                 };
 
                 let addr = self.index_to_virtual_address(i);
-                T::compile_instruction_with_delay_slot(codegen, addr, &instr, &next_instr, |pc| {
-                    self.on_instruction(pc, instr_callback, codegen)
-                })?;
+                if let Err(err) = T::compile_instruction_with_delay_slot(
+                    codegen,
+                    addr,
+                    &instr,
+                    &next_instr,
+                    |pc| self.on_instruction(pc, instr_callback, codegen),
+                ) {
+                    // Same as above
+                    codegen.build_panic(&err.to_string(), "error_while_compiling_instruction")?;
+                }
                 break;
             }
         }
