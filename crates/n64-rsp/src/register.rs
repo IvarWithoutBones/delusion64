@@ -143,22 +143,26 @@ impl Registers {
         let bytes = match state.direction {
             dma::Direction::ToRdram => {
                 let addr = rdram_address.address() as usize;
-                let range = addr..addr + write_length.length() as usize;
+                let len = write_length.length() as usize;
+                let range = addr..addr + len;
                 effects.set_dirty_section(Section::RdramMemory, range);
-                write_length.length() as usize
+                len
             }
             dma::Direction::ToSpMemory => {
                 let addr = sp_address.address() as usize;
-                let range = addr..addr + read_length.length() as usize;
-                let section = match sp_address.bank() {
-                    MemoryBank::IMem => {
-                        ctx.cpu.invalidate_imem(range.clone());
-                        Section::RspIMemory
-                    }
-                    MemoryBank::DMem => Section::RspDMemory,
-                };
-                effects.set_dirty_section(section, range);
-                read_length.length() as usize
+                let len = read_length.length() as usize;
+                let range = addr..addr + len;
+                {
+                    let section = match sp_address.bank() {
+                        MemoryBank::IMem => {
+                            ctx.cpu.invalidate_imem(range.clone());
+                            Section::RspIMemory
+                        }
+                        MemoryBank::DMem => Section::RspDMemory,
+                    };
+                    effects.set_dirty_section(section, range);
+                }
+                len
             }
         };
 
@@ -185,6 +189,10 @@ impl Registers {
             self.control.write_parsed(rdram_address);
             self.control.write_parsed(sp_address);
         }
+
+        write_length.decrement(); // TODO: verify this
+        self.control.write_parsed(write_length);
+        self.control.write_parsed(read_length);
 
         Ok(effects)
     }

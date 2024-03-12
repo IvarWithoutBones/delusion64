@@ -1,17 +1,45 @@
-#![allow(dead_code)]
-
 use super::{register, Rsp};
 use crate::{
     codegen::{CodeGen, CompilationResult},
+    macros::env_call,
+    runtime::RuntimeFunction,
     target::Globals,
 };
 use inkwell::{
     context::Context,
     types::{IntType, VectorType},
-    values::{IntValue, VectorValue},
+    values::{IntValue, PointerValue, VectorValue},
 };
 
 impl<'ctx> CodeGen<'ctx, Rsp> {
+    /// Get the pointer to the DMA register for the current buffer.
+    fn dma_register_pointer(
+        &self,
+        reg: register::Control,
+    ) -> CompilationResult<PointerValue<'ctx>> {
+        debug_assert!(reg.is_dma_register());
+        let i32_type = self.context.i32_type();
+        let reg = reg.to_lower_buffer();
+        let ptr = self.globals().registers.pointer_value(self, &reg.into());
+        let offset = {
+            // Either zero or DMA_BUFFER_OFFSET, depending on the busy bit
+            let busy = self.read_control_register(i32_type, register::Control::DmaBusy)?;
+            let offset = register::Control::DMA_BUFFER_OFFSET as u64;
+            let mul = i32_type.const_int(offset, false);
+            self.builder.build_int_mul(busy, mul, "dma_buffer_offset")?
+        };
+
+        // SAFETY: Adding zero or DMA_BUFFER_OFFSET to the lower register pointer is always in-bounds, it refers to the upper/lower buffer.
+        Ok(unsafe {
+            self.builder.build_in_bounds_gep(
+                i32_type,
+                ptr,
+                &[offset],
+                &format!("{}_dma_active_buf", reg.name()),
+            )?
+        })
+    }
+
     /// Extracts the element at the given index from the given vector, returning it as an integer.
     pub fn build_extract_element(
         &self,
@@ -36,9 +64,49 @@ impl<'ctx> CodeGen<'ctx, Rsp> {
         ty: IntType<'ctx>,
         index: impl Into<u64>,
     ) -> CompilationResult<IntValue<'ctx>> {
+        debug_assert!(ty.get_bit_width() <= 32);
         #[allow(clippy::cast_possible_truncation)]
         let reg = register::Control::from_repr(index.into() as u8).unwrap();
-        Ok(self.read_register_raw(ty, reg)?.into_int_value())
+        match reg {
+            register::Control::DmaBusy | register::Control::DmaFull => {
+                // These are mirrors of certain bits of the status register
+                let status = {
+                    let reg = register::Control::Status;
+                    self.read_register_raw(ty, reg)?.into_int_value()
+                };
+
+                let shifted = {
+                    // Shift the appropriate bit from the status register into the LSB.
+                    let amount = match reg {
+                        register::Control::DmaBusy => register::control::Status::DMA_BUSY_SHIFT,
+                        register::Control::DmaFull => register::control::Status::DMA_FULL_SHIFT,
+                        _ => unreachable!(),
+                    };
+                    let shift = ty.const_int(amount, false);
+                    let name = &format!("{}_shift_to_lsb", reg.name());
+                    self.builder.build_right_shift(status, shift, false, name)?
+                };
+
+                // Mask off the irrelevant bits
+                let name = &format!("{}_mask_status_bit", reg.name());
+                self.build_mask(shifted, 0b1, name)
+            }
+
+            register::Control::Semaphore => {
+                // After reading the semaphore it is set to 1, regardless of its previous state
+                let value = self.read_register_raw(ty, reg)?.into_int_value();
+                self.write_register_raw(reg, ty.const_int(1, false))?;
+                Ok(value)
+            }
+
+            _ if reg.is_dma_register() => {
+                let ptr = self.dma_register_pointer(reg)?;
+                self.read_register_pointer(ptr, ty, reg.into())
+                    .map(inkwell::values::BasicValueEnum::into_int_value)
+            }
+
+            _ => Ok(self.read_register_raw(ty, reg)?.into_int_value()),
+        }
     }
 
     /// Read the vector (CP2) register at the given index.
@@ -53,6 +121,7 @@ impl<'ctx> CodeGen<'ctx, Rsp> {
     }
 
     /// Read the miscellaneous register at the given index.
+    #[allow(dead_code)]
     pub fn read_special_register(
         &self,
         ty: IntType<'ctx>,
@@ -63,32 +132,52 @@ impl<'ctx> CodeGen<'ctx, Rsp> {
         Ok(self.read_register_raw(ty, reg)?.into_int_value())
     }
 
-    /// Read the given register
-    pub fn read_rsp_register(
+    /// Write the control (CP0) register at the given index.
+    pub fn write_control_register(
         &self,
-        ty: IntType<'ctx>,
-        reg: register::Register,
-    ) -> CompilationResult<IntValue<'ctx>> {
+        index: impl Into<u64>,
+        value: IntValue<'ctx>,
+    ) -> CompilationResult<()> {
+        #[allow(clippy::cast_possible_truncation)]
+        let reg = register::Control::from_repr(index.into() as u8).unwrap();
+        let i32_type = self.context.i32_type();
         match reg {
-            register::Register::GeneralPurpose(r) => self.read_general_register(ty, r),
-            register::Register::Control(r) => self.read_control_register(ty, r),
-            register::Register::Vector(_r) => todo!("read_vector_register"),
-            // register::Register::Vector(r) => todo!("read_vector_register"),
-            register::Register::Special(r) => self.read_special_register(ty, r),
+            register::Control::DmaBusy | register::Control::DmaFull => {
+                // Read-only mirrors of the status register
+                Ok(())
+            }
+
+            register::Control::Semaphore => {
+                // When writing to the semaphore it is set to 0, regardless of the given value
+                let zero = i32_type.const_zero();
+                self.write_register_raw(reg, zero)
+            }
+
+            register::Control::Status => {
+                // Writing the status register may set the halted bit, so we let the runtime handle it.
+                env_call!(&self, RuntimeFunction::RspWriteStatus, [value])?;
+                Ok(())
+            }
+
+            register::Control::DmaReadLength1
+            | register::Control::DmaReadLength2
+            | register::Control::DmaWriteLength1
+            | register::Control::DmaWriteLength2 => {
+                todo!("start DMA from RSP JIT")
+            }
+
+            _ if reg.is_dma_register() => {
+                let ptr = self.dma_register_pointer(reg)?;
+                self.write_register_pointer(value.into(), ptr, reg.into())
+            }
+
+            // TODO: this assumes DMA buffer 0, which is not always the case
+            _ => self.write_register_raw(reg, value),
         }
     }
 
-    /// Write the control (CP0) register at the given index.
-    #[allow(clippy::needless_pass_by_value)]
-    pub fn write_control_register(
-        &self,
-        _index: impl Into<u64>,
-        _value: IntValue<'ctx>,
-    ) -> CompilationResult<()> {
-        todo!("codegen to update RSP control registers")
-    }
-
     /// Write the vector (CP2) register at the given index.
+    #[allow(dead_code)]
     pub fn write_vector_register(
         &self,
         index: impl Into<u64>,
@@ -126,6 +215,7 @@ impl<'ctx> CodeGen<'ctx, Rsp> {
     }
 
     /// Write the miscellaneous register at the given index.
+    #[allow(dead_code)]
     pub fn write_special_register(
         &self,
         index: impl Into<u64>,
@@ -134,20 +224,6 @@ impl<'ctx> CodeGen<'ctx, Rsp> {
         #[allow(clippy::cast_possible_truncation)]
         let reg = register::Special::from_repr(index.into() as u8).unwrap();
         self.write_register_raw(reg, value)
-    }
-
-    /// Write the given register
-    pub fn write_rsp_register(
-        &self,
-        reg: register::Register,
-        value: IntValue<'ctx>,
-    ) -> CompilationResult<()> {
-        match reg {
-            register::Register::GeneralPurpose(r) => self.write_general_register(r, value),
-            register::Register::Control(r) => self.write_control_register(r, value),
-            register::Register::Vector(_r) => todo!("write_vector_register"),
-            register::Register::Special(r) => self.write_special_register(r, value),
-        }
     }
 }
 

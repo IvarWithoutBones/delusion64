@@ -469,6 +469,10 @@ pub(crate) fn compile_instruction(
             codegen.write_memory(address, target)?;
         }
 
+        Mnenomic::Mfc0 | Mnenomic::Mtc0 => {
+            compile_control_register_move_instruction(codegen, instr)?;
+        }
+
         _ if instr.mnemonic().is_vector_instruction() => {
             vector::compile_instruction(codegen, instr)?;
         }
@@ -479,6 +483,32 @@ pub(crate) fn compile_instruction(
                 instr.mnemonic().full_name(),
             ));
         }
+    }
+    Ok(())
+}
+
+fn compile_control_register_move_instruction(
+    codegen: &CodeGen<Rsp>,
+    instr: &ParsedInstruction,
+) -> CompilationResult<()> {
+    let i32_type = codegen.context.i32_type();
+    match instr.mnemonic() {
+        Mnenomic::Mfc0 => {
+            // Copy contents of CP0 register rd, to GPR rt
+            let destination = codegen.read_control_register(i32_type, instr.rd())?;
+            codegen.write_general_register(instr.rt(), destination)?;
+        }
+
+        Mnenomic::Mtc0 => {
+            // Copy contents of GPR rt, to CP0 register rd
+            let source = codegen.read_general_register(i32_type, instr.rt())?;
+            codegen.write_control_register(instr.rd(), source)?;
+        }
+
+        _ => unreachable!(
+            "invalid RSP control register move instruction: {}",
+            instr.mnemonic().name()
+        ),
     }
     Ok(())
 }

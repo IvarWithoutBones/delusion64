@@ -112,7 +112,8 @@ impl DmaLength {
     #[must_use]
     pub fn length(self) -> u32 {
         // From n64-systemtest: "[..] 1 is added and then it is rounded up to the next multiple of 8 (e.g. 0..7 ==> 8 bytes, 8..15 => 16 bytes)"
-        (self.unmasked_length() + 1 + 7) & !0b111
+        const ALIGN: u32 = 0b111;
+        (self.unmasked_length() + ALIGN + 1) & !ALIGN
     }
 
     /// Number of bytes to skip in RDRAM after each row
@@ -308,6 +309,11 @@ bitfield! {
     }
 }
 
+impl Status {
+    pub const DMA_BUSY_SHIFT: u64 = 2;
+    pub const DMA_FULL_SHIFT: u64 = 3;
+}
+
 bitfield! {
     /// The RSP status register.
     /// This definition is only accurate when writing. When reading, use [`Status`] instead.
@@ -347,7 +353,7 @@ impl Status {
     /// Write the given value into the register, correctly applying changes.
     #[must_use]
     pub fn write(&mut self, x: impl Into<StatusWrite>) -> Option<InterruptRequest> {
-        let x = x.into();
+        let x: StatusWrite = x.into();
         self.set_signals(self.signals().write(x.raw_signals()));
 
         if x.clear_broke() {

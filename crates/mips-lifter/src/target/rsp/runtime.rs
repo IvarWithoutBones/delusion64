@@ -6,6 +6,13 @@ use crate::{
 use mips_decomp::{register::rsp::control::Status, Exception, INSTRUCTION_SIZE};
 
 impl<B: Bus> Environment<'_, Rsp, B> {
+    fn sleep_if_halted(&mut self) {
+        while self.registers.control.read_parsed::<Status>().halted() {
+            // TODO: update GDB if connected
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+
     unsafe extern "C" fn handle_exception_jit(
         &mut self,
         code: u64,
@@ -36,11 +43,17 @@ impl<B: Bus> Environment<'_, Rsp, B> {
             .with_halted(true);
         self.registers.control.write_parsed(status);
 
-        while self.registers.control.read_parsed::<Status>().halted() {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-
+        self.sleep_if_halted();
         self.get_function_ptr(self.registers.read_program_counter())
+    }
+
+    unsafe extern "C" fn write_status(&mut self, value: u32) {
+        let mut status: Status = self.registers.control.read_parsed();
+        if let Some(irq_req) = status.write(value) {
+            todo!("RSP JIT request MI interrupt {irq_req:?}")
+        }
+        self.registers.control.write_parsed(status);
+        self.sleep_if_halted();
     }
 }
 
@@ -48,13 +61,12 @@ impl<B: Bus> TargetDependantCallbacks for Environment<'_, Rsp, B> {
     fn callback_ptr(&self, func: RuntimeFunction) -> *const u8 {
         match func {
             RuntimeFunction::HandleException => Self::handle_exception_jit as *const u8,
+            RuntimeFunction::RspWriteStatus => Self::write_status as *const u8,
             _ => std::ptr::null(),
         }
     }
 
     fn on_block_entered(&mut self, _instructions_in_block: usize) -> usize {
-        // TODO: mechanism for the CPU to mark blocks as dirty, this breaks the `llvm-ir` GDB monitor command
-        // self.codegen.labels.remove_within_range(0..0x1000);
         0
     }
 }

@@ -23,7 +23,7 @@ use inkwell::{
     AtomicOrdering,
 };
 use mips_decomp::{instruction::ParsedInstruction, register, Exception};
-use std::{collections::HashMap, str::Utf8Error};
+use std::{collections::HashMap, mem::ManuallyDrop, str::Utf8Error};
 use tartan_bitfield::bitfield;
 
 mod arithmetic;
@@ -96,7 +96,7 @@ pub struct CodeGen<'ctx, T: Target> {
     helpers: Helpers<'ctx>,
 
     /// The module containing the main function. Everything branches from here.
-    main_module: Module<'ctx>,
+    main_module: ManuallyDrop<Module<'ctx>>,
     /// The module we are currently recompiling into. This will get moved into the label once we're done with it.
     active_module: Option<Module<'ctx>>,
 }
@@ -110,7 +110,7 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         Self {
             context,
             active_module: None,
-            main_module: module,
+            main_module: ManuallyDrop::new(module),
             helpers: Helpers::new(),
             builder: context.create_builder(),
             execution_engine,
@@ -590,11 +590,15 @@ impl<T: Target> Drop for CodeGen<'_, T> {
         let modules = unsafe { self.labels.inner_mut() }
             .drain(..)
             .flat_map(|l| l.module)
-            .chain(self.active_module.take());
+            .chain({
+                // SAFETY: We will not reference the module again, so we can take it.
+                let module = unsafe { ManuallyDrop::take(&mut self.main_module) };
+                std::iter::once(module)
+            });
 
         // Without manually removing the modules from the execution engine LLVM segfaults when restarting the JIT.
-        // We use `drain()` to run their `Drop` implementation prior to anything else,
-        // which prevents out of bounds reads/writes according to valgrind.
+        // We use `drain()` to run their `Drop` implementation prior to anything else, which prevents out of bounds reads/writes according to valgrind.
+        // Note that `self.active_module` is omitted here, since it does not yet belong to the execution engine.
         for module in modules {
             if let Err(err) = self.execution_engine.remove_module(&module) {
                 // Note that to avoid double-panics while unwinding we don't use `panic!` here, even though the error is fatal.

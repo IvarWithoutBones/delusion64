@@ -50,9 +50,7 @@ impl<'ctx, T: Target> VirtualAddressMap<'ctx, T> {
     /// Removes every label that resides within the given range of virtual addresses.
     pub fn remove_within_range(&mut self, range: Range<u64>) {
         if let Some(indices) = self.indices_containing(range) {
-            for label in self.inner.drain(indices) {
-                println!("{:#x?}", label.label.range());
-            }
+            self.inner.drain(indices);
         }
     }
 

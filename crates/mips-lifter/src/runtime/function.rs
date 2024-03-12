@@ -36,6 +36,8 @@ pub enum RuntimeFunction {
     WritePhysicalI16,
     WritePhysicalI32,
     WritePhysicalI64,
+
+    RspWriteStatus,
 }
 
 impl RuntimeFunction {
@@ -135,6 +137,9 @@ impl RuntimeFunction {
             Self::WritePhysicalI32 => sig!(void_type, [paddr: i32_type, value: i32_type]),
             // `Environment::write_physical_u64(&mut self, paddr: u32, value: u64)`
             Self::WritePhysicalI64 => sig!(void_type, [paddr: i32_type, value: i64_type]),
+
+            // `Environment::<Rsp, _>::write_status(&mut self, value: u32)`
+            Self::RspWriteStatus => sig!(void_type, [status: i32_type]),
         }
     }
 

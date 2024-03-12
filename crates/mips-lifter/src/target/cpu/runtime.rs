@@ -162,7 +162,7 @@ impl<B: Bus> TargetDependantCallbacks for Environment<'_, Cpu, B> {
             RuntimeFunction::ProbeTlbEntry => Self::probe_tlb_entry as *const u8,
             RuntimeFunction::ReadTlbEntry => Self::read_tlb_entry as *const u8,
             RuntimeFunction::WriteTlbEntry => Self::write_tlb_entry as *const u8,
-            _ => panic!("unsupported runtime function: {func:?}"),
+            _ => std::ptr::null(),
         }
     }
 }
