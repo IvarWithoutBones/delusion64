@@ -120,15 +120,13 @@ impl<'ctx> CodeGen<'ctx, Rsp> {
         Ok(self.read_register_raw(ty, reg)?.into_vector_value())
     }
 
-    /// Read the miscellaneous register at the given index.
-    #[allow(dead_code)]
-    pub fn read_special_register(
+    pub fn read_flags_register(
         &self,
         ty: IntType<'ctx>,
         index: impl Into<u64>,
     ) -> CompilationResult<IntValue<'ctx>> {
         #[allow(clippy::cast_possible_truncation)]
-        let reg = register::Special::from_repr(index.into() as u8).unwrap();
+        let reg = register::Flags::new(index.into() as u8);
         Ok(self.read_register_raw(ty, reg)?.into_int_value())
     }
 
@@ -188,6 +186,20 @@ impl<'ctx> CodeGen<'ctx, Rsp> {
         self.write_register_raw(reg, value)
     }
 
+    pub fn write_flags_register(
+        &self,
+        index: impl Into<u64>,
+        mut value: IntValue<'ctx>,
+    ) -> CompilationResult<()> {
+        #[allow(clippy::cast_possible_truncation)]
+        let reg = register::Flags::new(index.into() as u8);
+        if matches!(reg, register::Flags::VCE) && value.get_type().get_bit_width() > 8 {
+            // VCE is only 8 bits
+            value = self.truncate_to(self.context.i8_type(), value)?;
+        }
+        self.write_register_raw(reg, value)
+    }
+
     /// Write the given 8-bit `value`, into vector register `index` at `offset`.
     pub fn write_vector_register_byte_offset(
         &self,
@@ -212,18 +224,6 @@ impl<'ctx> CodeGen<'ctx, Rsp> {
         };
 
         self.write_register_pointer(value.into(), ptr, reg)
-    }
-
-    /// Write the miscellaneous register at the given index.
-    #[allow(dead_code)]
-    pub fn write_special_register(
-        &self,
-        index: impl Into<u64>,
-        value: IntValue<'ctx>,
-    ) -> CompilationResult<()> {
-        #[allow(clippy::cast_possible_truncation)]
-        let reg = register::Special::from_repr(index.into() as u8).unwrap();
-        self.write_register_raw(reg, value)
     }
 }
 

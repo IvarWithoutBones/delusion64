@@ -119,6 +119,7 @@ impl_control_reg_def!(
 #[derive(Default, Clone, PartialEq)]
 pub struct Registers {
     pub general_purpose: RegisterBank<u32, { register::GeneralPurpose::count() }>,
+    pub flags: RegisterBank<u16, { register::Flags::count() }>,
     pub control: ControlRegisterBank,
     pub special: SpecialRegisterBank,
     /// In reality these are 128-bit registers, but since Rust does not have an AtomicU128 type, RegisterBank cannot be implemented for it.
@@ -130,7 +131,8 @@ impl_reg_index!(
     Registers,
     (register::GeneralPurpose, u32, general_purpose),
     (register::Control, u32, control),
-    (register::Special, u64, special)
+    (register::Special, u64, special),
+    (register::Flags, u16, flags)
 );
 
 impl RegIndex<register::Vector> for Registers {
@@ -165,10 +167,10 @@ impl RegIndex<register::Register> for Registers {
             register::Register::Control(r) => u128::from(self.read(r)),
             register::Register::Vector(r) => self.read(r),
             register::Register::Special(r) => u128::from(self.read(r)),
+            register::Register::Flags(r) => u128::from(self.read(r)),
         }
     }
 
-    #[allow(clippy::cast_possible_truncation)]
     fn write(&mut self, index: register::Register, value: Self::Output) {
         match index {
             register::Register::GeneralPurpose(r) => {
@@ -179,6 +181,9 @@ impl RegIndex<register::Register> for Registers {
             }
             register::Register::Vector(r) => self.write(r, value),
             register::Register::Special(r) => {
+                self.write(r, value.try_into().expect("value too large"));
+            }
+            register::Register::Flags(r) => {
                 self.write(r, value.try_into().expect("value too large"));
             }
         }
@@ -219,6 +224,11 @@ impl fmt::Debug for Registers {
             write_reg(f, reg.name(), self.read(reg))?;
         }
 
+        writeln!(f, "\nflag registers:")?;
+        for reg in register::Flags::iter() {
+            write_reg(f, reg.name(), self.read(reg).into())?;
+        }
+
         writeln!(f, "\nspecial registers:")?;
         for reg in register::Special::iter() {
             write_reg(f, reg.name(), self.read(reg).into())?;
@@ -252,6 +262,7 @@ impl target::RegisterStorage for Registers {
             control: self.control.0.map_into(module, exec_engine, "control"),
             vector: self.vector.map_into(module, exec_engine, "vector"),
             special: self.special.0.map_into(module, exec_engine, "special"),
+            flags: self.flags.map_into(module, exec_engine, "flags"),
         }
     }
 
@@ -287,6 +298,7 @@ impl<T: Into<register::Register>> From<T> for RegisterID {
 #[derive(Debug)]
 pub(crate) struct RegisterGlobals<'ctx> {
     general_purpose: RegisterBankMapping<'ctx>,
+    flags: RegisterBankMapping<'ctx>,
     control: RegisterBankMapping<'ctx>,
     vector: RegisterBankMapping<'ctx>,
     special: RegisterBankMapping<'ctx>,
@@ -300,6 +312,7 @@ impl<'ctx> target::Globals<'ctx> for RegisterGlobals<'ctx> {
         codegen: &crate::codegen::CodeGen<'ctx, T>,
         reg: &Self::RegisterID,
     ) -> inkwell::values::PointerValue<'ctx> {
+        let i16_type = codegen.context.i16_type();
         let i32_type = codegen.context.i32_type();
         let i64_type = codegen.context.i64_type();
         let i128_type = codegen.context.i128_type();
@@ -307,6 +320,7 @@ impl<'ctx> target::Globals<'ctx> for RegisterGlobals<'ctx> {
         let (ty, ptr) = match reg.0 {
             register::Register::Control(_) => (i32_type, self.control.pointer_value()),
             register::Register::Vector(_) => (i128_type, self.vector.pointer_value()),
+            register::Register::Flags(_) => (i16_type, self.flags.pointer_value()),
             register::Register::Special(_) => (i64_type, self.special.pointer_value()),
             register::Register::GeneralPurpose(_) => {
                 (i32_type, self.general_purpose.pointer_value())
@@ -332,6 +346,7 @@ impl<'ctx> target::Globals<'ctx> for RegisterGlobals<'ctx> {
             register::Register::Control(_) => self.control.is_atomic(),
             register::Register::Vector(_) => self.vector.is_atomic(),
             register::Register::Special(_) => self.special.is_atomic(),
+            register::Register::Flags(_) => self.flags.is_atomic(),
         }
     }
 }

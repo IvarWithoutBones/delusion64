@@ -473,6 +473,10 @@ pub(crate) fn compile_instruction(
             compile_control_register_move_instruction(codegen, instr)?;
         }
 
+        Mnenomic::Ctc2 | Mnenomic::Cfc2 => {
+            compile_flags_register_move_instruction(codegen, instr)?;
+        }
+
         _ if instr.mnemonic().is_vector_instruction() => {
             vector::compile_instruction(codegen, instr)?;
         }
@@ -483,6 +487,34 @@ pub(crate) fn compile_instruction(
                 instr.mnemonic().full_name(),
             ));
         }
+    }
+    Ok(())
+}
+
+fn compile_flags_register_move_instruction(
+    codegen: &CodeGen<Rsp>,
+    instr: &ParsedInstruction,
+) -> CompilationResult<()> {
+    let i16_type = codegen.context.i16_type();
+    let i32_type = codegen.context.i32_type();
+    match instr.mnemonic() {
+        Mnenomic::Ctc2 => {
+            // Copy contents of GPR rt, to the flags register rd.
+            let target = codegen.read_general_register(i16_type, instr.rt())?;
+            codegen.write_flags_register(instr.rd(), target)?;
+        }
+
+        Mnenomic::Cfc2 => {
+            // Copy contents of the flags register rd, to GPR rt.
+            let source = codegen.read_flags_register(i16_type, instr.rd())?;
+            let source_ext = codegen.sign_extend_to(i32_type, source)?;
+            codegen.write_general_register(instr.rt(), source_ext)?;
+        }
+
+        _ => unreachable!(
+            "invalid RSP flags register move instruction: {}",
+            instr.mnemonic().name()
+        ),
     }
     Ok(())
 }

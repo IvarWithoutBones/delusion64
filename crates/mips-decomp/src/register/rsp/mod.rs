@@ -127,6 +127,42 @@ pub enum Vector {
 
 impl_reg!(Vector);
 
+/// 16-bit registers used to control certain opcodes.
+#[derive(EnumCount, EnumIter, VariantNames, FromRepr, Debug, PartialEq, Eq, Clone, Copy)]
+#[repr(u8)]
+pub enum Flags {
+    VCC,
+    VCO,
+    VCE,
+}
+
+impl_reg!(Flags);
+
+impl Flags {
+    /// Create a new `Flags` register from a raw value, taking wrapping into account.
+    ///
+    /// # Examples
+    /// ```
+    /// use mips_decomp::register::rsp::Flags;
+    /// assert_eq!(Flags::new(0), Flags::VCC);
+    /// assert_eq!(Flags::new(1), Flags::VCO);
+    /// assert_eq!(Flags::new(2), Flags::VCE);
+    /// assert_eq!(Flags::new(3), Flags::VCE);
+    /// assert_eq!(Flags::new(4), Flags::VCC);
+    /// ```
+    #[must_use]
+    pub const fn new(raw: u8) -> Self {
+        // Normalise to 0..=3, then replace any 3 with a 2.
+        let lower_bits = raw & 0b11;
+        let index = lower_bits & !(lower_bits >> 1);
+        if let Some(flag) = Self::from_repr(index) {
+            flag
+        } else {
+            unreachable!()
+        }
+    }
+}
+
 /// An miscellaneous register that doesn't fit into any other category.
 #[derive(EnumCount, EnumIter, VariantNames, FromRepr, Debug, PartialEq, Eq, Clone, Copy)]
 #[repr(u8)]
@@ -144,6 +180,7 @@ pub enum Register {
     GeneralPurpose(GeneralPurpose),
     Control(Control),
     Vector(Vector),
+    Flags(Flags),
     Special(Special),
 }
 
@@ -155,6 +192,7 @@ impl Register {
             Self::GeneralPurpose(r) => r.name(),
             Self::Control(r) => r.name(),
             Self::Vector(r) => r.name(),
+            Self::Flags(r) => r.name(),
             Self::Special(r) => r.name(),
         }
     }
@@ -166,6 +204,7 @@ impl Register {
             Self::GeneralPurpose(r) => r.to_repr(),
             Self::Control(r) => r.to_repr(),
             Self::Vector(r) => r.to_repr(),
+            Self::Flags(r) => r.to_repr(),
             Self::Special(r) => r.to_repr(),
         }
     }
@@ -192,5 +231,11 @@ impl From<Special> for Register {
 impl From<Vector> for Register {
     fn from(r: Vector) -> Self {
         Self::Vector(r)
+    }
+}
+
+impl From<Flags> for Register {
+    fn from(r: Flags) -> Self {
+        Self::Flags(r)
     }
 }
