@@ -22,6 +22,7 @@ use strum::IntoEnumIterator;
 pub(crate) use self::function::RuntimeFunction;
 
 pub mod bus;
+mod callback;
 mod function;
 pub(crate) mod gdb;
 pub(crate) mod memory;
@@ -155,6 +156,16 @@ where
         for func in RuntimeFunction::iter() {
             let ptr: *const u8 = match func {
                 RuntimeFunction::Panic => Self::panic as _,
+                // RuntimeFunction::Panic => {
+                //     use callback::{Callback, Callbacks};
+                //     let callback = <Self as Callbacks<T, B>>::panic(self);
+                //     let sig = callback.signature(self.codegen.context);
+                //     let func_val = module.add_function("panic", sig, None);
+                //     execution_engine.add_global_mapping(&func_val, callback.as_ptr());
+                //     functions.entry(func).or_insert(func_val);
+                //     continue;
+                // }
+
                 RuntimeFunction::OnInstruction => Self::on_instruction as _,
                 RuntimeFunction::OnBlockEntered => Self::on_block_entered as _,
                 RuntimeFunction::GetFunctionPtr => Self::get_function_ptr as _,
