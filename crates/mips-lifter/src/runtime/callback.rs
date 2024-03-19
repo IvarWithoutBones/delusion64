@@ -10,7 +10,7 @@ use inkwell::{
 };
 
 mod a {
-    // TODO move to arithmatic
+    // TODO move to arithmetic
     use inkwell::{
         context::Context,
         types::{BasicMetadataTypeEnum, IntType, PointerType},
@@ -183,85 +183,48 @@ impl_callback_signature!(Arg1, Arg2, Arg3, Arg4, Arg5);
 impl_callback_signature!(Arg1, Arg2, Arg3, Arg4, Arg5, Arg6);
 impl_callback_signature!(Arg1, Arg2, Arg3, Arg4, Arg5, Arg6, Arg7);
 
-macro_rules! callback {
-    (|$env: ident $(, $arg: ident : $arg_ty: ty)* $(,)?| $(-> $ret: tt)? $body: expr) => {{
-        extern "C" fn callback<T: Target, B: Bus>(
-            $env: &mut Environment<'_, T, B>,
-            $($arg: $arg_ty),*
-        ) $(-> $ret)?
-        where
-            for<'a> Environment<'a, T, B>: ValidRuntime<T>,
-        {
-            $body
-        }
-        // We need to explicitly cast this to avoid coercing it into an `Fn` pointer, for which `Callback` is not implemented.
-        callback as extern "C" fn(&mut Environment<'_, T, B>, $($arg_ty),*) $(-> $ret)?
-    }};
-}
-
 pub type RawPointer = usize;
-
-pub mod signatures {
-    use crate::runtime::Environment;
-
-    pub type Panic<T, B> = extern "C" fn(&mut Environment<'_, T, B>, *const u8, usize);
-    pub type OnBlockEntered<T, B> = extern "C" fn(&mut Environment<'_, T, B>, u64) -> usize;
-    pub type OnInstruction<T, B> = extern "C" fn(&mut Environment<'_, T, B>);
-    pub type HandleException<T, B> =
-        extern "C" fn(&mut Environment<'_, T, B>, u64, bool, u8, bool, u64) -> usize;
-}
 
 pub trait Callbacks<T: Target, B: Bus>
 where
     for<'a> Environment<'a, T, B>: ValidRuntime<T>,
 {
-    #[inline]
-    fn handle_exception(&self) -> signatures::HandleException<T, B> {
-        callback!(|env,
-                   code: u64,
-                   has_coprocessor: bool,
-                   coprocessor: u8,
-                   has_bad_vaddr: bool,
-                   bad_vaddr: u64|
-         -> usize {
-            let msg = &format!(
-                "unimplemented call to `handle_exception`:\n\
+    extern "C" fn handle_exception(
+        env: &mut Environment<'_, T, B>,
+        code: u64,
+        has_coprocessor: bool,
+        coprocessor: u8,
+        has_bad_vaddr: bool,
+        bad_vaddr: u64,
+    ) -> usize {
+        let msg = &format!(
+            "unimplemented call to `handle_exception`:\n\
                 code={code:#x},\n\
                 has_coprocessor={has_coprocessor}, coprocessor={coprocessor},\n\
                 has_bad_vaddr={has_bad_vaddr}, bad_vaddr={bad_vaddr:#x}"
-            );
-            env.panic_update_debugger(msg)
-        })
+        );
+        env.panic_update_debugger(msg)
     }
 
-    #[inline]
-    fn panic(&self) -> signatures::Panic<T, B> {
-        callback!(|env, string_ptr: *const u8, len: usize| {
-            let slice = unsafe { std::slice::from_raw_parts(string_ptr, len) };
-            match std::str::from_utf8(slice) {
-                Ok(str) => env.panic_update_debugger(&format!("Environment::panic called: {str}")),
-                Err(err) => {
-                    let msg = &format!("Environment::panic called with an invalid string: {err}");
-                    env.panic_update_debugger(msg)
-                }
+    extern "C" fn panic(env: &mut Environment<'_, T, B>, string_ptr: *const u8, string_len: usize) {
+        let slice = unsafe { std::slice::from_raw_parts(string_ptr, string_len) };
+        match std::str::from_utf8(slice) {
+            Ok(str) => env.panic_update_debugger(&format!("Environment::panic called: {str}")),
+            Err(err) => {
+                let msg = &format!("Environment::panic called with an invalid string: {err}");
+                env.panic_update_debugger(msg)
             }
-        })
+        }
     }
 
-    #[inline]
-    fn on_block_entered(&self) -> signatures::OnBlockEntered<T, B> {
-        callback!(|env, addr: u64| -> usize {
-            let msg = &format!("unimplemented call to `on_block_entered` with addr={addr:#x}");
-            env.panic_update_debugger(msg)
-        })
+    extern "C" fn on_block_entered(env: &mut Environment<'_, T, B>, instrs: u64) -> usize {
+        let msg = &format!("unimplemented call to `on_block_entered` with instrs={instrs:#x}");
+        env.panic_update_debugger(msg)
     }
 
-    #[inline]
-    fn on_instruction_callback(&self) -> signatures::OnInstruction<T, B> {
-        callback!(|env| {
-            let msg = "unimplemented call to `on_instruction_callback`";
-            env.panic_update_debugger(msg)
-        })
+    extern "C" fn on_instruction_callback(env: &mut Environment<'_, T, B>) {
+        let msg = "unimplemented call to `on_instruction_callback`";
+        env.panic_update_debugger(msg)
     }
 }
 
@@ -275,10 +238,10 @@ where
     for<'a> Environment<'a, T, B>: ValidRuntime<T>,
 {
     fn map_(&mut self) {
-        let a = self.on_instruction_callback();
-        self.on_instruction_callback()(self);
-        let _b = a.signature(self.codegen.context);
-        let c: extern "C" fn(&mut Environment<'_, T, B>) = self.on_instruction_callback();
-        c(self);
+        // let a = self.on_instruction_callback();
+        // self.on_instruction_callback()(self);
+        // let _b = a.signature(self.codegen.context);
+        // let c: extern "C" fn(&mut Environment<'_, T, B>) = self.on_instruction_callback();
+        // c(self);
     }
 }
