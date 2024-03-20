@@ -1,6 +1,6 @@
 use super::{register, Rsp};
 use crate::{
-    codegen::{CodeGen, CompilationError, CompilationResult},
+    codegen::{CodeGen, CompilationResult},
     macros::env_call,
     runtime::RuntimeFunction,
     target::Globals,
@@ -157,18 +157,23 @@ impl<'ctx> CodeGen<'ctx, Rsp> {
                 Ok(())
             }
 
-            register::Control::DmaReadLength1
-            | register::Control::DmaReadLength2
-            | register::Control::DmaWriteLength1
-            | register::Control::DmaWriteLength2 => {
-                let name = reg.name();
-                let msg = format!("tried to start DMA from the RSP JIT by writing to {name}");
-                Err(CompilationError::UnimplementedInstruction(msg))
-            }
-
             _ if reg.is_dma_register() => {
                 let ptr = self.dma_register_pointer(reg)?;
-                self.write_register_pointer(value.into(), ptr, reg.into())
+                self.write_register_pointer(value.into(), ptr, reg.into())?;
+                match reg.to_lower_buffer() {
+                    register::Control::DmaReadLength1 => {
+                        // Request a DMA from RDRAM
+                        let to_rdram = self.context.bool_type().const_zero();
+                        env_call!(&self, RuntimeFunction::RequestDma, [to_rdram])?;
+                    }
+                    register::Control::DmaWriteLength1 => {
+                        // Request a DMA to RDRAM
+                        let to_rdram = self.context.bool_type().const_all_ones();
+                        env_call!(&self, RuntimeFunction::RequestDma, [to_rdram])?;
+                    }
+                    _ => {}
+                }
+                Ok(())
             }
 
             _ => self.write_register_raw(reg, value),

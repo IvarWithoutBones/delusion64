@@ -11,7 +11,7 @@ type MemoryBankHandle = Arc<RwLock<MemoryBankStorage>>;
 
 /// RSP memory, consisting of data memory and instruction memory.
 /// Cloning this creates another handle to the same memory, and is fairly cheap.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct Memory {
     /// Data memory, known as `DMEM`
     pub data: MemoryBankHandle,
@@ -51,5 +51,12 @@ impl Memory {
         }
         .write()
         .map_err(|_| RspError::WritePoisonError { bank })
+    }
+}
+
+impl std::fmt::Debug for Memory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Avoid printing the entire contents of memory
+        f.debug_struct("Memory").finish_non_exhaustive()
     }
 }

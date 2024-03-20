@@ -90,7 +90,7 @@ impl Registers {
         Ok(effects)
     }
 
-    fn queue_dma(&mut self, direction: dma::Direction) {
+    pub(crate) fn queue_dma(&mut self, direction: dma::Direction) {
         let mut status: Status = self.control.read_parsed();
         let is_busy = status.dma_busy();
         if status.dma_full() {

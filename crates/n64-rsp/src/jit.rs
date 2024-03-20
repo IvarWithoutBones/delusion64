@@ -1,7 +1,9 @@
-use crate::{register::Registers, Memory, RspError, RspResult};
+use crate::{dma, register::Registers, Memory, RspError, RspResult};
 use mips_lifter::{
     gdb,
-    runtime::bus::{Bus as BusInterface, BusResult, BusValue, Int, PhysicalAddress},
+    runtime::bus::{
+        Bus as BusInterface, BusResult, BusValue, DmaDirection, DmaInfo, Int, PhysicalAddress,
+    },
     target::rsp::{
         register::control::{MemoryBank, Status},
         ControlRegisterBank, SpecialRegisterBank,
@@ -26,6 +28,7 @@ pub struct Handle {
     _thread: JoinHandle<Bus>,
     cycle_budget: Arc<AtomicUsize>,
     imem_mutation_sender: Sender<IMemRange>,
+    dma_request_receiver: Receiver<DmaInfo>,
 }
 
 impl Handle {
@@ -38,6 +41,8 @@ impl Handle {
         control.write_parsed(Status::default().with_halted(true));
 
         let (imem_mutation_sender, imem_mutation_receiver) = mpsc::channel();
+        let (dma_request_sender, dma_request_receiver) = mpsc::channel();
+
         let this = Self {
             _thread: {
                 let cycle_budget = cycle_budget.clone();
@@ -49,6 +54,7 @@ impl Handle {
                         special_registers,
                         cycle_budget,
                         imem_mutation_receiver,
+                        dma_request_sender,
                         memory,
                         gdb,
                     )
@@ -56,6 +62,7 @@ impl Handle {
             },
             imem_mutation_sender,
             cycle_budget,
+            dma_request_receiver,
         };
         let regs = Registers::new(control, special);
         (this, regs)
@@ -73,12 +80,24 @@ impl Handle {
             .send(range)
             .expect("failed to send IMem mutation");
     }
+
+    pub(crate) fn poll_dma_request(&self) -> Option<dma::Direction> {
+        self.dma_request_receiver
+            .try_recv()
+            .ok()
+            .map(|info| match info.direction {
+                // TODO: use `DmaDirection` everywhere
+                DmaDirection::ToRdram => dma::Direction::ToRdram,
+                DmaDirection::FromRdram => dma::Direction::ToSpMemory,
+            })
+    }
 }
 
 struct Bus {
     memory: Memory,
     cycle_budget: Arc<AtomicUsize>,
     imem_mutation_receiver: Receiver<IMemRange>,
+    dma_request_sender: Sender<DmaInfo>,
 }
 
 impl Bus {
@@ -87,6 +106,7 @@ impl Bus {
         special: SpecialRegisterBank,
         cycle_budget: Arc<AtomicUsize>,
         imem_mutation_receiver: Receiver<IMemRange>,
+        dma_request_sender: Sender<DmaInfo>,
         memory: Memory,
         gdb: Option<TcpStream>,
     ) -> Self {
@@ -98,6 +118,7 @@ impl Bus {
             memory,
             cycle_budget,
             imem_mutation_receiver,
+            dma_request_sender,
         };
 
         let regs = mips_lifter::target::rsp::Registers {
@@ -113,7 +134,7 @@ impl Bus {
         JitBuilder::new_rsp(this)
             .with_rsp_registers(regs)
             .maybe_with_gdb(gdb)
-            .with_trace(true)
+            .with_trace(false)
             .run()
     }
 
@@ -169,11 +190,7 @@ impl BusInterface for Bus {
         value: Int<SIZE>,
     ) -> BusResult<(), Self::Error> {
         self.write(address, value.as_slice())?;
-        Ok(().into())
-    }
-
-    fn ranges_to_invalidate(&mut self) -> Vec<Range<PhysicalAddress>> {
-        self.imem_mutation_receiver.try_iter().collect()
+        Ok(BusValue::default())
     }
 
     fn tick(&mut self, cycles: usize) -> BusResult<(), Self::Error> {
@@ -189,5 +206,16 @@ impl BusInterface for Bus {
 
         self.check_imem_mutations(&mut result);
         Ok(result)
+    }
+
+    fn ranges_to_invalidate(&mut self) -> Vec<Range<PhysicalAddress>> {
+        self.imem_mutation_receiver.try_iter().collect()
+    }
+
+    fn request_dma(&mut self, info: DmaInfo) -> BusResult<(), Self::Error> {
+        self.dma_request_sender
+            .send(info)
+            .expect("failed to send DMA request");
+        Ok(BusValue::default())
     }
 }

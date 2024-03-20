@@ -249,6 +249,26 @@ format_int!(
     (fmt::Binary, "b")
 );
 
+/// The direction of a requested DMA transfer.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum DmaDirection {
+    ToRdram,
+    FromRdram,
+}
+
+/// Metadata about a DMA request from the JIT.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct DmaInfo {
+    /// Whether to transfer to or from [`DmaInfo::rdram_address`].
+    pub direction: DmaDirection,
+    /// The number of bytes to transfer.
+    pub length: u32,
+    /// The physical address in RDRAM to transfer to/from.
+    pub rdram_address: PhysicalAddress,
+    /// The physical address in the other device to transfer to/from.
+    pub other_address: PhysicalAddress,
+}
+
 /// Decides whom will kill the thread when an unrecoverable error occurs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PanicAction {
@@ -296,6 +316,11 @@ pub trait Bus {
 
     /// Performs a single tick, used to emulate clock cycles.
     fn tick(&mut self, cycles: usize) -> BusResult<(), Self::Error>;
+
+    /// Called when the JIT wants to request a DMA transfer.
+    fn request_dma(&mut self, info: DmaInfo) -> BusResult<(), Self::Error> {
+        unimplemented!("unimplemented call to request_dma: {info:?}")
+    }
 
     /// Should return any ranges of physical addresses that were mutated since the last time mutations were reported.
     /// This currently only gets called prior to looking up cached JIT blocks.

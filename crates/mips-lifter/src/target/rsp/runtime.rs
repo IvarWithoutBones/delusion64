@@ -1,9 +1,17 @@
 use super::Rsp;
 use crate::{
-    runtime::{bus::Bus, Environment, InterruptHandler, RuntimeFunction, TargetDependantCallbacks},
+    runtime::{
+        bus::{Bus, DmaDirection, DmaInfo},
+        Environment, InterruptHandler, RuntimeFunction, TargetDependantCallbacks,
+    },
     target::RegisterStorage,
 };
-use mips_decomp::{register::rsp::control::Status, Exception, INSTRUCTION_SIZE};
+use mips_decomp::{
+    register::rsp::control::{
+        DmaRdramAddress, DmaReadLength, DmaSpAddress, DmaWriteLength, Status,
+    },
+    Exception, INSTRUCTION_SIZE,
+};
 
 impl<B: Bus> Environment<'_, Rsp, B> {
     fn sleep_if_halted(&mut self) {
@@ -55,6 +63,50 @@ impl<B: Bus> Environment<'_, Rsp, B> {
         self.registers.control.write_parsed(status);
         self.sleep_if_halted();
     }
+
+    unsafe extern "C" fn request_dma(&mut self, to_rdram: bool) {
+        let (direction, length) = if to_rdram {
+            let len = self
+                .registers
+                .control
+                .read_parsed::<DmaWriteLength>()
+                .length();
+            (DmaDirection::ToRdram, len)
+        } else {
+            let len = self
+                .registers
+                .control
+                .read_parsed::<DmaReadLength>()
+                .length();
+            (DmaDirection::FromRdram, len)
+        };
+
+        let rdram_address = self
+            .registers
+            .control
+            .read_parsed::<DmaRdramAddress>()
+            .address();
+        let other_address = self
+            .registers
+            .control
+            .read_parsed::<DmaSpAddress>()
+            .address();
+
+        let info = DmaInfo {
+            direction,
+            length,
+            rdram_address,
+            other_address,
+        };
+
+        self.bus
+            .request_dma(info)
+            .map(|effects| effects.handle(self))
+            .unwrap_or_else(|err| {
+                let msg = format!("failed to request DMA: {err}");
+                self.panic_update_debugger(&msg)
+            });
+    }
 }
 
 impl<B: Bus> TargetDependantCallbacks for Environment<'_, Rsp, B> {
@@ -62,6 +114,7 @@ impl<B: Bus> TargetDependantCallbacks for Environment<'_, Rsp, B> {
         match func {
             RuntimeFunction::HandleException => Self::handle_exception_jit as *const u8,
             RuntimeFunction::RspWriteStatus => Self::write_status as *const u8,
+            RuntimeFunction::RequestDma => Self::request_dma as *const u8,
             _ => std::ptr::null(),
         }
     }

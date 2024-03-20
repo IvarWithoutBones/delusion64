@@ -38,6 +38,7 @@ pub enum RuntimeFunction {
     WritePhysicalI64,
 
     RspWriteStatus,
+    RequestDma,
 }
 
 impl RuntimeFunction {
@@ -140,6 +141,8 @@ impl RuntimeFunction {
 
             // `Environment::<Rsp, _>::write_status(&mut self, value: u32)`
             Self::RspWriteStatus => sig!(void_type, [status: i32_type]),
+            // `Environment::<Rsp, _>::request_dma(&mut self, to_rdram: bool)`
+            Self::RequestDma => sig!(void_type, [to_rdram: bool_type]),
         }
     }
 

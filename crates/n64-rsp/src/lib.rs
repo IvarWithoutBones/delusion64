@@ -122,6 +122,10 @@ impl Rsp {
     /// # Errors
     /// Returns an error if the RSP is in an invalid state
     pub fn tick(&mut self, cycles: usize, rdram: &mut [u8]) -> RspResult<SideEffects> {
+        if let Some(direction) = self.cpu.poll_dma_request() {
+            self.registers.queue_dma(direction);
+        }
+
         if !self.registers.control.read_parsed::<Status>().halted() {
             self.cpu.tick(cycles);
         }
