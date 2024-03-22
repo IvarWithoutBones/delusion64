@@ -4,6 +4,7 @@ use crate::{
     label::LabelWithContext,
     target::{Label, Target},
 };
+use inkwell::execution_engine::ExecutionEngine;
 use std::ops::Range;
 
 #[allow(clippy::module_name_repetitions)]
@@ -28,7 +29,7 @@ impl<'ctx, T: Target> VirtualAddressMap<'ctx, T> {
     /// An iterator over all labels that contain the given virtual address.
     pub fn get_containing(&self, vaddr: u64) -> impl Iterator<Item = &LabelWithContext<'ctx, T>> {
         #[allow(clippy::range_plus_one)] // `indices_containing` does not accept RangeInclusive.
-        self.indices_containing(vaddr..vaddr + 1)
+        self.indices_containing(&(vaddr..vaddr + 1))
             .into_iter()
             .flat_map(|range| self.inner[range].iter())
     }
@@ -48,13 +49,18 @@ impl<'ctx, T: Target> VirtualAddressMap<'ctx, T> {
     }
 
     /// Removes every label that resides within the given range of virtual addresses.
-    pub fn remove_within_range(&mut self, range: Range<u64>) {
+    pub fn remove_within_range(&mut self, range: &Range<u64>, exec: &ExecutionEngine<'ctx>) {
         if let Some(indices) = self.indices_containing(range) {
-            self.inner.drain(indices);
+            for label in self.inner.drain(indices) {
+                println!("Removing module: {:#x?}", label.label.range());
+                let module = label.module.expect("module should be present");
+                exec.remove_module(&module)
+                    .expect("failed to remove module");
+            }
         }
     }
 
-    fn indices_containing(&self, addrs: Range<u64>) -> Option<Range<usize>> {
+    fn indices_containing(&self, addrs: &Range<u64>) -> Option<Range<usize>> {
         // This is a bit tricky because of the backtracking, this is the idea:
         // 1. Find the index of the first label that starts at the given address, or the place it could be inserted.
         // 2. Iterate backwards until the address no longer falls within the range of the label.
@@ -70,12 +76,12 @@ impl<'ctx, T: Target> VirtualAddressMap<'ctx, T> {
             .take_while(|&i| {
                 self.inner
                     .get(i)
-                    .is_some_and(|l| overlaps(&l.label.range(), &addrs))
+                    .is_some_and(|l| overlaps(&l.label.range(), addrs))
             })
             .last()?;
         let end = self.inner[start..]
             .iter()
-            .take_while(|l| overlaps(&l.label.range(), &addrs))
+            .take_while(|l| overlaps(&l.label.range(), addrs))
             .count()
             .checked_add(start)?;
         Some(start..end)

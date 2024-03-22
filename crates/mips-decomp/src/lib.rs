@@ -1,3 +1,5 @@
+use std::fmt;
+
 use crate::instruction::ParsedInstruction;
 use strum::FromRepr;
 
@@ -127,8 +129,8 @@ impl From<u32> for MaybeInstruction {
     }
 }
 
-impl std::fmt::Display for MaybeInstruction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for MaybeInstruction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Instruction(instr) => write!(f, "{instr}"),
             Self::Invalid(value) => write!(f, "unknown: {value:#034b}"),
@@ -136,13 +138,45 @@ impl std::fmt::Display for MaybeInstruction {
     }
 }
 
-pub fn read_labels(count: usize, data: &mut impl Iterator<Item = u32>) -> Option<LabelList> {
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
+    #[error("invalid instruction: {raw} at offset {offset}")]
+    InvalidInstruction { raw: RawInstruction, offset: usize },
+    #[error("failed to read instruction data")]
+    ReadInstructionData,
+    #[error("label list is empty")]
+    EmptyLabelList,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct RawInstruction(pub u32);
+
+impl fmt::Display for RawInstruction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // 01010101010101010101010101010101 -> 0101_0101_0101_0101_0101_0101_0101_0101
+        let [(a1, a2), (b1, b2), (c1, c2), (d1, d2)] =
+            self.0.to_be_bytes().map(|byte| (byte >> 4, byte & 0b1111));
+        write!(
+            f,
+            "0b{a1:04b}_{a2:04b}_{b1:04b}_{b2:04b}_{c1:04b}_{c2:04b}_{d1:04b}_{d2:04b}"
+        )
+    }
+}
+
+pub fn read_labels(count: usize, data: &mut impl Iterator<Item = u32>) -> Result<LabelList, Error> {
     let mut instrs = Vec::new();
     for _ in 0..count {
         let mut break_after = None;
+        let mut offset = 0;
         loop {
-            let Ok(instr) = ParsedInstruction::try_from(data.next()?) else {
-                return None;
+            let value = data.next().ok_or(Error::ReadInstructionData)?;
+            offset += 1;
+            let Ok(instr) = ParsedInstruction::try_from(value) else {
+                return Err(Error::InvalidInstruction {
+                    raw: RawInstruction(value),
+                    offset,
+                });
             };
 
             if instr.has_delay_slot() {
@@ -165,8 +199,8 @@ pub fn read_labels(count: usize, data: &mut impl Iterator<Item = u32>) -> Option
 
     let labels = LabelList::new(&instrs);
     if labels.is_empty() {
-        None
+        Err(Error::EmptyLabelList)
     } else {
-        Some(labels)
+        Ok(labels)
     }
 }

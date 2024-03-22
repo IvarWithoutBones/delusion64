@@ -15,9 +15,14 @@ use mips_decomp::{
 
 impl<B: Bus> Environment<'_, Rsp, B> {
     fn sleep_if_halted(&mut self) {
+        let mut slept = false;
         while self.registers.control.read_parsed::<Status>().halted() {
             // TODO: update GDB if connected
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            slept = true;
+        }
+        if slept {
+            println!("RSP woke up from halt");
         }
     }
 
@@ -60,8 +65,10 @@ impl<B: Bus> Environment<'_, Rsp, B> {
         if let Some(irq_req) = status.write(value) {
             todo!("RSP JIT request MI interrupt {irq_req:?}")
         }
+        println!("RSP JIT status: {status:?}");
         self.registers.control.write_parsed(status);
         self.sleep_if_halted();
+        std::process::abort();
     }
 
     unsafe extern "C" fn request_dma(&mut self, to_rdram: bool) {
@@ -98,6 +105,7 @@ impl<B: Bus> Environment<'_, Rsp, B> {
             rdram_address,
             other_address,
         };
+        println!("DMA request: {info:?}");
 
         self.bus
             .request_dma(info)
@@ -120,7 +128,13 @@ impl<B: Bus> TargetDependantCallbacks for Environment<'_, Rsp, B> {
     }
 
     fn on_block_entered(&mut self, _instructions_in_block: usize) -> usize {
-        0
+        self.sleep_if_halted();
+        if self.check_invalidations() {
+            let pc = self.registers.read_program_counter();
+            self.get_function_ptr(pc)
+        } else {
+            0
+        }
     }
 }
 

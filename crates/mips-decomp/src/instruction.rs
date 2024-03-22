@@ -932,6 +932,7 @@ macro_rules! instr {
 /// https://n64brew.dev/wiki/MIPS_III_instructions#CPU_Instruction_Set
 #[rustfmt::skip]
 const INSTRUCTIONS: &[Instruction] = &[
+
     instr!(Add,     "0000 00ss ssst tttt dddd d000 0010 0000", (Destination)(Source)(Target)),
     instr!(Addi,    "0010 00ss ssst tttt kkkk kkkk kkkk kkkk", (Target)(Source)(Immediate, Signed16)),
     instr!(Addiu,   "0010 01ss ssst tttt kkkk kkkk kkkk kkkk", (Target)(Source)(Immediate, Signed16)),
@@ -1109,6 +1110,7 @@ const INSTRUCTIONS: &[Instruction] = &[
     // Vector
     instr!(Mfc2,  "0100 1000 000d dddd vvvv veee e000 0000", (Destination)(VectorTarget)(VectorElement)),
     instr!(Mtc2,  "0100 1000 100t tttt zzzz zeee e000 0000", (VectorDestination)(VectorElement)(Target)),
+
     instr!(Sbv,   "1110 10bb bbbv vvvv 0000 0eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
     instr!(Ssv,   "1110 10bb bbbv vvvv 0000 1eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),
     instr!(Slv,   "1110 10bb bbbv vvvv 0001 0eee efff ffff", (VectorTarget)(VectorElement)(Offset)(Base)),

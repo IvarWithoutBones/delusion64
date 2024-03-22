@@ -73,6 +73,10 @@ impl Handle {
             .fetch_add(cycles, atomic::Ordering::Relaxed);
     }
 
+    pub(crate) fn pause(&self) {
+        self.cycle_budget.store(0, atomic::Ordering::Relaxed);
+    }
+
     pub fn invalidate_imem(&self, range: Range<usize>) {
         let range = range.start.try_into().expect("address too large")
             ..range.end.try_into().expect("address too large");
@@ -134,7 +138,7 @@ impl Bus {
         JitBuilder::new_rsp(this)
             .with_rsp_registers(regs)
             .maybe_with_gdb(gdb)
-            .with_trace(false)
+            .with_trace(true)
             .run()
     }
 
@@ -168,8 +172,6 @@ impl BusInterface for Bus {
         &mut self,
         address: PhysicalAddress,
     ) -> BusResult<Int<SIZE>, Self::Error> {
-        // TODO: Optimally we'd check for imem mutations here,
-        // but mutating the label cache while in the middle of codegen breaks things.
         let value = self.read(MemoryBank::IMem, address)?;
         let mut result = Int::from_array(value).into();
         self.check_imem_mutations(&mut result);
@@ -201,8 +203,11 @@ impl BusInterface for Bus {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
 
-        self.cycle_budget
-            .fetch_sub(cycles, atomic::Ordering::Relaxed);
+        let _ = self.cycle_budget.fetch_update(
+            atomic::Ordering::Relaxed,
+            atomic::Ordering::Relaxed,
+            |budget| Some(budget.saturating_sub(cycles)),
+        );
 
         self.check_imem_mutations(&mut result);
         Ok(result)
@@ -216,6 +221,14 @@ impl BusInterface for Bus {
         self.dma_request_sender
             .send(info)
             .expect("failed to send DMA request");
-        Ok(BusValue::default())
+
+        let mut result = BusValue::default();
+        if info.direction == DmaDirection::FromRdram {
+            // Instruction memory will be mutated, let the JIT know
+            let range = info.other_address..(info.other_address + info.length);
+            result.mutated(range);
+        }
+
+        Ok(result)
     }
 }

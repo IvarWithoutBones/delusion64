@@ -50,7 +50,7 @@ impl ControlRegisterBank {
             // We need to get the "current" register, since the DMA registers are double buffered.
             let status: register::control::Status = self.read_parsed();
             let offset = register.to_lower_buffer().to_repr()
-                + usize::from(status.dma_busy()) * register::Control::DMA_BUFFER_OFFSET;
+                + (usize::from(status.dma_busy()) * register::Control::DMA_BUFFER_OFFSET);
             let result = register::Control::from_repr(offset.try_into().ok()?)?;
             debug_assert!(result.is_dma_register());
             Some(result)

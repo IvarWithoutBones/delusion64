@@ -117,8 +117,7 @@ pub(crate) trait Memory: Default {
         _access_mode: AccessMode,
         _registers: &Self::Registers,
     ) -> Result<PhysicalAddress, TranslationError> {
-        #[allow(clippy::cast_possible_truncation)]
-        Ok(vaddr as PhysicalAddress)
+        Ok(vaddr.try_into().expect("virtual address out of bounds"))
     }
 
     fn physical_to_virtual_address(
@@ -155,8 +154,9 @@ pub(crate) trait Label: fmt::Debug + Clone {
 
 pub(crate) trait LabelList: Sized + fmt::Debug {
     type Label: Label;
+    type Error: std::error::Error;
 
-    fn from_iter(iter: impl IntoIterator<Item = PhysicalAddress>) -> Option<Self>;
+    fn from_iter(iter: impl IntoIterator<Item = PhysicalAddress>) -> Result<Self, Self::Error>;
 
     fn iter(&self) -> impl DoubleEndedIterator<Item = Self::Label> + '_;
 

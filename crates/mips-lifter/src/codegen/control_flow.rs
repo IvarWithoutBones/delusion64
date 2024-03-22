@@ -29,7 +29,7 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         } else {
             // Let the runtime environment JIT it, then jump to it.
             self.build_dynamic_jump(self.context.i64_type().const_int(address, false))?;
-        };
+        }
         Ok(())
     }
 
@@ -71,7 +71,14 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         self.execution_engine
             .add_module(&module)
             .map_err(|_| CompilationError::AddModuleFailed)?;
-        Ok(self.execution_engine.get_function_address(NAME)? as JitFunctionPointer)
+        let func_ptr = self
+            .execution_engine
+            .get_function_address(NAME)
+            .map_err(|error| CompilationError::FunctionLookup {
+                name: NAME.to_string(),
+                error,
+            })?;
+        Ok(func_ptr as JitFunctionPointer)
     }
 
     /// Builds a loop using the following arguments, in order:

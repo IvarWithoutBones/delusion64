@@ -33,6 +33,7 @@ impl Registers {
     }
 
     pub fn read(&mut self, offset: usize) -> RspResult<u32> {
+        println!("reading RSP reg offset: {offset}");
         Ok(match offset {
             DmaSpAddress::OFFSET => u32::from(self.control.read_parsed::<DmaSpAddress>()),
             DmaRdramAddress::OFFSET => u32::from(self.control.read_parsed::<DmaRdramAddress>()),
@@ -48,6 +49,7 @@ impl Registers {
     }
 
     pub fn write(&mut self, offset: usize, value: u32) -> RspResult<SideEffects> {
+        println!("writing RSP reg offset: {offset}");
         let mut effects = SideEffects::default();
         match offset {
             DmaSpAddress::OFFSET => {
@@ -76,6 +78,7 @@ impl Registers {
                     Some(InterruptRequest::Lower) => effects.with_lower_interrupt(DEV),
                     None => effects,
                 };
+                println!("RSP JIT status: {status:?}");
                 self.control.write_parsed(status);
             }
 

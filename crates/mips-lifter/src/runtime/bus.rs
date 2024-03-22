@@ -1,5 +1,5 @@
 use super::{memory::tlb::AccessMode, Environment, InterruptHandler, ValidRuntime};
-use crate::target::{Memory, Target};
+use crate::target::{Memory, RegisterStorage, Target};
 use std::{fmt, mem::size_of, ops::Range};
 
 // TODO: Returning a BusValue for every single tick/memory access seems wasteful.
@@ -40,6 +40,7 @@ impl<V> BusValue<V> {
     where
         for<'a> Environment<'a, T, B>: ValidRuntime<T>,
     {
+        let pc = env.registers.read_program_counter();
         for paddrs in self.mutated {
             let vaddr_start = env
                 .memory
@@ -47,7 +48,16 @@ impl<V> BusValue<V> {
                 .expect("invalid physical address");
             let len = (paddrs.end - paddrs.start) as u64;
             let vaddr_range = vaddr_start..vaddr_start + len;
-            env.codegen.labels.remove_within_range(vaddr_range);
+            env.codegen
+                .labels
+                .remove_within_range(&vaddr_range, &env.codegen.execution_engine);
+
+            if vaddr_range.contains(&pc) {
+                // FIXME: This will inevitably overflow the stack. We also need to resume handling the result before jumping.
+                let pointer = env.get_function_ptr(pc + 4) as *const ();
+                let function = unsafe { std::mem::transmute::<*const (), extern "fastcall" fn() -> !>(pointer) };
+                function();
+            }
         }
 
         if let Some(interrupt_mask) = self.interrupt {

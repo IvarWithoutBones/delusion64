@@ -72,7 +72,7 @@ impl<B: Bus> Environment<'_, Cpu, B> {
 
         self.registers
             .write(register::cpu::Cp0::Cause, u64::from(cause.raw()));
-        unsafe { self.get_function_ptr(exception.vector() as u64) }
+        self.get_function_ptr(exception.vector() as u64)
     }
 
     #[allow(clippy::similar_names)] // Just matching the spec

@@ -5,13 +5,13 @@ use self::{
     gdb::command::Command,
 };
 use crate::{
-    codegen::{self, CodeGen, CompilationError, FallthroughAmount},
-    label::{generate_labels, JitFunctionPointer, LabelWithContext},
+    codegen::{self, CodeGen, CompilationError},
+    label::{generate_labels, JitFunctionPointer},
     runtime::{
         bus::{BusError, PanicAction},
         memory::tlb::AccessMode,
     },
-    target::{Instruction, Label, LabelList, Memory, RegisterStorage, Target},
+    target::{LabelList, Memory, RegisterStorage, Target},
     JitBuilder,
 };
 use inkwell::{context::Context, execution_engine::ExecutionEngine, module::Module};
@@ -123,7 +123,7 @@ where
             env.debugger = Some(gdb::Debugger::new(&mut env, gdb));
         }
 
-        let globals = env.map_into(env.codegen.module(), &env.codegen.execution_engine);
+        let globals = env.map_into(&env.codegen.main_module, &env.codegen.execution_engine);
         env.codegen
             .initialise(globals)
             .expect("failed to initialise codegen");
@@ -258,32 +258,56 @@ where
         (res.handle(self).into(), did_mutate)
     }
 
-    fn read_label_list(&mut self, mut paddr: PhysicalAddress, vaddr: u64) -> (T::LabelList, bool) {
+    fn read_label_list(&mut self, paddr: PhysicalAddress, vaddr: u64) -> (T::LabelList, bool) {
         let mut invalidate = false;
+        let mut offset = paddr;
         let iter = std::iter::from_fn(|| {
-            let (value, did_mutate) = self.read_raw_instruction(paddr);
+            let (value, did_mutate) = self.read_raw_instruction(offset);
             invalidate |= did_mutate;
-
-            paddr += INSTRUCTION_SIZE as PhysicalAddress;
+            offset += INSTRUCTION_SIZE as PhysicalAddress;
             Some(value)
         })
         // Arbitrary limit on the maximum number of instructions in a block, to avoid infinitely fetching when there is no terminator.
         .take(0x1000);
 
-        let mut res = T::LabelList::from_iter(iter).unwrap_or_else(|| {
-            let msg = &format!("failed to generate label list at {paddr:#x} ({vaddr:#x})");
+        let mut res = T::LabelList::from_iter(iter).unwrap_or_else(|err| {
+            let msg = &format!(
+                "failed to generate label list at paddr={paddr:#x} vaddr={vaddr:#x}: {err}"
+            );
             self.panic_update_debugger(msg)
         });
         res.set_start(vaddr);
         (res, invalidate)
     }
 
-    fn check_invalidations(&mut self) {
+    pub(crate) fn check_invalidations(&mut self) -> bool {
+        let mut invalidated = false;
+        let mut jump = false;
+        let pc = self.registers.read_program_counter();
         for range in self.bus.ranges_to_invalidate() {
             let start = self.physical_to_virtual_address(range.start, AccessMode::Read);
             let end = self.physical_to_virtual_address(range.end, AccessMode::Read);
-            self.codegen.labels.remove_within_range(start..end);
+            let range = &(start..end);
+            self.codegen
+                .labels
+                .remove_within_range(range, &self.codegen.execution_engine);
+            if range.contains(&pc) {
+                println!("range in pc");
+                jump = true;
+            }
+            invalidated = true;
         }
+
+        if jump {
+            // FIXME: This will inevitably overflow the stack. We also need to resume handling the result before jumping.
+            println!("jumping to {pc:#x}");
+            let pointer = self.get_function_ptr(pc) as *const ();
+            let function =
+                unsafe { std::mem::transmute::<*const (), extern "fastcall" fn() -> !>(pointer) };
+            function();
+        }
+
+        invalidated
     }
 
     /*
@@ -291,6 +315,7 @@ where
     */
 
     unsafe extern "C" fn on_block_entered(&mut self, instructions_in_block: u64) -> usize {
+        self.check_invalidations();
         let instructions = instructions_in_block as usize;
         self.bus
             .tick(instructions)
@@ -314,13 +339,13 @@ where
         self.virtual_to_physical_address(vaddr, AccessMode::Read)
     }
 
-    pub(crate) unsafe extern "C" fn get_function_ptr(&mut self, vaddr: u64) -> JitFunctionPointer {
+    pub(crate) extern "C" fn get_function_ptr(&mut self, vaddr: u64) -> JitFunctionPointer {
         self.check_invalidations();
         let mut insert_index = match self.codegen.labels.get(vaddr) {
             Ok(label) => {
-                if self.trace {
-                    println!("found existing block at {vaddr:#x}");
-                }
+                // if self.trace {
+                //     println!("found existing block at {vaddr:#x}");
+                // }
                 return label.pointer.expect("label pointer is cached");
             }
             Err(insert_index) => insert_index,
@@ -338,35 +363,10 @@ where
         let lab = self
             .codegen
             .add_dynamic_function(module, globals, |codegen, module| {
-                let mut lab: LabelWithContext<'_, T> = {
-                    let mut labels = generate_labels(label_list, codegen.context, module);
-                    labels
-                        .pop()
-                        .ok_or(CompilationError::LabelFunctionGeneration { vaddr })?
-                };
-
-                // TODO: move this logic to label.rs
-                if let Ok(fallthrough) = codegen.labels.get(lab.label.end() as u64) {
-                    lab.fallthrough_fn = Some(fallthrough.function);
-                    if self.trace {
-                        println!(
-                            "found fallthrough block at {:#x}",
-                            fallthrough.label.start(),
-                        );
-                    }
-                } else {
-                    let amount = if let Some(second_last) = lab.label.instructions().nth_back(1) {
-                        if second_last.has_delay_slot() {
-                            FallthroughAmount::Two
-                        } else {
-                            FallthroughAmount::One
-                        }
-                    } else {
-                        FallthroughAmount::One
-                    };
-                    lab.fallthrough_fn = Some(codegen.fallthrough_function(amount));
-                }
-
+                let mut labels = generate_labels(label_list, codegen.context, module);
+                let lab = labels
+                    .pop()
+                    .ok_or(CompilationError::LabelFunctionGeneration { vaddr })?;
                 lab.compile(codegen, self.trace || self.debugger.is_some())?;
                 Ok(lab)
             })
@@ -382,7 +382,10 @@ where
         }
 
         let ptr = lab.pointer.expect("label pointer is cached");
-        self.codegen.labels.insert(insert_index, lab);
+        unsafe {
+            // SAFETY: Our insert index is valid.
+            self.codegen.labels.insert(insert_index, lab);
+        }
         ptr
     }
 
@@ -411,10 +414,11 @@ where
     }
 
     unsafe extern "C" fn panic(&mut self, string_ptr: *const u8, string_len: u64) {
-        let string = {
-            let slice = std::slice::from_raw_parts(string_ptr, string_len as usize);
-            std::str::from_utf8(slice).unwrap()
+        let slice = std::slice::from_raw_parts(string_ptr, string_len as usize);
+        let message = match std::str::from_utf8(slice) {
+            Ok(string) => format!("Environment::panic called: {string}"),
+            Err(error) => format!("Environment::panic called with an invalid string: {error}"),
         };
-        self.panic_update_debugger(&format!("Environment::panic called: {string}"));
+        self.panic_update_debugger(&message)
     }
 }

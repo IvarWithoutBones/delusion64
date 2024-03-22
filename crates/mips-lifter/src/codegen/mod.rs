@@ -50,8 +50,11 @@ pub enum CompilationError {
     AddModuleFailed,
     #[error("LLVM C-string contains invalid UTF-8: {0}")]
     InvalidUtf8(#[from] Utf8Error),
-    #[error("Failed to look up function: '{0}'")]
-    FunctionLookup(#[from] FunctionLookupError),
+    #[error("Failed to look up function '{name}': {error}")]
+    FunctionLookup {
+        name: String,
+        error: FunctionLookupError,
+    },
 }
 
 pub type CompilationResult<T> = Result<T, CompilationError>;
@@ -96,7 +99,7 @@ pub struct CodeGen<'ctx, T: Target> {
     helpers: Helpers<'ctx>,
 
     /// The module containing the main function. Everything branches from here.
-    main_module: ManuallyDrop<Module<'ctx>>,
+    pub main_module: ManuallyDrop<Module<'ctx>>,
     /// The module we are currently recompiling into. This will get moved into the label once we're done with it.
     active_module: Option<Module<'ctx>>,
 }
@@ -150,7 +153,7 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
 
     /// The currently active module.
     pub fn module(&self) -> &Module<'ctx> {
-        self.active_module.as_ref().unwrap_or(&self.main_module)
+        self.active_module.as_ref().expect("no active module")
     }
 
     pub fn fallthrough_function(&self, amount: FallthroughAmount) -> FunctionValue<'ctx> {
@@ -181,7 +184,13 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
     ) -> CompilationResult<(FunctionValue<'ctx>, JitFunctionPointer)> {
         let name = func.get_name().to_str()?;
         let func_def = module.add_function(name, func.get_type(), None);
-        let ptr = self.execution_engine.get_function_address(name)?;
+        let ptr = self
+            .execution_engine
+            .get_function_address(name)
+            .map_err(|error| CompilationError::FunctionLookup {
+                name: name.to_string(),
+                error,
+            })?;
         self.execution_engine.add_global_mapping(&func_def, ptr);
         Ok((func_def, ptr))
     }
@@ -226,16 +235,18 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         f: impl FnOnce(&CodeGen<'ctx, T>, &Module<'ctx>) -> CompilationResult<LabelWithContext<'ctx, T>>,
     ) -> CompilationResult<LabelWithContext<'ctx, T>> {
         self.globals = Some(globals);
-        self.helpers.map_into(&module);
         self.active_module = Some(module);
+        let module = self.active_module.as_ref().expect("active module is set");
+        self.helpers.map_into(module);
 
         let mut lab = f(self, self.module())?;
         self.link_in_module(&mut lab)?;
-        lab.module = Some(self.active_module.take().unwrap());
 
         if cfg!(debug_assertions) {
             self.verify()?;
         }
+
+        lab.module = Some(self.active_module.take().unwrap());
         Ok(lab)
     }
 

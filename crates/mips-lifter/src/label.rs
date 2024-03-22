@@ -1,5 +1,7 @@
 use crate::{
-    codegen::{function_attributes, CodeGen, CompilationResult, FUNCTION_PREFIX},
+    codegen::{
+        function_attributes, CodeGen, CompilationResult, FallthroughAmount, FUNCTION_PREFIX,
+    },
     macros::{cmp, env_call},
     runtime::RuntimeFunction,
     target::{Instruction, Label, LabelList, Target},
@@ -24,9 +26,6 @@ pub struct LabelWithContext<'ctx, T: Target> {
     pub pointer: Option<JitFunctionPointer>,
     /// The module this function is defined in. This will be set once code generation is complete.
     pub module: Option<Module<'ctx>>,
-
-    /// The function that will be called to fall through to the next block.
-    pub fallthrough_fn: Option<FunctionValue<'ctx>>,
     /// The instruction that the next block contains, if the current block ends with a delay slot.
     pub fallthrough_instr: Option<T::Instruction>,
 }
@@ -34,7 +33,6 @@ pub struct LabelWithContext<'ctx, T: Target> {
 impl<'ctx, T: Target> LabelWithContext<'ctx, T> {
     fn new(
         label: T::Label,
-        fallthrough_fn: Option<FunctionValue<'ctx>>,
         fallthrough_instr: Option<T::Instruction>,
         module: &Module<'ctx>,
         context: &'ctx Context,
@@ -55,7 +53,6 @@ impl<'ctx, T: Target> LabelWithContext<'ctx, T> {
         LabelWithContext {
             label,
             function,
-            fallthrough_fn,
             fallthrough_instr,
             module: None,
             pointer: None,
@@ -86,6 +83,15 @@ impl<'ctx, T: Target> LabelWithContext<'ctx, T> {
         Ok(())
     }
 
+    fn compile_panic(&self, cg: &CodeGen<'ctx, T>, err: &str) -> CompilationResult<()> {
+        if let Some(term) = cg.get_insert_block().get_terminator() {
+            // Ensure we dont terminate in the middle of a block, as a panic is already a terminator.
+            term.erase_from_basic_block();
+        }
+        cg.build_panic(err, "error_while_compiling_instruction")?;
+        Ok(())
+    }
+
     pub fn compile(
         &self,
         codegen: &CodeGen<'ctx, T>,
@@ -102,7 +108,7 @@ impl<'ctx, T: Target> LabelWithContext<'ctx, T> {
                 if let Err(err) = self.compile_instruction(i, instr_callback, &instr, codegen) {
                     // We do not propagate the error here because the runtime environment can update the debugger.
                     // Instead, jump to the panic handler when the faulty instruction would otherwise be executed.
-                    codegen.build_panic(&err.to_string(), "error_while_compiling_instruction")?;
+                    self.compile_panic(codegen, &err.to_string())?;
                     break;
                 }
             } else {
@@ -141,20 +147,31 @@ impl<'ctx, T: Target> LabelWithContext<'ctx, T> {
                     |pc| self.on_instruction(pc, instr_callback, codegen),
                 ) {
                     // Same as above
-                    codegen.build_panic(&err.to_string(), "error_while_compiling_instruction")?;
+                    self.compile_panic(codegen, &err.to_string())?;
                 }
                 break;
             }
         }
 
         if codegen.get_insert_block().get_terminator().is_none() {
-            if let Some(fallthrough_fn) = self.fallthrough_fn {
-                codegen.call_function(fallthrough_fn)?;
+            let fallthrough_func = if let Ok(label) = codegen.labels.get(self.label.end()) {
+                // We've already compiled the fallthrough block, jump to it directly
+                label.function
             } else {
-                let addr = self.index_to_virtual_address(0);
-                let str = format!("ERROR: label {addr:#x} attempted to execute fallthrough block without one existing!\n");
-                codegen.build_panic(&str, "error_no_fallthrough")?;
-            }
+                // If the fallthrough block has not been compiled yet, insert a call to the runtime environment to do so.
+                let amount = if let Some(second_last) = self.label.instructions().nth_back(1) {
+                    if second_last.has_delay_slot() {
+                        // If the second last instruction has a delay slot we reorder the instructions, so we need to skip two to get to the next block.
+                        FallthroughAmount::Two
+                    } else {
+                        FallthroughAmount::One
+                    }
+                } else {
+                    FallthroughAmount::One
+                };
+                codegen.fallthrough_function(amount)
+            };
+            codegen.call_function(fallthrough_func)?;
         }
         Ok(())
     }
@@ -196,6 +213,7 @@ impl<'ctx, T: Target> LabelWithContext<'ctx, T> {
     }
 }
 
+// TODO: simplify
 pub fn generate_labels<'ctx, T: Target>(
     labels: T::LabelList,
     context: &'ctx Context,
@@ -208,7 +226,7 @@ pub fn generate_labels<'ctx, T: Target>(
             .iter()
             .position(|existing| existing.label.start() == label.start());
 
-        let (fallthrough_fn, fallthrough_instr) = {
+        let (_fallthrough_fn, fallthrough_instr) = {
             let mut label = label.clone();
             let mut instr = None;
 
@@ -240,13 +258,7 @@ pub fn generate_labels<'ctx, T: Target>(
                 {
                     (Some(existing.function), instr)
                 } else {
-                    result.push(LabelWithContext::new(
-                        fallthrough,
-                        None,
-                        None,
-                        module,
-                        context,
-                    ));
+                    result.push(LabelWithContext::new(fallthrough, None, module, context));
 
                     let last = result.last().unwrap();
                     (Some(last.function), instr)
@@ -258,12 +270,10 @@ pub fn generate_labels<'ctx, T: Target>(
 
         if let Some(existing_idx) = existing_label {
             let existing = &mut result[existing_idx];
-            existing.fallthrough_fn = fallthrough_fn;
             existing.fallthrough_instr = fallthrough_instr;
         } else {
             result.push(LabelWithContext::new(
                 label,
-                fallthrough_fn,
                 fallthrough_instr,
                 module,
                 context,

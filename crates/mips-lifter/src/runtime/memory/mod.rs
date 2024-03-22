@@ -43,7 +43,9 @@ where
     ) -> Result<(), B::Error> {
         self.debugger_signal_write(vaddr, SIZE);
         let vaddr_range = vaddr..(vaddr + SIZE as u64);
-        self.codegen.labels.remove_within_range(vaddr_range);
+        self.codegen
+            .labels
+            .remove_within_range(&vaddr_range, &self.codegen.execution_engine);
         match ty {
             Type::Instruction => self.bus.write_instruction_memory(paddr, value),
             Type::Unknown => self.bus.write_memory(paddr, value),

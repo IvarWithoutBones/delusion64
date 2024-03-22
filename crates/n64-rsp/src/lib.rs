@@ -2,7 +2,11 @@
 
 use crate::{memory::Memory, register::Registers};
 use mips_lifter::target::rsp::register::control::Status;
-use n64_common::{utils::thiserror, SideEffects};
+use n64_common::{
+    memory::{Section, SectionParseError},
+    utils::thiserror,
+    SideEffects,
+};
 use std::{net::TcpStream, ops::Range};
 
 pub use mips_lifter::target::rsp::register::control::MemoryBank;
@@ -21,6 +25,8 @@ pub enum RspError {
         range: Range<usize>,
         bank: MemoryBank,
     },
+    #[error("Failed to parse section: {0}")]
+    SectionParseError(#[from] SectionParseError),
     #[error("Failed to acquire read lock for bank {bank:#?}")]
     ReadPoisonError { bank: MemoryBank },
     #[error("Failed to acquire write lock for bank {bank:#?}")]
@@ -122,19 +128,33 @@ impl Rsp {
     /// # Errors
     /// Returns an error if the RSP is in an invalid state
     pub fn tick(&mut self, cycles: usize, rdram: &mut [u8]) -> RspResult<SideEffects> {
-        if let Some(direction) = self.cpu.poll_dma_request() {
-            self.registers.queue_dma(direction);
-        }
-
-        if !self.registers.control.read_parsed::<Status>().halted() {
-            self.cpu.tick(cycles);
-        }
-
-        self.registers.tick(&mut dma::TickContext {
+        let result = self.registers.tick(&mut dma::TickContext {
             memory: &mut self.memory,
             cpu: &self.cpu,
             cycles,
             rdram,
-        })
+        });
+
+        if let Ok(Some(dirty)) = result.as_ref().map(|effects| &effects.dirty) {
+            if Section::from_address(dirty.start)? == Section::RspIMemory {
+                let start = Section::RspIMemory.distance_from_start(dirty.start);
+                let range = start..start + dirty.len();
+                println!("Invalidated IMEM range because of CPU DMA: {range:#x?}");
+                println!("{:#x?}", self.registers.control.read_parsed::<Status>());
+                self.cpu.invalidate_imem(range);
+            }
+        }
+
+        if let Some(direction) = self.cpu.poll_dma_request() {
+            self.registers.queue_dma(direction);
+        }
+
+        if self.registers.control.read_parsed::<Status>().halted() {
+            self.cpu.pause();
+        } else {
+            self.cpu.tick(cycles);
+        }
+
+        result
     }
 }

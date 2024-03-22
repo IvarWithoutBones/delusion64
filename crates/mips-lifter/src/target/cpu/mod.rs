@@ -112,8 +112,9 @@ pub(crate) struct LabelList(pub mips_decomp::LabelList);
 
 impl target::LabelList for LabelList {
     type Label = Label;
+    type Error = mips_decomp::Error;
 
-    fn from_iter(iter: impl IntoIterator<Item = PhysicalAddress>) -> Option<Self> {
+    fn from_iter(iter: impl IntoIterator<Item = PhysicalAddress>) -> Result<Self, Self::Error> {
         mips_decomp::read_labels(1, &mut iter.into_iter()).map(Self)
     }
 
