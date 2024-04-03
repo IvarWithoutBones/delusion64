@@ -42,15 +42,26 @@ impl_reg_bank_wrapper!(
 );
 
 impl ControlRegisterBank {
+    pub fn swap_active_dma_buffer(&mut self) {
+        let value = u32::from(self.read(register::Control::ActiveBuffer) == 0);
+        self.write(register::Control::ActiveBuffer, value);
+    }
+
     /// Reads and parses the register at the given index, resolving the DMA buffer if necessary.
     #[must_use]
-    pub fn register_from_index(&self, index: usize) -> Option<register::Control> {
+    pub fn register_from_index(&self, index: usize, read: bool) -> Option<register::Control> {
         let register = register::Control::from_repr(index.try_into().ok()?)?;
         if register.is_dma_register() {
             // We need to get the "current" register, since the DMA registers are double buffered.
-            let status: register::control::Status = self.read_parsed();
             let offset = register.to_lower_buffer().to_repr()
-                + (usize::from(status.dma_busy()) * register::Control::DMA_BUFFER_OFFSET);
+                + ((if read {
+                    // When reading we always want the currently/previously active buffer
+                    self.read(register::Control::ActiveBuffer) as usize
+                } else {
+                    // When writing we want the first buffer unless a DMA transfer is ongoing
+                    usize::from(self.read_parsed::<register::control::Status>().dma_busy())
+                }) * register::Control::DMA_BUFFER_OFFSET);
+
             let result = register::Control::from_repr(offset.try_into().ok()?)?;
             debug_assert!(result.is_dma_register());
             Some(result)
@@ -59,8 +70,8 @@ impl ControlRegisterBank {
         }
     }
 
-    fn normalise_register(&self, register: register::Control) -> register::Control {
-        self.register_from_index(register.to_repr())
+    fn normalise_register(&self, register: register::Control, read: bool) -> register::Control {
+        self.register_from_index(register.to_repr(), read)
             .expect("register is valid")
     }
 
@@ -82,13 +93,13 @@ impl ControlRegisterBank {
     /// Reads and parses the given control register, selecting the active DMA buffer if necessary.
     #[must_use]
     pub fn read_parsed<T: ControlRegisterDefinition>(&self) -> T {
-        let reg = self.normalise_register(T::ID);
+        let reg = self.normalise_register(T::ID, true);
         T::from(self.read(reg))
     }
 
     /// Writes the given value to the given control register, selecting the active DMA buffer if necessary.
     pub fn write_parsed<T: ControlRegisterDefinition>(&mut self, value: T) {
-        let reg = self.normalise_register(T::ID);
+        let reg = self.normalise_register(T::ID, false);
         self.write(reg, value.into());
     }
 }

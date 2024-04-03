@@ -6,6 +6,7 @@ use crate::{
     },
     target::RegisterStorage,
 };
+use log::{trace, warn};
 use mips_decomp::{
     register::rsp::control::{
         DmaRdramAddress, DmaReadLength, DmaSpAddress, DmaWriteLength, Status,
@@ -13,12 +14,16 @@ use mips_decomp::{
     Exception, INSTRUCTION_SIZE,
 };
 
+fn sleep() {
+    std::thread::sleep(std::time::Duration::from_millis(1));
+}
+
 impl<B: Bus> Environment<'_, Rsp, B> {
     fn sleep_if_halted(&mut self) {
         let mut slept = false;
         while self.registers.control.read_parsed::<Status>().halted() {
             // TODO: update GDB if connected
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            sleep();
             slept = true;
         }
         if slept {
@@ -72,6 +77,14 @@ impl<B: Bus> Environment<'_, Rsp, B> {
     }
 
     unsafe extern "C" fn request_dma(&mut self, to_rdram: bool) {
+        let status = self.registers.control.read_parsed::<Status>();
+        if status.dma_full() {
+            warn!("RSP DMA request ignored: DMA full");
+            return;
+        } else if status.dma_busy() {
+            self.registers.control.swap_active_dma_buffer();
+        }
+
         let (direction, length) = if to_rdram {
             let len = self
                 .registers
@@ -105,8 +118,9 @@ impl<B: Bus> Environment<'_, Rsp, B> {
             rdram_address,
             other_address,
         };
-        println!("DMA request: {info:?}");
+        trace!("DMA request: {info:?}");
 
+        let status = self.registers.control.read_parsed::<Status>();
         self.bus
             .request_dma(info)
             .map(|effects| effects.handle(self))
@@ -114,6 +128,17 @@ impl<B: Bus> Environment<'_, Rsp, B> {
                 let msg = format!("failed to request DMA: {err}");
                 self.panic_update_debugger(&msg)
             });
+
+        // Wait for the DMA to start
+        if status.dma_busy() {
+            while !self.registers.control.read_parsed::<Status>().dma_full() {
+                sleep();
+            }
+        } else {
+            while !self.registers.control.read_parsed::<Status>().dma_busy() {
+                sleep();
+            }
+        }
     }
 }
 

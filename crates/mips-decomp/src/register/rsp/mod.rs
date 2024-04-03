@@ -42,6 +42,10 @@ pub enum Control {
     /// Length of a DMA transfer. Writing this register triggers a DMA transfer from `IMEM`/`DMEM` to `RDRAM`.
     /// This refers to one of the two double-buffered registers.
     DmaWriteLength2,
+
+    /// Metadata storage for the emulator, this register does not exist on real hardware.
+    /// This is 0 if the ongoing or previously completed DMA transfer refers to the first DMA register buffer, and 1 when it refers to the second.
+    ActiveBuffer,
 }
 
 impl_reg!(Control);

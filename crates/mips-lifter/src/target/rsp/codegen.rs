@@ -16,17 +16,24 @@ impl<'ctx> CodeGen<'ctx, Rsp> {
     fn dma_register_pointer(
         &self,
         reg: register::Control,
+        read: bool,
     ) -> CompilationResult<PointerValue<'ctx>> {
         debug_assert!(reg.is_dma_register());
         let i32_type = self.context.i32_type();
         let reg = reg.to_lower_buffer();
         let ptr = self.globals().registers.pointer_value(self, &reg.into());
         let offset = {
-            // Either zero or DMA_BUFFER_OFFSET, depending on the busy bit
-            let busy = self.read_control_register(i32_type, register::Control::DmaBusy)?;
+            // Either zero or DMA_BUFFER_OFFSET, depending on the busy/active meta
+            let multiplier = if read {
+                self.read_control_register(i32_type, register::Control::ActiveBuffer)?
+            } else {
+                self.read_control_register(i32_type, register::Control::DmaBusy)?
+            };
+
             let offset = register::Control::DMA_BUFFER_OFFSET as u64;
             let mul = i32_type.const_int(offset, false);
-            self.builder.build_int_mul(busy, mul, "dma_buffer_offset")?
+            self.builder
+                .build_int_mul(multiplier, mul, "dma_buffer_offset")?
         };
 
         // SAFETY: Adding zero or DMA_BUFFER_OFFSET to the lower register pointer is always in-bounds, it refers to the upper/lower buffer.
@@ -100,7 +107,7 @@ impl<'ctx> CodeGen<'ctx, Rsp> {
             }
 
             _ if reg.is_dma_register() => {
-                let ptr = self.dma_register_pointer(reg)?;
+                let ptr = self.dma_register_pointer(reg, true)?;
                 self.read_register_pointer(ptr, ty, reg.into())
                     .map(inkwell::values::BasicValueEnum::into_int_value)
             }
@@ -158,7 +165,7 @@ impl<'ctx> CodeGen<'ctx, Rsp> {
             }
 
             _ if reg.is_dma_register() => {
-                let ptr = self.dma_register_pointer(reg)?;
+                let ptr = self.dma_register_pointer(reg, false)?;
                 self.write_register_pointer(value.into(), ptr, reg.into())?;
                 match reg.to_lower_buffer() {
                     register::Control::DmaReadLength1 => {

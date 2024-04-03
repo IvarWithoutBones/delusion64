@@ -1,13 +1,17 @@
 use crate::{dma, RspError, RspResult};
-use mips_lifter::target::rsp::{
-    register::{
-        control::{
-            DmaBusy, DmaFull, DmaRdramAddress, DmaReadLength, DmaSpAddress, DmaWriteLength,
-            InterruptRequest, MemoryBank, Semaphore, Status,
+use mips_lifter::{
+    target::rsp::{
+        register::{
+            control::{
+                DmaBusy, DmaFull, DmaRdramAddress, DmaReadLength, DmaSpAddress, DmaWriteLength,
+                InterruptRequest, MemoryBank, Semaphore, Status,
+            },
+            special::ProgramCounter,
+            Control,
         },
-        special::ProgramCounter,
+        ControlRegisterBank, SpecialRegisterBank,
     },
-    ControlRegisterBank, SpecialRegisterBank,
+    RegIndex,
 };
 use n64_common::{
     log::{info, trace},
@@ -26,8 +30,6 @@ pub(crate) struct Registers {
 }
 
 impl Registers {
-    const CURRENT: usize = 0;
-
     pub fn new(control: ControlRegisterBank, special: SpecialRegisterBank) -> Self {
         Self {
             control,
@@ -98,21 +100,21 @@ impl Registers {
     }
 
     pub(crate) fn queue_dma(&mut self, direction: dma::Direction) {
+        self.control.swap_active_dma_buffer();
         let mut status: Status = self.control.read_parsed();
-        let is_busy = status.dma_busy();
         if status.dma_full() {
             // Ignore the request, there is already a DMA transfer in progress and one pending
             return;
-        } else if is_busy {
+        } else if status.dma_busy() {
             status.set_dma_full(true);
         } else {
             status.set_dma_busy(true);
         }
         self.control.write_parsed(status);
 
-        let index = usize::from(is_busy);
-        debug_assert!(self.dma_states[index].is_none());
-        self.dma_states[index] = Some(dma::State {
+        let active = self.control.read(Control::ActiveBuffer) as usize;
+        debug_assert!(self.dma_states[active].is_none());
+        self.dma_states[active] = Some(dma::State {
             direction,
             cycles: {
                 let len = match direction {
@@ -132,16 +134,16 @@ impl Registers {
         // Transfer in chunks of 8 bytes so we can both account for wrapping, and (in the future) support count/skip
         const CHUNK: usize = 8;
         let mut effects = SideEffects::default();
-        let Some(mut state) = self.dma_states[Self::CURRENT].take() else {
+        let active = self.control.read(Control::ActiveBuffer) as usize;
+        let Some(mut state) = self.dma_states[active].take() else {
             return Ok(effects);
         };
 
         if !state.tick_is_ready(ctx) {
-            self.dma_states[Self::CURRENT] = Some(state);
+            self.dma_states[active] = Some(state);
             return Ok(effects);
         }
 
-        self.dma_finished_update_status();
         let mut read_length: DmaReadLength = self.control.read_parsed();
         let mut write_length: DmaWriteLength = self.control.read_parsed();
         let mut rdram_address: DmaRdramAddress = self.control.read_parsed();
@@ -200,19 +202,15 @@ impl Registers {
         write_length.decrement(); // TODO: verify this
         self.control.write_parsed(write_length);
         self.control.write_parsed(read_length);
-
+        self.dma_finished_update_status();
         Ok(effects)
     }
 
     fn dma_finished_update_status(&mut self) {
         let mut status: Status = self.control.read_parsed();
         if status.dma_full() {
+            // self.control.swap_active_dma_buffer();
             status.set_dma_full(false);
-            // Swap which DMA state is active (index zero)
-            std::mem::swap(
-                &mut self.dma_states[0].take(),
-                &mut self.dma_states[1].take(),
-            );
         } else {
             status.set_dma_busy(false);
         }
