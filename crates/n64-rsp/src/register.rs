@@ -9,7 +9,11 @@ use mips_lifter::target::rsp::{
     },
     ControlRegisterBank, SpecialRegisterBank,
 };
-use n64_common::{memory::Section, InterruptDevice, SideEffects};
+use n64_common::{
+    log::{info, trace},
+    memory::Section,
+    InterruptDevice, SideEffects,
+};
 
 #[derive(Debug)]
 pub(crate) struct Registers {
@@ -33,7 +37,7 @@ impl Registers {
     }
 
     pub fn read(&mut self, offset: usize) -> RspResult<u32> {
-        println!("reading RSP reg offset: {offset}");
+        trace!("reading RSP register at {offset:#x}");
         Ok(match offset {
             DmaSpAddress::OFFSET => u32::from(self.control.read_parsed::<DmaSpAddress>()),
             DmaRdramAddress::OFFSET => u32::from(self.control.read_parsed::<DmaRdramAddress>()),
@@ -49,7 +53,7 @@ impl Registers {
     }
 
     pub fn write(&mut self, offset: usize, value: u32) -> RspResult<SideEffects> {
-        println!("writing RSP reg offset: {offset}");
+        trace!("writing to RSP register at {offset:#x}: {value:#x}");
         let mut effects = SideEffects::default();
         match offset {
             DmaSpAddress::OFFSET => {
@@ -78,7 +82,7 @@ impl Registers {
                     Some(InterruptRequest::Lower) => effects.with_lower_interrupt(DEV),
                     None => effects,
                 };
-                println!("RSP JIT status: {status:?}");
+                info!("CPU wrote RSP status register: {status:#x?}");
                 self.control.write_parsed(status);
             }
 

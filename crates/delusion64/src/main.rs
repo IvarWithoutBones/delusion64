@@ -8,6 +8,7 @@ use mips_lifter::{
     JitBuilder,
 };
 use n64_cartridge::{Cartridge, Cic};
+use n64_common::log::{error, info};
 
 pub mod bus;
 pub mod input;
@@ -40,7 +41,7 @@ impl Emulator {
         args: CommandLineInterface,
         has_gui: bool,
     ) -> context::Emulator<ControllerEvent> {
-        println!("spawning emu");
+        info!("spawning emu");
         let mut cart = Cartridge::new(&rom).unwrap_or_else(|e| {
             eprintln!("failed to parse cartridge: {e}");
             std::process::exit(1);
@@ -138,16 +139,23 @@ struct CommandLineInterface {
     #[clap(short, long)]
     trace: bool,
 
+    #[clap(short, long)]
+    log: Option<String>,
+
     #[clap(long)]
     headless: bool,
 
-    // TODO: configure the address
     #[clap(long, short)]
     gdb: Option<GdbType>,
 }
 
 fn main() {
     let cli = CommandLineInterface::parse();
+    env_logger::Builder::new()
+        .parse_filters(cli.log.as_deref().unwrap_or("info"))
+        .format_timestamp(None)
+        .init();
+
     let (emu_context, ui_context) = context::channel();
     let mut emu = Emulator::new(emu_context, cli.clone());
 
@@ -157,7 +165,7 @@ fn main() {
                 .expect("failed to read ROM")
                 .into_boxed_slice()
         } else {
-            eprintln!("no ROM specified");
+            error!("no ROM specified");
             std::process::exit(1);
         };
 

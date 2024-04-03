@@ -9,6 +9,7 @@ strum = { version = "0.26.1", features = ["derive"] }
 tartan-bitfield = "1.2.0"
 thiserror = "1.0.56"
 mips-decomp = { path = "../mips-decomp" }
+log = "0.4.21"
 
 [dependencies.inkwell]
 version = "0.4.0"

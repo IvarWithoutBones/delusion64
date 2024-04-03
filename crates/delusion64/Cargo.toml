@@ -18,3 +18,4 @@ n64-vi = { path = "../n64-vi" }
 n64-si = { path = "../n64-si" }
 n64-rsp = { path = "../n64-rsp" }
 clap = { version = "4.3.11", features = ["derive"] }
+env_logger = "0.11.3"

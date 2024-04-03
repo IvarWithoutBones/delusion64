@@ -1,5 +1,8 @@
 use self::joybus::Channels;
-use n64_common::utils::{boxed_array, tartan_bitfield::bitfield, thiserror};
+use n64_common::{
+    log::warn,
+    utils::{boxed_array, tartan_bitfield::bitfield, thiserror},
+};
 use std::{fmt, ops::Range};
 
 mod joybus;
@@ -151,7 +154,7 @@ impl Pif {
 
                 joybus::Request::WriteControllerAccessory => {
                     // Namco Museum for some reason requests this, even though we never report `pak_installed`.
-                    println!("stub: joybus::Command::WriteControllerAccessory");
+                    warn!("stub: joybus::Command::WriteControllerAccessory");
                     msg.reply_invalid();
                 }
 

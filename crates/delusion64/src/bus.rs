@@ -6,6 +6,7 @@ use mips_lifter::{
 };
 use n64_cartridge::Cartridge;
 use n64_common::{
+    log::warn,
     memory::{PhysicalAddress, Section, SectionParseError},
     utils::{boxed_array, thiserror},
     InterruptDevice,
@@ -241,8 +242,8 @@ impl BusInterface for Bus {
             }
 
             _ => {
-                eprintln!(
-                    "STUB: memory read at {address:#x} (section {section:?}, offset {offset:#x})",
+                warn!(
+                    "stub: memory read at {address:#x} ({section:?} + {offset:#x})",
                 );
                 Int::default()
             }
@@ -340,8 +341,8 @@ impl BusInterface for Bus {
             Section::DiskDriveIpl4Rom => Err(BusError::ReadOnlySectionWrite(section))?,
 
             _ => {
-                eprintln!(
-                    "stub: memory write of {value:#x?} at {address:#x} (section {section:?}, offset {offset:#x})",
+                warn!(
+                    "stub: memory write of {value:#x?} at {address:#x} ({section:?} + {offset:#x})",
                 )
             }
         };

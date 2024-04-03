@@ -15,6 +15,7 @@ use crate::{
     JitBuilder,
 };
 use inkwell::{context::Context, execution_engine::ExecutionEngine, module::Module};
+use log::{error, trace};
 use mips_decomp::INSTRUCTION_SIZE;
 use std::{cell::UnsafeCell, collections::HashMap, pin::Pin};
 use strum::IntoEnumIterator;
@@ -196,7 +197,7 @@ where
     }
 
     pub(crate) fn panic_update_debugger(&mut self, message: &str) -> ! {
-        eprintln!("\n{message}\n{:?}", self.registers);
+        error!("{message}{:?}", self.registers);
         let action = self.bus.on_panic(BusError::Jit(message.to_string()));
         if self.debugger.is_some() {
             self.debugger.as_mut().unwrap().signal_panicked();
@@ -292,7 +293,6 @@ where
                 .labels
                 .remove_within_range(range, &self.codegen.execution_engine);
             if range.contains(&pc) {
-                println!("range in pc");
                 jump = true;
             }
             invalidated = true;
@@ -300,7 +300,7 @@ where
 
         if jump {
             // FIXME: This will inevitably overflow the stack. We also need to resume handling the result before jumping.
-            println!("jumping to {pc:#x}");
+            error!("jumping to {pc:#x}");
             let pointer = self.get_function_ptr(pc) as *const ();
             let function =
                 unsafe { std::mem::transmute::<*const (), extern "fastcall" fn() -> !>(pointer) };
@@ -343,16 +343,16 @@ where
         self.check_invalidations();
         let mut insert_index = match self.codegen.labels.get(vaddr) {
             Ok(label) => {
-                // if self.trace {
-                //     println!("found existing block at {vaddr:#x}");
-                // }
+                if self.trace {
+                    trace!("found existing block at {vaddr:#x}");
+                }
                 return label.pointer.expect("label pointer is cached");
             }
             Err(insert_index) => insert_index,
         };
 
         if self.trace {
-            println!("generating block at {vaddr:#x}");
+            trace!("generating block at {vaddr:#x}");
         }
 
         let paddr = self.virtual_to_physical_address(vaddr, AccessMode::Read);
@@ -400,7 +400,7 @@ where
                 let msg = format!("failed to parse instruction at {pc_vaddr:#x}");
                 self.panic_update_debugger(&msg)
             });
-            println!("{pc_vaddr:06x}: {instr}");
+            trace!("{pc_vaddr:06x}: {instr}");
         }
 
         if self.debugger.is_some() {

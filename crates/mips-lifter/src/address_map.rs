@@ -5,6 +5,7 @@ use crate::{
     target::{Label, Target},
 };
 use inkwell::execution_engine::ExecutionEngine;
+use log::trace;
 use std::ops::Range;
 
 #[allow(clippy::module_name_repetitions)]
@@ -52,7 +53,7 @@ impl<'ctx, T: Target> VirtualAddressMap<'ctx, T> {
     pub fn remove_within_range(&mut self, range: &Range<u64>, exec: &ExecutionEngine<'ctx>) {
         if let Some(indices) = self.indices_containing(range) {
             for label in self.inner.drain(indices) {
-                println!("Removing module: {:#x?}", label.label.range());
+                trace!("removing label at {:#x?}", label.label.range());
                 let module = label.module.expect("module should be present");
                 exec.remove_module(&module)
                     .expect("failed to remove module");

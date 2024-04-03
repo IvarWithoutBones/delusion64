@@ -6,6 +6,8 @@ use std::ops::Range;
 pub mod memory;
 pub mod utils;
 
+pub use log;
+
 /// A device which can raise or lower an interrupt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InterruptDevice {

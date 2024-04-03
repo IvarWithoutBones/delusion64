@@ -5,7 +5,7 @@ use mips_lifter::target::rsp::register::control::Status;
 use n64_common::{
     memory::{Section, SectionParseError},
     utils::thiserror,
-    SideEffects,
+    SideEffects, log::info,
 };
 use std::{net::TcpStream, ops::Range};
 
@@ -139,8 +139,8 @@ impl Rsp {
             if Section::from_address(dirty.start)? == Section::RspIMemory {
                 let start = Section::RspIMemory.distance_from_start(dirty.start);
                 let range = start..start + dirty.len();
-                println!("Invalidated IMEM range because of CPU DMA: {range:#x?}");
-                println!("{:#x?}", self.registers.control.read_parsed::<Status>());
+                info!("Invalidated IMEM range because of CPU DMA: {range:#x?}");
+                info!("{:#x?}", self.registers.control.read_parsed::<Status>());
                 self.cpu.invalidate_imem(range);
             }
         }
