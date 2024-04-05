@@ -167,19 +167,12 @@ impl<'ctx> CodeGen<'ctx, Rsp> {
             _ if reg.is_dma_register() => {
                 let ptr = self.dma_register_pointer(reg, false)?;
                 self.write_register_pointer(value.into(), ptr, reg.into())?;
-                match reg.to_lower_buffer() {
-                    register::Control::DmaReadLength1 => {
-                        // Request a DMA from RDRAM
-                        let to_rdram = self.context.bool_type().const_zero();
-                        env_call!(&self, RuntimeFunction::RequestDma, [to_rdram])?;
-                    }
-                    register::Control::DmaWriteLength1 => {
-                        // Request a DMA to RDRAM
-                        let to_rdram = self.context.bool_type().const_all_ones();
-                        env_call!(&self, RuntimeFunction::RequestDma, [to_rdram])?;
-                    }
-                    _ => {}
-                }
+                let to_rdram = match reg.to_lower_buffer() {
+                    register::Control::DmaReadLength1 => self.context.bool_type().const_zero(),
+                    register::Control::DmaWriteLength1 => self.context.bool_type().const_all_ones(),
+                    _ => return Ok(()),
+                };
+                env_call!(&self, RuntimeFunction::RequestDma, [to_rdram])?;
                 Ok(())
             }
 

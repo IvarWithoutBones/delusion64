@@ -107,13 +107,14 @@ impl Registers {
             return;
         } else if status.dma_busy() {
             status.set_dma_full(true);
+            debug_assert!(self.dma_states.iter().any(Option::is_some));
         } else {
+            debug_assert!(self.dma_states.iter().all(Option::is_none));
             status.set_dma_busy(true);
         }
         self.control.write_parsed(status);
 
         let active = self.control.read(Control::ActiveBuffer) as usize;
-        debug_assert!(self.dma_states[active].is_none());
         self.dma_states[active] = Some(dma::State {
             direction,
             cycles: {
@@ -203,6 +204,7 @@ impl Registers {
         self.control.write_parsed(write_length);
         self.control.write_parsed(read_length);
         self.dma_finished_update_status();
+        ctx.cpu.notify_dma_done();
         Ok(effects)
     }
 

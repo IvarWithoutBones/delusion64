@@ -121,6 +121,14 @@ impl<T: Integer, const LEN: usize> RegisterBank<T, LEN> {
         }
     }
 
+    /// Returns the reference count of the underlying array, or [`None`] if this bank is exclusive.
+    pub fn reference_count(&self) -> Option<usize> {
+        match &self.ownership {
+            Ownership::Exclusive => None,
+            Ownership::Shared(ref_count) => Some(Arc::strong_count(ref_count)),
+        }
+    }
+
     /// Returns the number of registers in this bank.
     pub const fn len(&self) -> usize {
         LEN

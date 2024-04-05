@@ -29,6 +29,7 @@ pub struct Handle {
     cycle_budget: Arc<AtomicUsize>,
     imem_mutation_sender: Sender<IMemRange>,
     dma_request_receiver: Receiver<DmaInfo>,
+    dma_done_sender: Sender<()>,
 }
 
 impl Handle {
@@ -42,6 +43,7 @@ impl Handle {
 
         let (imem_mutation_sender, imem_mutation_receiver) = mpsc::channel();
         let (dma_request_sender, dma_request_receiver) = mpsc::channel();
+        let (dma_done_sender, dma_done_receiver) = mpsc::channel();
 
         let this = Self {
             _thread: {
@@ -55,6 +57,7 @@ impl Handle {
                         cycle_budget,
                         imem_mutation_receiver,
                         dma_request_sender,
+                        dma_done_receiver,
                         memory,
                         gdb,
                     )
@@ -63,6 +66,7 @@ impl Handle {
             imem_mutation_sender,
             cycle_budget,
             dma_request_receiver,
+            dma_done_sender,
         };
         let regs = Registers::new(control, special);
         (this, regs)
@@ -95,6 +99,12 @@ impl Handle {
                 DmaDirection::FromRdram => dma::Direction::ToSpMemory,
             })
     }
+
+    pub(crate) fn notify_dma_done(&self) {
+        self.dma_done_sender
+            .send(())
+            .expect("failed to send DMA done notification");
+    }
 }
 
 struct Bus {
@@ -102,20 +112,23 @@ struct Bus {
     cycle_budget: Arc<AtomicUsize>,
     imem_mutation_receiver: Receiver<IMemRange>,
     dma_request_sender: Sender<DmaInfo>,
+    dma_done_receiver: Receiver<()>,
 }
 
 impl Bus {
+    #[allow(clippy::too_many_arguments)] // TODO: fix this
     pub fn new(
         control: ControlRegisterBank,
         special: SpecialRegisterBank,
         cycle_budget: Arc<AtomicUsize>,
         imem_mutation_receiver: Receiver<IMemRange>,
         dma_request_sender: Sender<DmaInfo>,
+        dma_done_receiver: Receiver<()>,
         memory: Memory,
         gdb: Option<TcpStream>,
     ) -> Self {
         while control.read_parsed::<Status>().halted() {
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
 
         let this = Self {
@@ -123,6 +136,7 @@ impl Bus {
             cycle_budget,
             imem_mutation_receiver,
             dma_request_sender,
+            dma_done_receiver,
         };
 
         let regs = mips_lifter::target::rsp::Registers {
@@ -221,6 +235,10 @@ impl BusInterface for Bus {
         self.dma_request_sender
             .send(info)
             .expect("failed to send DMA request");
+
+        while self.dma_done_receiver.try_recv().is_err() {
+            std::hint::spin_loop();
+        }
 
         let mut result = BusValue::default();
         if info.direction == DmaDirection::FromRdram {

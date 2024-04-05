@@ -31,9 +31,9 @@ macro_rules! impl_reg_index {
 }
 
 macro_rules! impl_reg_bank_wrapper {
-    ($name:ident, $id:ty, $inner:ty, $len:expr, $doc:expr) => {
+    ($(#[derive($($derive: tt),*)])* $name:ident, $id:ty, $inner:ty, $len:expr, $doc:expr) => {
         #[doc = $doc]
-        #[derive(Debug, Default, Clone, PartialEq)]
+        #[derive(Default, Clone, PartialEq, $($($derive),*)*)]
         #[repr(transparent)]
         pub struct $name(pub RegisterBank<$inner, $len>);
 
@@ -117,7 +117,8 @@ pub(crate) trait Memory: Default {
         _access_mode: AccessMode,
         _registers: &Self::Registers,
     ) -> Result<PhysicalAddress, TranslationError> {
-        Ok(vaddr.try_into().expect("virtual address out of bounds"))
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(vaddr as PhysicalAddress)
     }
 
     fn physical_to_virtual_address(

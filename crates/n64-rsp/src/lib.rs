@@ -3,9 +3,10 @@
 use crate::{memory::Memory, register::Registers};
 use mips_lifter::target::rsp::register::control::Status;
 use n64_common::{
+    log::{info, trace},
     memory::{Section, SectionParseError},
     utils::thiserror,
-    SideEffects, log::info,
+    SideEffects,
 };
 use std::{net::TcpStream, ops::Range};
 
@@ -81,6 +82,7 @@ impl Rsp {
         offset: usize,
     ) -> RspResult<[u8; SIZE]> {
         let range = offset..offset + SIZE;
+        trace!("reading from {bank:#?}: {range:#x?}");
         self.memory
             .read(bank)?
             .get(range.clone())
@@ -108,6 +110,7 @@ impl Rsp {
         };
 
         let range = offset..offset + value.len();
+        trace!("writing to {bank:#?}: {range:#x?} = {value:x?}");
         self.memory
             .write(bank)?
             .get_mut(range.clone())
@@ -128,6 +131,10 @@ impl Rsp {
     /// # Errors
     /// Returns an error if the RSP is in an invalid state
     pub fn tick(&mut self, cycles: usize, rdram: &mut [u8]) -> RspResult<SideEffects> {
+        if let Some(direction) = self.cpu.poll_dma_request() {
+            self.registers.queue_dma(direction);
+        }
+
         let result = self.registers.tick(&mut dma::TickContext {
             memory: &mut self.memory,
             cpu: &self.cpu,
@@ -143,10 +150,6 @@ impl Rsp {
                 info!("{:#x?}", self.registers.control.read_parsed::<Status>());
                 self.cpu.invalidate_imem(range);
             }
-        }
-
-        if let Some(direction) = self.cpu.poll_dma_request() {
-            self.registers.queue_dma(direction);
         }
 
         if self.registers.control.read_parsed::<Status>().halted() {

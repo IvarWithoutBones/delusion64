@@ -1,8 +1,13 @@
 use crate::{runtime::register_bank::RegisterBankMapping, target, RegIndex, RegisterBank};
-use mips_decomp::register::rsp as register;
+use log::trace;
+use mips_decomp::register::rsp::{
+    self as register,
+    control::{DmaRdramAddress, DmaReadLength, DmaSpAddress},
+};
 use std::fmt;
 
 impl_reg_bank_wrapper!(
+    #[derive(Debug)]
     SpecialRegisterBank,
     register::Special,
     u64,
@@ -44,6 +49,7 @@ impl_reg_bank_wrapper!(
 impl ControlRegisterBank {
     pub fn swap_active_dma_buffer(&mut self) {
         let value = u32::from(self.read(register::Control::ActiveBuffer) == 0);
+        trace!("swapping active DMA buffer, now {value}");
         self.write(register::Control::ActiveBuffer, value);
     }
 
@@ -101,6 +107,51 @@ impl ControlRegisterBank {
     pub fn write_parsed<T: ControlRegisterDefinition>(&mut self, value: T) {
         let reg = self.normalise_register(T::ID, false);
         self.write(reg, value.into());
+    }
+}
+
+impl std::fmt::Debug for ControlRegisterBank {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        struct DmaRegs<'a>(&'a ControlRegisterBank, bool);
+        impl std::fmt::Debug for DmaRegs<'_> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                let read = |mut reg: register::Control| -> u32 {
+                    if self.1 {
+                        reg = reg.to_lower_buffer();
+                    }
+                    self.0.read(reg)
+                };
+
+                f.debug_struct("DmaRegisters")
+                    .field(
+                        "sp_address",
+                        &DmaSpAddress::from(read(register::Control::DmaSpAddress2)),
+                    )
+                    .field(
+                        "rdram_address",
+                        &DmaRdramAddress::from(read(register::Control::DmaRdramAddress2)),
+                    )
+                    .field(
+                        "read_length",
+                        &DmaReadLength::from(read(register::Control::DmaReadLength2)),
+                    )
+                    .field(
+                        "write_length",
+                        &DmaReadLength::from(read(register::Control::DmaWriteLength2)),
+                    )
+                    .finish()
+            }
+        }
+
+        f.debug_struct("ControlRegisterBank")
+            .field("status", &self.read_parsed::<register::control::Status>())
+            .field(
+                "semaphore",
+                &self.read_parsed::<register::control::Semaphore>(),
+            )
+            .field("active_buffer", &self.read(register::Control::ActiveBuffer))
+            .field("dma_buffers", &[DmaRegs(self, false), DmaRegs(self, true)])
+            .finish()
     }
 }
 

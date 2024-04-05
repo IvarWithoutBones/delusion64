@@ -77,14 +77,6 @@ impl<B: Bus> Environment<'_, Rsp, B> {
     }
 
     unsafe extern "C" fn request_dma(&mut self, to_rdram: bool) {
-        let status = self.registers.control.read_parsed::<Status>();
-        if status.dma_full() {
-            warn!("RSP DMA request ignored: DMA full");
-            return;
-        } else if status.dma_busy() {
-            self.registers.control.swap_active_dma_buffer();
-        }
-
         let (direction, length) = if to_rdram {
             let len = self
                 .registers
@@ -118,9 +110,9 @@ impl<B: Bus> Environment<'_, Rsp, B> {
             rdram_address,
             other_address,
         };
-        trace!("DMA request: {info:?}");
 
-        let status: Status = self.registers.control.read_parsed();
+        trace!("DMA request: {info:?}, {:#x?}", self.registers.control);
+
         self.bus
             .request_dma(info)
             .map(|effects| effects.handle(self))
@@ -128,17 +120,6 @@ impl<B: Bus> Environment<'_, Rsp, B> {
                 let msg = format!("failed to request DMA: {err}");
                 self.panic_update_debugger(&msg)
             });
-
-        // Wait for the DMA to start
-        if status.dma_busy() {
-            while !self.registers.control.read_parsed::<Status>().dma_full() {
-                sleep();
-            }
-        } else {
-            while !self.registers.control.read_parsed::<Status>().dma_busy() {
-                sleep();
-            }
-        }
     }
 }
 

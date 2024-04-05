@@ -198,6 +198,7 @@ where
 
     pub(crate) fn panic_update_debugger(&mut self, message: &str) -> ! {
         error!("{message}{:?}", self.registers);
+        std::process::abort();
         let action = self.bus.on_panic(BusError::Jit(message.to_string()));
         if self.debugger.is_some() {
             self.debugger.as_mut().unwrap().signal_panicked();
