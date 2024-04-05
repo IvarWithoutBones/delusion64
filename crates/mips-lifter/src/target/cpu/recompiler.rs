@@ -2127,6 +2127,20 @@ pub fn compile_instruction(
             codegen.write_cpu_register(register::cpu::FpuControl::ControlStatus, fcr_with_cmp)?;
         }
 
+        Mnenomic::SqrtFmt => {
+            // Calculates the positive arithmetic square root of fs. The result is stored to fd.
+            let fs: FloatValue = codegen.read_fpu_register(f32_size, instr.fs())?;
+            let square_root = codegen.build_square_root(fs, "sqrt_res")?;
+            codegen.write_fpu_register(f32_size, instr.fd(), square_root)?;
+        },
+
+        Mnenomic::NegFmt => {
+            // Arithmetically negates the contents of fs. Stores the result to fd.
+            let fs: FloatValue = codegen.read_fpu_register(f32_size, instr.fs())?;
+            let negated = codegen.builder.build_float_neg(fs, "neg_res")?;
+            codegen.write_fpu_register(f32_size, instr.fd(), negated)?;
+        },
+
         _ => {
             codegen.build_stub(&instr.mnemonic().full_name())?;
             return Err(CompilationError::UnimplementedInstruction(

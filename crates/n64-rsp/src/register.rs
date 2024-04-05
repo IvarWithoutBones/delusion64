@@ -209,7 +209,7 @@ impl Registers {
     fn dma_finished_update_status(&mut self) {
         let mut status: Status = self.control.read_parsed();
         if status.dma_full() {
-            // self.control.swap_active_dma_buffer();
+            self.control.swap_active_dma_buffer();
             status.set_dma_full(false);
         } else {
             status.set_dma_busy(false);

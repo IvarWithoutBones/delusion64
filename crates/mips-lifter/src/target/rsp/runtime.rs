@@ -120,7 +120,7 @@ impl<B: Bus> Environment<'_, Rsp, B> {
         };
         trace!("DMA request: {info:?}");
 
-        let status = self.registers.control.read_parsed::<Status>();
+        let status: Status = self.registers.control.read_parsed();
         self.bus
             .request_dma(info)
             .map(|effects| effects.handle(self))
@@ -154,12 +154,8 @@ impl<B: Bus> TargetDependantCallbacks for Environment<'_, Rsp, B> {
 
     fn on_block_entered(&mut self, _instructions_in_block: usize) -> usize {
         self.sleep_if_halted();
-        if self.check_invalidations() {
-            let pc = self.registers.read_program_counter();
-            self.get_function_ptr(pc)
-        } else {
-            0
-        }
+        self.check_invalidations();
+        0
     }
 }
 

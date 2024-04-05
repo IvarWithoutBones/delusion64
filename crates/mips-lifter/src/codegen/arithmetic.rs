@@ -144,6 +144,21 @@ impl<'ctx, T: Target> CodeGen<'ctx, T> {
         .map(|v| v.into_int_value())
     }
 
+    /// Calculates the square root of the specified value. See the LLVM documentation: <https://releases.llvm.org/17.0.1/docs/LangRef.html#llvm-sqrt-intrinsic>
+    pub fn build_square_root(
+        &self,
+        value: FloatValue<'ctx>,
+        name: &str,
+    ) -> CompilationResult<FloatValue<'ctx>> {
+        self.call_intrinsic(
+            "llvm.sqrt",
+            &[value.get_type().into()],
+            &[value.into()],
+            name,
+        )
+        .map(|v| v.into_float_value())
+    }
+
     /// Splits the given integer in two, returning the high and low order bits, in that order.
     /// The type of integer that is returned is half the bit width of the input integer.
     /// For example, if the input integer is 64 bits wide, the high and low order bits will both. be 32 bits
